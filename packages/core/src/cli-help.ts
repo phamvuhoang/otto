@@ -1,0 +1,443 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { DEFAULT_MAX_RETRIES } from "./retry.js";
+
+export type CliFlags = {
+  help: boolean;
+  version: boolean;
+  printConfig: boolean;
+  noKeepAlive: boolean;
+  maxRetries?: number;
+  detach: boolean;
+  log?: string;
+  notify: boolean;
+  budget?: number;
+  cooldownMs?: number;
+  reviewPanel: boolean;
+  watch: boolean;
+  watchIntervalSec?: number;
+  issue?: number;
+  maxWaitMs?: number;
+  fresh: boolean;
+  verify: boolean;
+  applyReview?: string;
+  branch?: "current" | "branch" | "worktree";
+  branchPrefix?: string;
+  rest: string[];
+};
+
+/** Parse a duration: bare integer = seconds; suffix s/m/h supported. Throws on invalid. */
+export function parseDurationMs(raw: string): number {
+  const m = raw.trim().match(/^(\d+)(s|m|h)?$/);
+  if (!m) {
+    throw new Error(
+      `--max-wait must be seconds or a duration like 90m / 6h, got: ${JSON.stringify(raw)}`
+    );
+  }
+  const n = Number.parseInt(m[1], 10);
+  const unit = m[2] ?? "s";
+  const factor = unit === "h" ? 3600_000 : unit === "m" ? 60_000 : 1000;
+  return n * factor;
+}
+
+/**
+ * Normalize a user-supplied issue reference to a positive integer.
+ * Accepts: `42`, `#42`, `owner/repo#42`, and GitHub issue URLs
+ * (`https://github.com/owner/repo/issues/42[#anchor]`). A repo component is
+ * ignored — only the number is used (gh resolves the repo from the workspace).
+ * Throws on anything that is not a positive integer.
+ *
+ * SECURITY: the returned integer is the ONLY part of the ref that may reach a
+ * shell (via the OTTO_ISSUE env var read by a static template command). Never
+ * pass the raw ref to a shell. See render.ts security invariant.
+ */
+export function parseIssueRef(raw: string): number {
+  const s = raw.trim();
+  let token = s;
+  const urlMatch = s.match(/\/issues\/(\d+)(?:[#?].*)?$/);
+  if (urlMatch) {
+    token = urlMatch[1];
+  } else if (s.includes("#")) {
+    token = s.slice(s.lastIndexOf("#") + 1);
+  }
+  if (!/^[1-9]\d*$/.test(token)) {
+    throw new Error(
+      `--issue must be a positive issue number, #N, owner/repo#N, or a GitHub issue URL, got: ${JSON.stringify(raw)}`
+    );
+  }
+  const n = Number.parseInt(token, 10);
+  if (!Number.isSafeInteger(n)) {
+    throw new Error(`--issue number is too large, got: ${JSON.stringify(raw)}`);
+  }
+  return n;
+}
+
+export function parseFlags(argv: string[]): CliFlags {
+  let help = false;
+  let version = false;
+  let printConfig = false;
+  let noKeepAlive = false;
+  let maxRetries: number | undefined;
+  let expectingMaxRetries = false;
+  let detach = false;
+  let log: string | undefined;
+  let expectingLog = false;
+  let notify = false;
+  let budget: number | undefined;
+  let expectingBudget = false;
+  let cooldownMs: number | undefined;
+  let expectingCooldown = false;
+  let reviewPanel = false;
+  let watch = false;
+  let watchIntervalSec: number | undefined;
+  let expectingWatchInterval = false;
+  let issue: number | undefined;
+  let expectingIssue = false;
+  let maxWaitMs: number | undefined;
+  let expectingMaxWait = false;
+  let fresh = false;
+  let verify = false;
+  let applyReview: string | undefined;
+  let expectingApplyReview = false;
+  let branch: "current" | "branch" | "worktree" | undefined;
+  let expectingBranch = false;
+  let branchPrefix: string | undefined;
+  let expectingBranchPrefix = false;
+  const rest: string[] = [];
+  for (const a of argv) {
+    if (expectingMaxRetries) {
+      if (!/^\d+$/.test(a)) {
+        throw new Error(
+          `--max-retries must be a non-negative integer, got: ${JSON.stringify(a)}`
+        );
+      }
+      maxRetries = Number.parseInt(a, 10);
+      expectingMaxRetries = false;
+      continue;
+    }
+    if (expectingLog) {
+      log = a;
+      expectingLog = false;
+      continue;
+    }
+    if (expectingBudget) {
+      const n = Number(a);
+      if (!Number.isFinite(n) || n <= 0) {
+        throw new Error(
+          `--budget must be a positive number, got: ${JSON.stringify(a)}`
+        );
+      }
+      budget = n;
+      expectingBudget = false;
+      continue;
+    }
+    if (expectingCooldown) {
+      if (!/^\d+$/.test(a)) {
+        throw new Error(
+          `--cooldown must be a non-negative integer (ms), got: ${JSON.stringify(a)}`
+        );
+      }
+      cooldownMs = Number.parseInt(a, 10);
+      expectingCooldown = false;
+      continue;
+    }
+    if (expectingWatchInterval) {
+      if (!/^\d+$/.test(a) || Number.parseInt(a, 10) <= 0) {
+        throw new Error(
+          `--watch-interval must be a positive integer (seconds), got: ${JSON.stringify(a)}`
+        );
+      }
+      watchIntervalSec = Number.parseInt(a, 10);
+      expectingWatchInterval = false;
+      continue;
+    }
+    if (expectingIssue) {
+      issue = parseIssueRef(a);
+      expectingIssue = false;
+      continue;
+    }
+    if (expectingMaxWait) {
+      maxWaitMs = parseDurationMs(a);
+      expectingMaxWait = false;
+      continue;
+    }
+    if (expectingApplyReview) {
+      applyReview = a;
+      expectingApplyReview = false;
+      continue;
+    }
+    if (expectingBranch) {
+      if (a !== "current" && a !== "branch" && a !== "worktree") {
+        throw new Error(
+          `--branch must be one of current|branch|worktree, got: ${JSON.stringify(a)}`
+        );
+      }
+      branch = a;
+      expectingBranch = false;
+      continue;
+    }
+    if (expectingBranchPrefix) {
+      branchPrefix = a;
+      expectingBranchPrefix = false;
+      continue;
+    }
+    if (a === "-h" || a === "--help") help = true;
+    else if (a === "-V" || a === "--version") version = true;
+    else if (a === "--print-config") printConfig = true;
+    else if (a === "--no-keep-alive") noKeepAlive = true;
+    else if (a === "--max-retries") expectingMaxRetries = true;
+    else if (a === "--detach") detach = true;
+    else if (a === "--log") expectingLog = true;
+    else if (a === "--notify") notify = true;
+    else if (a === "--budget") expectingBudget = true;
+    else if (a === "--cooldown") expectingCooldown = true;
+    else if (a === "--review-panel") reviewPanel = true;
+    else if (a === "--watch") watch = true;
+    else if (a === "--watch-interval") expectingWatchInterval = true;
+    else if (a === "--issue") expectingIssue = true;
+    else if (a === "--max-wait") expectingMaxWait = true;
+    else if (a === "--fresh") fresh = true;
+    else if (a === "--verify") verify = true;
+    else if (a === "--apply-review") expectingApplyReview = true;
+    else if (a === "--branch") expectingBranch = true;
+    else if (a === "--branch-prefix") expectingBranchPrefix = true;
+    else rest.push(a);
+  }
+  if (expectingMaxRetries) {
+    throw new Error("--max-retries requires a value");
+  }
+  if (expectingLog) {
+    throw new Error("--log requires a value");
+  }
+  if (expectingBudget) {
+    throw new Error("--budget requires a value");
+  }
+  if (expectingCooldown) {
+    throw new Error("--cooldown requires a value");
+  }
+  if (expectingWatchInterval) {
+    throw new Error("--watch-interval requires a value");
+  }
+  if (expectingIssue) {
+    throw new Error("--issue requires a value");
+  }
+  if (expectingMaxWait) {
+    throw new Error("--max-wait requires a value");
+  }
+  if (expectingApplyReview) {
+    throw new Error("--apply-review requires a value");
+  }
+  if (expectingBranch) {
+    throw new Error("--branch requires a value");
+  }
+  if (expectingBranchPrefix) {
+    throw new Error("--branch-prefix requires a value");
+  }
+  if (log !== undefined && !detach) {
+    throw new Error("--log is only meaningful with --detach");
+  }
+  return {
+    help,
+    version,
+    printConfig,
+    noKeepAlive,
+    maxRetries,
+    detach,
+    log,
+    notify,
+    budget,
+    cooldownMs,
+    reviewPanel,
+    watch,
+    watchIntervalSec,
+    issue,
+    maxWaitMs,
+    fresh,
+    verify,
+    applyReview,
+    branch,
+    branchPrefix,
+    rest,
+  };
+}
+
+/**
+ * Resolve the @phamvuhoang/otto-core version by reading the package.json that
+ * sits two levels up from the compiled cli-help.js (packages/core/dist/ →
+ * packages/core/package.json). Returns "?" if unreadable so version reporting
+ * never crashes the bin.
+ */
+export function readCoreVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkgPath = join(here, "..", "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+      version?: string;
+    };
+    return pkg.version ?? "?";
+  } catch {
+    return "?";
+  }
+}
+
+export function printVersion(bin: string, cliVersion?: string): void {
+  const core = readCoreVersion();
+  const cli = cliVersion ?? "?";
+  process.stdout.write(`${bin} ${cli} (core ${core})\n`);
+}
+
+export function printHelp(
+  bin: string,
+  usage: string,
+  description: string
+): void {
+  process.stdout.write(`${bin} — ${description}
+
+Usage:
+  ${bin} ${usage}
+  ${bin} --help | -h
+  ${bin} --version | -V
+  ${bin} --print-config [args...]
+
+Flags:
+  -h, --help          show this help and exit
+  -V, --version       print bin + core version and exit
+  --print-config      resolve workspace / runner / sandbox config, print, and exit
+  --no-keep-alive     skip OS wake-lock acquisition (default: acquire system-sleep inhibitor for loop lifetime)
+  --max-retries <N>   per-stage retry budget on transient failure (default: 3; 0 disables retries)
+  --detach            fork the loop into a background process, print pid + log path, and exit (parent returns 0)
+  --log <path>        override the detached log path (default: <workspace>/.otto-tmp/logs/detached-<parent-pid>.log; requires --detach)
+  --notify            emit OS notification + terminal bell on loop completion or unrecoverable failure (default: off)
+  --budget <usd>      stop the loop when cumulative stage cost reaches this USD ceiling (default: off)
+  --cooldown <ms>     wait this many milliseconds between iterations; adaptive backoff doubles on throttle (default: 0)
+  --review-panel      replace the single reviewer stage with correctness/security/tests lens reviewers + one synth commit (default: off)
+  --branch <mode>     where Otto commits: current (default) | branch (new branch) | worktree (isolated checkout)
+  --branch-prefix <p> branch name prefix for branch/worktree modes (default: otto/)
+  --watch             poll for labelled GitHub issues and run the loop whenever work is found (ghafk-only; default: off)
+  --watch-interval <sec>  seconds between polls in watch mode (default: 300)
+  --issue <ref>       target a single GitHub issue (number, #N, owner/repo#N, or issue URL); loop exits when it is done (ghafk-only; default: off)
+  --max-wait <dur>    cap the wait when rate-limited before halting (e.g. 90m, 6h; default 6h)
+  --fresh             ignore any saved resume state and start from iteration 1
+  --verify            read-only: reconcile the plan against git, run the suites, write a report; make no commits (otto-afk)
+  --apply-review <doc>  fix the actionable findings of a code-review document; track follow-ups (otto-afk)
+
+Environment variables:
+  OTTO_WORKSPACE   host dir Claude runs against (default: cwd)
+  OTTO_RUNNER      "sandbox" (default) runs claude in the native OS sandbox with
+                    writes confined to the workspace; "host" runs claude unsandboxed
+                    (bare while-loop — only safe in a throwaway tree).
+  OTTO_SANDBOX_NET comma-separated domain allowlist for sandbox network egress.
+                    Unset = unrestricted (filesystem is the blast-radius control).
+  OTTO_MODEL       pin the claude model ("--model <value>" pass-through). Unset =
+                    claude CLI default. The claude CLI validates the value.
+  OTTO_RESULT_GRACE_MS  post-result grace timer ms (default 30000; 0 disables).
+  OTTO_REVIEW_LENSES   comma-separated lens list for --review-panel (default: correctness,security,tests).
+  OTTO_WATCH_LABEL     issue label to poll for in watch mode (default: "otto").
+  OTTO_MAX_WAIT        default rate-limit wait cap (seconds or 90m/6h; default 6h).
+  OTTO_BRANCH          default branch strategy (current|branch|worktree) when --branch is absent.
+  OTTO_BRANCH_PREFIX   default branch-name prefix (default: "otto/").
+`);
+}
+
+export type PrintConfigOptions = {
+  cliVersion?: string;
+  noKeepAlive?: boolean;
+  maxRetries?: number;
+  detach?: boolean;
+  detachLogPath?: string;
+  notify?: boolean;
+  budget?: number;
+  cooldownMs?: number;
+  /** Resolved review lenses (empty array = single reviewer). */
+  reviewLenses?: string[];
+  watch?: boolean;
+  watchIntervalSec?: number;
+  issue?: number;
+  maxWaitMs?: number;
+  mode?: string;
+  branchStrategy?: "current" | "branch" | "worktree";
+  branchPrefix?: string;
+};
+
+export function printConfig(
+  bin: string,
+  workspaceDir: string,
+  packageDir: string,
+  opts: PrintConfigOptions = {}
+): void {
+  const {
+    cliVersion,
+    noKeepAlive = false,
+    maxRetries = DEFAULT_MAX_RETRIES,
+    detach = false,
+    detachLogPath,
+    notify = false,
+    budget,
+    cooldownMs,
+    reviewLenses = [],
+    watch = false,
+    watchIntervalSec,
+    issue,
+    maxWaitMs,
+    mode,
+    branchStrategy,
+    branchPrefix,
+  } = opts;
+  const core = readCoreVersion();
+  const cli = cliVersion ?? "?";
+
+  const runner =
+    process.env.OTTO_RUNNER?.trim() === "host" ? "host" : "sandbox";
+  const rawNet = process.env.OTTO_SANDBOX_NET?.trim();
+  const netStatus =
+    runner === "host"
+      ? "n/a (host runner)"
+      : rawNet
+        ? `restricted to: ${rawNet}`
+        : "unrestricted (filesystem-only sandbox)";
+
+  const keepAliveStatus = noKeepAlive ? "off" : "on (system sleep only)";
+  const detachStatus =
+    detach && detachLogPath ? `on (log: ${detachLogPath})` : "off";
+  const notifyStatus = notify ? "on" : "off";
+  const rawModel = process.env.OTTO_MODEL;
+  const modelStatus =
+    rawModel && rawModel.trim() !== ""
+      ? `${rawModel.trim()} (OTTO_MODEL)`
+      : "claude CLI default (OTTO_MODEL unset)";
+
+  const budgetStatus = budget != null ? `$${budget.toFixed(2)}` : "off";
+  const cooldownStatus = cooldownMs ? `${cooldownMs}ms` : "off";
+  const reviewStatus = reviewLenses.length
+    ? `panel: ${reviewLenses.join(", ")}`
+    : "single reviewer";
+  const watchLabel = process.env.OTTO_WATCH_LABEL?.trim() || "otto";
+  const watchStatus = watch
+    ? `on (every ${watchIntervalSec ?? 300}s, label "${watchLabel}")`
+    : "off";
+  const issueStatus = issue != null ? `#${issue}` : "off";
+  const branchStatus = `${branchStrategy ?? "current"} (prefix "${branchPrefix ?? "otto/"}")`;
+
+  process.stdout.write(`[${bin}] resolved config
+  version               ${bin} ${cli} (core ${core})
+  mode                  ${mode ?? "afk"}
+  OTTO_WORKSPACE       ${workspaceDir}${process.env.OTTO_WORKSPACE ? "" : "  (default: cwd)"}
+  packageDir            ${packageDir}
+  OTTO_RUNNER          ${runner}${process.env.OTTO_RUNNER ? "" : "  (default)"}
+  sandbox network       ${netStatus}
+  model                 ${modelStatus}
+  keep-alive            ${keepAliveStatus}
+  max-retries           ${maxRetries}
+  detach                ${detachStatus}
+  notify                ${notifyStatus}
+  budget                ${budgetStatus}
+  cooldown              ${cooldownStatus}
+  max-wait              ${maxWaitMs != null ? `${Math.round(maxWaitMs / 60000)}m` : "6h (default)"}
+  review                ${reviewStatus}
+  branch                ${branchStatus}
+  watch                 ${watchStatus}
+  issue                 ${issueStatus}
+`);
+}

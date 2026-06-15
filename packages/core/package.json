@@ -1,0 +1,67 @@
+{
+  "name": "@phamvuhoang/otto-core",
+  "version": "0.1.0",
+  "description": "Claude Code AFK orchestration: iteration loop, native-sandbox runner, template renderer.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Henry Pham <phamvuhoang@gmail.com>",
+  "homepage": "https://github.com/phamvuhoang/otto/tree/main/packages/core#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/phamvuhoang/otto.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/phamvuhoang/otto/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "ai-agent",
+    "afk",
+    "automation",
+    "code-review",
+    "orchestration"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./loop": {
+      "types": "./dist/loop.d.ts",
+      "import": "./dist/loop.js"
+    },
+    "./runner": {
+      "types": "./dist/runner.d.ts",
+      "import": "./dist/runner.js"
+    },
+    "./stages": {
+      "types": "./dist/stages.d.ts",
+      "import": "./dist/stages.js"
+    }
+  },
+  "files": [
+    "dist",
+    "templates",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"const fs=require('node:fs');fs.rmSync('dist',{recursive:true,force:true});fs.rmSync('tsconfig.tsbuildinfo',{force:true})\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm run clean && pnpm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.7"
+  }
+}

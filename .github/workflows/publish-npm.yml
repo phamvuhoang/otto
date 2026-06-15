@@ -1,0 +1,147 @@
+name: Publish to npm
+
+# release-please owns the "when to release" decision. This workflow fires only
+# when release-please (or a maintainer) pushes a component release tag. The old
+# path-based "push to main touching packages/core/**" trigger has been removed so
+# there is exactly one source of truth for when a publish happens.
+#
+# Tag schema (see RELEASING.md):
+#   otto-core-vX.Y.Z  -> publishes packages/core (@phamvuhoang/otto-core)
+#   otto-vX.Y.Z       -> publishes apps/cli      (@phamvuhoang/otto)
+#
+# After a successful publish the matching GitHub Release is enriched with the
+# pnpm-packed .tgz, an SBOM (syft, SPDX-JSON), and a keyless cosign attestation
+# bundle. Those steps fail the workflow loudly rather than skipping silently.
+on:
+  push:
+    tags:
+      - "otto-core-v*"
+      - "otto-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to publish from (e.g. otto-core-v0.1.2 or otto-v0.1.1)"
+        required: true
+
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release upload
+      id-token: write # keyless cosign attestation (OIDC)
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm -r run build
+
+      # Route the publish to the right package based on the tag prefix. The
+      # `otto-core-v*` check must come first because `otto-v*` is its prefix.
+      - name: Resolve package from tag
+        id: route
+        run: |
+          TAG="$RELEASE_TAG"
+          case "$TAG" in
+            otto-core-v*)
+              echo "dir=packages/core"        >> "$GITHUB_OUTPUT"
+              echo "name=@phamvuhoang/otto-core" >> "$GITHUB_OUTPUT"
+              echo "is_cli=false"             >> "$GITHUB_OUTPUT"
+              ;;
+            otto-v*)
+              echo "dir=apps/cli"             >> "$GITHUB_OUTPUT"
+              echo "name=@phamvuhoang/otto"      >> "$GITHUB_OUTPUT"
+              echo "is_cli=true"              >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Unrecognized release tag '$TAG' (expected otto-core-v* or otto-v*)"
+              exit 1
+              ;;
+          esac
+
+      # apps/cli depends on @phamvuhoang/otto-core via `workspace:^`. This repo uses
+      # pnpm workspaces (not npm workspaces), so `npm publish` would ship the literal
+      # "workspace:^" spec and break installs. Rewrite it to the concrete core version
+      # before publishing the CLI. otto-core has no workspace deps, so the step is
+      # skipped for it.
+      - name: Resolve workspace dependency for the CLI
+        if: steps.route.outputs.is_cli == 'true'
+        run: |
+          node -e '
+            const fs = require("fs");
+            const core = JSON.parse(fs.readFileSync("packages/core/package.json", "utf8")).version;
+            const p = "apps/cli/package.json";
+            const j = JSON.parse(fs.readFileSync(p, "utf8"));
+            let changed = false;
+            for (const k of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+              if (!j[k]) continue;
+              for (const dep of Object.keys(j[k])) {
+                const v = String(j[k][dep]);
+                if (!v.startsWith("workspace:")) continue;
+                const spec = v.slice("workspace:".length);
+                j[k][dep] = spec === "*" || spec === "" ? core
+                  : spec === "^" ? "^" + core
+                  : spec === "~" ? "~" + core
+                  : spec;
+                changed = true;
+                console.log("rewrote " + dep + ": " + v + " -> " + j[k][dep]);
+              }
+            }
+            if (!changed) console.log("no workspace: deps to rewrite");
+            fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
+          '
+
+      - name: Publish ${{ steps.route.outputs.name }}
+        uses: JS-DevTools/npm-publish@v4
+        with:
+          token: ${{ secrets.NPM_TOKEN }}
+          package: ${{ steps.route.outputs.dir }}
+          access: public
+
+      # ---- Release artifact enrichment (Phase 4) ----
+      - uses: sigstore/cosign-installer@v3
+      - uses: anchore/sbom-action/download-syft@v0
+
+      - name: Pack, SBOM, attest, and attach to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PKG_DIR: ${{ steps.route.outputs.dir }}
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/artifacts"
+          mkdir -p "$OUT"
+
+          # 1) pnpm pack rewrites workspace: specifiers in the tarball's package.json.
+          (cd "$PKG_DIR" && pnpm pack --pack-destination "$OUT")
+          TGZ="$(ls "$OUT"/*.tgz | head -1)"
+          BASE="$(basename "$TGZ" .tgz)"
+          SBOM="$OUT/$BASE.sbom.spdx.json"
+          BUNDLE="$OUT/$BASE.cosign.bundle"
+
+          # 2) SBOM of the published tarball.
+          syft scan "file:$TGZ" -o "spdx-json=$SBOM"
+
+          # 3) Keyless (OIDC) cosign attestation over the tarball, bundled for offline verify.
+          cosign attest-blob --yes \
+            --predicate "$SBOM" --type spdxjson \
+            --bundle "$BUNDLE" "$TGZ"
+
+          # 4) Attach all three to the Release for this tag.
+          gh release upload "$RELEASE_TAG" "$TGZ" "$SBOM" "$BUNDLE" --clobber
+          echo "Uploaded to release $RELEASE_TAG: $(basename "$TGZ"), $(basename "$SBOM"), $(basename "$BUNDLE")"

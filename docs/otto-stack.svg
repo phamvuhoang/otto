@@ -1,0 +1,432 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="2320" viewBox="0 0 1440 2320" font-family="Segoe UI, -apple-system, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333"/>
+    </marker>
+    <marker id="arrOrange" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#ea580c"/>
+    </marker>
+    <marker id="arrBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+  <style>
+    .h1        { font-size: 34px; font-weight: 700; fill: #111; }
+    .sub       { font-size: 13px; fill: #555; }
+    .brand     { font-size: 17px; font-weight: 700; fill: #111; }
+    .pill-t    { font-size: 15px; font-weight: 700; fill: #fff; }
+    .layer-cap { font-size: 12px; fill: #777; }
+    .card-t    { font-size: 13.5px; font-weight: 700; fill: #111; }
+    .card-d    { font-size: 11.5px; fill: #666; }
+    .step-t    { font-size: 15px; font-weight: 700; fill: #064e3b; }
+    .step-d    { font-size: 11.5px; fill: #555; }
+    .gate-t    { font-size: 15px; font-weight: 700; fill: #7c2d12; }
+    .mode-t    { font-size: 13px; font-weight: 700; fill: #111; }
+    .mode-d    { font-size: 10.5px; fill: #666; }
+    .mini-t    { font-size: 12px; font-weight: 700; fill: #111; }
+    .mini-d    { font-size: 10.5px; fill: #666; }
+    .num       { font-size: 14px; font-weight: 700; fill: #fff; }
+    .side-t    { font-size: 14px; font-weight: 700; fill: #111; }
+    .side-d    { font-size: 11px; fill: #666; }
+    .foot      { font-size: 13px; font-style: italic; fill: #555; }
+    .branch-l  { font-size: 11.5px; font-weight: 700; fill: #ea580c; }
+    .learn-t   { font-size: 13.5px; font-weight: 700; fill: #1e3a8a; }
+    .learn-d   { font-size: 11px; fill: #475569; }
+    .layer     { fill: #fff; stroke: #c9c9c9; stroke-width: 1.5; }
+    .dashed    { fill: #fcfcfb; stroke: #bbb; stroke-width: 1.2; stroke-dasharray: 5 4; }
+    .conn      { stroke: #333; stroke-width: 1.6; }
+    .card-cli  { fill: #eef4fc; stroke: #c9daf0; stroke-width: 1; }
+    .card-tpl  { fill: #f4effc; stroke: #dcd0f0; stroke-width: 1; }
+    .card-sbx  { fill: #eaf6f4; stroke: #c5e3dd; stroke-width: 1; }
+    .card-obs  { fill: #fdf8ee; stroke: #eadfc3; stroke-width: 1; }
+    .card-safe { fill: #fdf0ef; stroke: #e7b8b3; stroke-width: 1; }
+    .card-rel  { fill: #f4f4f2; stroke: #d8d8d4; stroke-width: 1; }
+    .card-gray { fill: #f6f6f5; stroke: #ddd; stroke-width: 1; }
+    .card-mode { fill: #eef4fc; stroke: #b9cdea; stroke-width: 1.1; }
+    .card-learn{ fill: #eef2ff; stroke: #c3cef5; stroke-width: 1.2; }
+    .card-pan  { fill: #f3f0fb; stroke: #d4c8ee; stroke-width: 1; }
+    .step      { fill: #ecfdf5; stroke: #059669; stroke-width: 1.4; }
+    .gate      { fill: #fff7ed; stroke: #ea580c; stroke-width: 1.4; }
+  </style>
+
+  <!-- canvas -->
+  <rect x="1" y="1" width="1438" height="2318" fill="#fbfaf8" stroke="#222" stroke-width="2"/>
+  <rect x="0" y="0" width="8" height="2320" fill="#111"/>
+
+  <!-- title -->
+  <text x="40" y="62" class="h1">The Otto AFK Stack, Explained</text>
+  <text x="40" y="92" class="sub">Otto drives the Claude Code CLI against a target repo while you&#x2019;re AFK. Each iteration renders prompt templates, then</text>
+  <text x="40" y="110" class="sub">runs a gate stage (implement / verify / apply-review) &#x2192; reviewer directly on the host, accumulating a git-tracked memory.</text>
+  <text x="40" y="128" class="sub">The loop exits early when the gate returns &lt;promise&gt;NO MORE TASKS&lt;/promise&gt;.</text>
+  <text x="1250" y="62" class="brand">&#x1F6E0; phamvuhoang/otto</text>
+
+  <!-- ══════════ Row 1: CLI Layer + Template Layer ══════════ -->
+  <!-- CLI Layer -->
+  <rect x="32" y="160" width="672" height="270" rx="16" class="layer"/>
+  <rect x="298" y="146" width="140" height="30" rx="15" fill="#111"/>
+  <text x="368" y="166" text-anchor="middle" class="pill-t">CLI Layer</text>
+  <text x="368" y="200" text-anchor="middle" class="layer-cap">Shims (afk.sh / ghafk.sh) &#x2192; bins (apps/cli, no build) &#x2192; @phamvuhoang/otto-core runAfk / runGhAfk &#x2192; runBin</text>
+
+  <rect x="56" y="218" width="304" height="84" rx="10" class="card-cli"/>
+  <text x="72" y="244" class="card-t">&#x25B6; otto-afk</text>
+  <text x="72" y="264" class="card-d">Plan/PRD-driven loop. Modes: default,</text>
+  <text x="72" y="280" class="card-d">--verify, --apply-review.</text>
+
+  <rect x="376" y="218" width="304" height="84" rx="10" class="card-cli"/>
+  <text x="392" y="244" class="card-t">&#x25B6; otto-ghafk</text>
+  <text x="392" y="264" class="card-d">GitHub-issue-driven loop. Modes:</text>
+  <text x="392" y="280" class="card-d">triage, --issue, --watch daemon.</text>
+
+  <rect x="56" y="316" width="304" height="92" rx="10" class="card-cli"/>
+  <text x="72" y="342" class="card-t">&#x2691; Flags (cli-help.ts)</text>
+  <text x="72" y="362" class="card-d">--detach &#xB7; --notify &#xB7; --max-retries &#xB7; --budget</text>
+  <text x="72" y="378" class="card-d">--cooldown &#xB7; --review-panel &#xB7; --branch &#xB7; --fresh</text>
+
+  <rect x="376" y="316" width="304" height="92" rx="10" class="card-cli"/>
+  <text x="392" y="342" class="card-t">&#x2699; Env knobs</text>
+  <text x="392" y="362" class="card-d">OTTO_WORKSPACE &#xB7; OTTO_RUNNER &#xB7; OTTO_MODEL</text>
+  <text x="392" y="378" class="card-d">OTTO_SANDBOX_NET &#xB7; OTTO_REVIEW_LENSES</text>
+
+  <!-- Template Layer -->
+  <rect x="736" y="160" width="672" height="270" rx="16" class="layer"/>
+  <rect x="982" y="146" width="180" height="30" rx="15" fill="#111"/>
+  <text x="1072" y="166" text-anchor="middle" class="pill-t">Template Layer</text>
+  <text x="1072" y="200" text-anchor="middle" class="layer-cap">Prompt assembly before every stage (renderTemplate in render.ts) &#x2014; expanded in this order</text>
+
+  <rect x="760" y="218" width="304" height="84" rx="10" class="card-tpl"/>
+  <text x="776" y="244" class="card-t">&#x2460; @include:&lt;path&gt;</text>
+  <text x="776" y="264" class="card-d">Inline agent playbooks into iteration</text>
+  <text x="776" y="280" class="card-d">templates (prompt.md, ghprompt.md). No shell.</text>
+
+  <rect x="1080" y="218" width="304" height="84" rx="10" class="card-tpl"/>
+  <text x="1096" y="244" class="card-t">&#x2461; @spill[?]:&lt;name&gt;=cmd</text>
+  <text x="1096" y="264" class="card-d">Big output &#x2192; file (head.diff for review,</text>
+  <text x="1096" y="280" class="card-d">issues.json for ghafk); only the path enters.</text>
+
+  <rect x="760" y="316" width="304" height="92" rx="10" class="card-tpl"/>
+  <text x="776" y="342" class="card-t">&#x2462; !?`cmd||fb`  &#x2463; !`cmd`</text>
+  <text x="776" y="362" class="card-d">Host shell via execSync. !? returns fallback on</text>
+  <text x="776" y="378" class="card-d">failure; plain ! throws and aborts the iteration.</text>
+
+  <rect x="1080" y="316" width="304" height="92" rx="10" class="card-tpl"/>
+  <text x="1096" y="342" class="card-t">&#x2464; {{ INPUTS }}</text>
+  <text x="1096" y="362" class="card-d">Replaced with the plan/PRD string</text>
+  <text x="1096" y="378" class="card-d">passed on the otto-afk command line.</text>
+
+  <!-- connectors row1 → runner -->
+  <line x1="368" y1="436" x2="368" y2="464" class="conn" marker-start="url(#arr)" marker-end="url(#arr)"/>
+  <line x1="1072" y1="436" x2="1072" y2="464" class="conn" marker-start="url(#arr)" marker-end="url(#arr)"/>
+
+  <!-- ══════════ Row 2: Runner Layer ══════════ -->
+  <rect x="32" y="470" width="1376" height="300" rx="16" class="layer"/>
+  <rect x="620" y="456" width="200" height="30" rx="15" fill="#111"/>
+  <text x="720" y="476" text-anchor="middle" class="pill-t">Runner Layer</text>
+  <text x="720" y="510" text-anchor="middle" class="layer-cap">runStage / streamClaude: write .run prompt &#x2192; spawn claude on host &#x2192; parse stream-json NDJSON &#xB7; result event &#x2192; { result, total_cost_usd, is_error }</text>
+
+  <rect x="56" y="528" width="432" height="106" rx="10" class="card-sbx"/>
+  <text x="72" y="554" class="card-t">&#x1F6E1;&#xFE0F; Native OS sandbox (default)</text>
+  <text x="72" y="574" class="card-d">OTTO_RUNNER=sandbox (default): writes a transient</text>
+  <text x="72" y="590" class="card-d">--settings JSON enabling Claude Code&#x2019;s Seatbelt</text>
+  <text x="72" y="606" class="card-d">sandbox (macOS). Writes confined to workspace.</text>
+
+  <rect x="504" y="528" width="432" height="106" rx="10" class="card-sbx"/>
+  <text x="520" y="554" class="card-t">&#x1F916; Claude Code invocation</text>
+  <text x="520" y="574" class="card-d">claude --verbose --print --output-format stream-json</text>
+  <text x="520" y="590" class="card-d">--permission-mode bypassPermissions [--settings &lt;sbx.json&gt;]</text>
+  <text x="520" y="606" class="card-d">[--model …]  cwd = workspace directory.</text>
+
+  <rect x="952" y="528" width="432" height="106" rx="10" class="card-sbx"/>
+  <text x="968" y="554" class="card-t">&#x1F9F0; Host tools available to Claude</text>
+  <text x="968" y="574" class="card-d">Shell, git, gh, repo filesystem on the host.</text>
+  <text x="968" y="590" class="card-d">OTTO_RUNNER=host: unsandboxed, full host</text>
+  <text x="968" y="606" class="card-d">access (git-recoverable workspace only).</text>
+
+  <rect x="56" y="650" width="432" height="106" rx="10" class="card-sbx"/>
+  <text x="72" y="676" class="card-t">&#x1F511; Host credentials (no mounts)</text>
+  <text x="72" y="696" class="card-d">~/.claude &#xB7; ~/.claude.json &#xB7; ~/.config/gh read</text>
+  <text x="72" y="712" class="card-d">natively from the host. Same-shell rule: run</text>
+  <text x="72" y="728" class="card-d">otto from the shell where you logged in.</text>
+
+  <rect x="504" y="650" width="432" height="106" rx="10" class="card-sbx"/>
+  <text x="520" y="676" class="card-t">&#x1F4C1; Workspace (cwd)</text>
+  <text x="520" y="696" class="card-d">$OTTO_WORKSPACE (or cwd) is the working dir</text>
+  <text x="520" y="712" class="card-d">for every claude invocation — the loop&#x2019;s entire</text>
+  <text x="520" y="728" class="card-d">blast radius. Must be a git repo.</text>
+
+  <rect x="952" y="650" width="432" height="106" rx="10" class="card-sbx"/>
+  <text x="968" y="676" class="card-t">&#x1F4B5; Budget + cooldown pacing</text>
+  <text x="968" y="696" class="card-d">--budget &lt;usd&gt;: abort if total_cost_usd exceeds</text>
+  <text x="968" y="712" class="card-d">threshold. --cooldown &lt;ms&gt;: pause between</text>
+  <text x="968" y="728" class="card-d">iterations. OTTO_SANDBOX_NET: egress allowlist.</text>
+
+  <!-- connector runner → runtime -->
+  <line x1="720" y1="776" x2="720" y2="804" class="conn" marker-start="url(#arr)" marker-end="url(#arr)"/>
+
+  <!-- ══════════ Runtime band ══════════ -->
+  <rect x="370" y="810" width="700" height="40" rx="20" fill="#111"/>
+  <text x="720" y="836" text-anchor="middle" class="pill-t">Otto Loop Runtime (runBin &#x2192; runLoop &#x2192; executeStage &#x2192; runStage / streamClaude)</text>
+
+  <rect x="180" y="862" width="1080" height="788" rx="16" class="layer"/>
+
+  <!-- ── Run modes (gate-stage variants) ── -->
+  <rect x="440" y="874" width="560" height="26" rx="13" fill="#2563eb"/>
+  <text x="720" y="892" text-anchor="middle" class="pill-t">Run modes &#x2014; gate stage (one runs per loop, by bin + flags)</text>
+
+  <rect x="234" y="912" width="222" height="62" rx="10" class="card-mode"/>
+  <text x="248" y="936" class="mode-t">&#x1F528; implement</text>
+  <text x="248" y="956" class="mode-d">afk.md / ghafk.md &#xB7; default gate</text>
+
+  <rect x="472" y="912" width="222" height="62" rx="10" class="card-mode"/>
+  <text x="486" y="936" class="mode-t">&#x1F3AF; --issue / --watch</text>
+  <text x="486" y="956" class="mode-d">ghafk: one issue / daemon poll</text>
+
+  <rect x="710" y="912" width="222" height="62" rx="10" class="card-mode"/>
+  <text x="724" y="936" class="mode-t">&#x1F50E; --verify</text>
+  <text x="724" y="956" class="mode-d">verify.md &#xB7; read-only, one-shot</text>
+
+  <rect x="948" y="912" width="222" height="62" rx="10" class="card-mode"/>
+  <text x="962" y="936" class="mode-t">&#x1FA79; --apply-review</text>
+  <text x="962" y="956" class="mode-d">apply-review.md &#xB7; fix findings</text>
+
+  <!-- sentinel exit pill + arrow -->
+  <rect x="250" y="990" width="244" height="26" rx="13" fill="#fff7ed" stroke="#ea580c" stroke-width="1.2"/>
+  <text x="372" y="1008" text-anchor="middle" class="branch-l">&#x2713; sentinel hit &#x2192; loop exits (exit 0)</text>
+  <path d="M372,1044 L372,1018" fill="none" stroke="#ea580c" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrOrange)"/>
+
+  <!-- ── Iteration loop ── -->
+  <rect x="210" y="1028" width="1020" height="276" rx="12" class="dashed"/>
+  <rect x="940" y="1016" width="270" height="26" rx="13" fill="#333"/>
+  <text x="1075" y="1034" text-anchor="middle" style="font-size:13px;font-weight:700;fill:#fff">Iteration Loop (stage chain)</text>
+
+  <!-- step 1: Gate -->
+  <rect x="234" y="1052" width="222" height="156" rx="12" class="gate"/>
+  <circle cx="256" cy="1074" r="11" fill="#ea580c"/><text x="256" y="1079" text-anchor="middle" class="num">1</text>
+  <text x="276" y="1080" class="gate-t">&#x1F6A7; Gate (sentinel?)</text>
+  <text x="248" y="1108" class="step-d">First stage returns a result;</text>
+  <text x="248" y="1124" class="step-d">runLoop checks it for</text>
+  <text x="248" y="1140" class="step-d">&lt;promise&gt;NO MORE TASKS&lt;/promise&gt;</text>
+  <text x="248" y="1156" class="step-d">&#x2014; hit exits early, else the</text>
+  <text x="248" y="1172" class="step-d">implement step runs.</text>
+
+  <!-- step 2: Implement -->
+  <rect x="480" y="1052" width="222" height="156" rx="12" class="step"/>
+  <circle cx="502" cy="1074" r="11" fill="#059669"/><text x="502" y="1079" text-anchor="middle" class="num">2</text>
+  <text x="522" y="1080" class="step-t">&#x1F528; Implement</text>
+  <text x="494" y="1108" class="step-d">Gate stage does the work:</text>
+  <text x="494" y="1124" class="step-d">picks one task (plan task,</text>
+  <text x="494" y="1140" class="step-d">open issue, or review</text>
+  <text x="494" y="1156" class="step-d">finding), implements it,</text>
+  <text x="494" y="1172" class="step-d">runs feedback loops, commits.</text>
+
+  <!-- step 3: Review -->
+  <rect x="726" y="1052" width="222" height="156" rx="12" class="step"/>
+  <circle cx="748" cy="1074" r="11" fill="#059669"/><text x="748" y="1079" text-anchor="middle" class="num">3</text>
+  <text x="768" y="1080" class="step-t">&#x1F50D; Review</text>
+  <text x="740" y="1108" class="step-d">reviewer stage reads the</text>
+  <text x="740" y="1124" class="step-d">HEAD patch (@spill), audits</text>
+  <text x="740" y="1140" class="step-d">the work, fixes findings.</text>
+  <text x="740" y="1156" class="step-d">Single reviewer or panel</text>
+  <text x="740" y="1172" class="step-d">(below). Never gates.</text>
+
+  <!-- step 4: Repeat -->
+  <rect x="972" y="1052" width="222" height="156" rx="12" class="step"/>
+  <circle cx="994" cy="1074" r="11" fill="#059669"/><text x="994" y="1079" text-anchor="middle" class="num">4</text>
+  <text x="1014" y="1080" class="step-t">&#x1F501; Repeat</text>
+  <text x="986" y="1108" class="step-d">Next iteration re-renders</text>
+  <text x="986" y="1124" class="step-d">templates with fresh spill</text>
+  <text x="986" y="1140" class="step-d">dirs &#x2014; until the sentinel</text>
+  <text x="986" y="1156" class="step-d">or the iteration budget</text>
+  <text x="986" y="1172" class="step-d">ends the run.</text>
+
+  <!-- arrows between steps -->
+  <line x1="456" y1="1130" x2="478" y2="1130" class="conn" marker-end="url(#arr)"/>
+  <text x="467" y="1122" text-anchor="middle" style="font-size:9.5px;fill:#777">else</text>
+  <line x1="702" y1="1130" x2="724" y2="1130" class="conn" marker-end="url(#arr)"/>
+  <line x1="948" y1="1130" x2="970" y2="1130" class="conn" marker-end="url(#arr)"/>
+
+  <!-- learning loop band -->
+  <rect x="234" y="1224" width="960" height="64" rx="10" class="card-learn"/>
+  <text x="252" y="1250" class="learn-t">&#x1F9E0; Learning loop &#x2014; .otto/LEARNINGS.md (git-tracked, in the workspace)</text>
+  <text x="252" y="1270" class="learn-d">Injected into every gate &amp; reviewer prompt; agents append durable conventions, gotchas &amp; decisions as they work &#x2014; so each iteration starts smarter. Rides in the work commit.</text>
+  <path d="M1150,1224 C1196,1196 1196,1120 1162,1066" fill="none" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrBlue)"/>
+  <text x="1205" y="1150" text-anchor="middle" transform="rotate(90 1205 1150)" style="font-size:10px;fill:#2563eb">inject &#x2191; / append &#x2193;</text>
+
+  <!-- user / output side cards -->
+  <rect x="30" y="1063" width="132" height="134" rx="14" fill="#fff" stroke="#999" stroke-width="1.3"/>
+  <text x="96" y="1105" text-anchor="middle" style="font-size:30px">&#x1F9D1;&#x200D;&#x1F4BB;</text>
+  <text x="96" y="1137" text-anchor="middle" class="side-t">User</text>
+  <text x="96" y="1157" text-anchor="middle" class="side-d">plan/PRD or</text>
+  <text x="96" y="1172" text-anchor="middle" class="side-d">GitHub issues</text>
+  <line x1="162" y1="1130" x2="208" y2="1130" class="conn" marker-end="url(#arr)"/>
+
+  <rect x="1278" y="1063" width="132" height="134" rx="14" fill="#fff" stroke="#999" stroke-width="1.3"/>
+  <text x="1344" y="1105" text-anchor="middle" style="font-size:30px">&#x2705;</text>
+  <text x="1344" y="1137" text-anchor="middle" class="side-t">Shipped work</text>
+  <text x="1344" y="1157" text-anchor="middle" class="side-d">commits &amp; PRs</text>
+  <text x="1344" y="1172" text-anchor="middle" class="side-d">in the workspace</text>
+  <line x1="1232" y1="1130" x2="1276" y2="1130" class="conn" marker-end="url(#arr)"/>
+
+  <!-- ── Review options ── -->
+  <rect x="210" y="1318" width="1020" height="158" rx="12" class="dashed"/>
+  <rect x="560" y="1306" width="320" height="26" rx="13" fill="#333"/>
+  <text x="720" y="1324" text-anchor="middle" style="font-size:13px;font-weight:700;fill:#fff">Review &#x2014; single reviewer or --review-panel</text>
+
+  <rect x="234" y="1348" width="276" height="108" rx="10" class="card-gray"/>
+  <text x="250" y="1374" class="card-t">&#x1F50D; Single reviewer (default)</text>
+  <text x="250" y="1396" class="card-d">review.md reads the HEAD patch,</text>
+  <text x="250" y="1412" class="card-d">fixes findings in a fix(review):</text>
+  <text x="250" y="1428" class="card-d">commit, or emits &lt;review&gt;OK&lt;/review&gt;</text>
+  <text x="250" y="1444" class="card-d">/ &lt;review&gt;SKIP&lt;/review&gt;. One pass.</text>
+
+  <text x="855" y="1342" text-anchor="middle" style="font-size:11px;font-weight:700;fill:#7c3aed">--review-panel (opt-in) &#x2014; OTTO_REVIEW_LENSES</text>
+
+  <rect x="548" y="1350" width="196" height="106" rx="10" class="card-pan"/>
+  <text x="562" y="1374" class="mini-t">&#x2460; Lenses (read-only)</text>
+  <text x="562" y="1394" class="mini-d">correctness / security /</text>
+  <text x="562" y="1409" class="mini-d">tests run in parallel,</text>
+  <text x="562" y="1424" class="mini-d">each writes findings to</text>
+  <text x="562" y="1439" class="mini-d">a scratch file.</text>
+
+  <rect x="772" y="1350" width="196" height="106" rx="10" class="card-pan"/>
+  <text x="786" y="1374" class="mini-t">&#x2461; Adversarial verify</text>
+  <text x="786" y="1394" class="mini-d">a skeptic tries to refute</text>
+  <text x="786" y="1409" class="mini-d">each finding &#x2014; defaults</text>
+  <text x="786" y="1424" class="mini-d">to REJECT when unsure</text>
+  <text x="786" y="1439" class="mini-d">&#x2192; verdicts.md.</text>
+
+  <rect x="996" y="1350" width="196" height="106" rx="10" class="card-pan"/>
+  <text x="1010" y="1374" class="mini-t">&#x2462; Synth</text>
+  <text x="1010" y="1394" class="mini-d">one fix(review): commit</text>
+  <text x="1010" y="1409" class="mini-d">that lands only the</text>
+  <text x="1010" y="1424" class="mini-d">CONFIRMED defects.</text>
+  <text x="1010" y="1439" class="mini-d">Reports committed/clean.</text>
+
+  <line x1="744" y1="1403" x2="770" y2="1403" class="conn" marker-end="url(#arr)"/>
+  <line x1="968" y1="1403" x2="994" y2="1403" class="conn" marker-end="url(#arr)"/>
+
+  <!-- ── AFK machinery ── -->
+  <rect x="210" y="1490" width="1020" height="146" rx="12" class="dashed"/>
+  <rect x="568" y="1478" width="304" height="26" rx="13" fill="#333"/>
+  <text x="720" y="1496" text-anchor="middle" style="font-size:13px;font-weight:700;fill:#fff">AFK Machinery (run management)</text>
+
+  <rect x="234" y="1522" width="152" height="92" rx="10" class="card-gray"/>
+  <text x="246" y="1544" class="mini-t">&#x1F504; withRetries</text>
+  <text x="246" y="1562" class="mini-d">Default 3 attempts,</text>
+  <text x="246" y="1576" class="mini-d">exponential backoff.</text>
+  <text x="246" y="1590" class="mini-d">--max-retries &lt;N&gt;.</text>
+
+  <rect x="402" y="1522" width="152" height="92" rx="10" class="card-gray"/>
+  <text x="414" y="1544" class="mini-t">&#x2615; keepalive</text>
+  <text x="414" y="1562" class="mini-d">OS wake-lock so the</text>
+  <text x="414" y="1576" class="mini-d">machine stays up.</text>
+  <text x="414" y="1590" class="mini-d">--no-keep-alive opts out.</text>
+
+  <rect x="570" y="1522" width="152" height="92" rx="10" class="card-gray"/>
+  <text x="582" y="1544" class="mini-t">&#x1F319; detach</text>
+  <text x="582" y="1562" class="mini-d">Fork-and-exit background</text>
+  <text x="582" y="1576" class="mini-d">run; logs to</text>
+  <text x="582" y="1590" class="mini-d">detached-&lt;pid&gt;.log.</text>
+
+  <rect x="738" y="1522" width="152" height="92" rx="10" class="card-gray"/>
+  <text x="750" y="1544" class="mini-t">&#x1F514; notify</text>
+  <text x="750" y="1562" class="mini-d">OS toast + terminal</text>
+  <text x="750" y="1576" class="mini-d">bell when the run</text>
+  <text x="750" y="1590" class="mini-d">finishes or fails.</text>
+
+  <rect x="906" y="1522" width="152" height="92" rx="10" class="card-gray"/>
+  <text x="918" y="1544" class="mini-t">&#x1F4BE; resume</text>
+  <text x="918" y="1562" class="mini-d">.otto/state.json +</text>
+  <text x="918" y="1576" class="mini-d">rate-limit wait; survives</text>
+  <text x="918" y="1590" class="mini-d">restarts. --fresh resets.</text>
+
+  <rect x="1074" y="1522" width="152" height="92" rx="10" class="card-gray"/>
+  <text x="1086" y="1544" class="mini-t">&#x1F6D1; Signals</text>
+  <text x="1086" y="1562" class="mini-d">SIGINT&#x2192;130 &#xB7; SIGTERM&#x2192;143;</text>
+  <text x="1086" y="1576" class="mini-d">active stage aborted via</text>
+  <text x="1086" y="1590" class="mini-d">AbortController.</text>
+
+  <!-- connector runtime → scratch -->
+  <line x1="720" y1="1656" x2="720" y2="1684" class="conn" marker-start="url(#arr)" marker-end="url(#arr)"/>
+
+  <!-- ══════════ Scratch, Observability & Safety Layer ══════════ -->
+  <rect x="32" y="1690" width="1376" height="272" rx="16" class="layer"/>
+  <rect x="530" y="1676" width="380" height="30" rx="15" fill="#111"/>
+  <text x="720" y="1696" text-anchor="middle" class="pill-t">Scratch, Observability &amp; Safety Layer</text>
+  <text x="720" y="1730" text-anchor="middle" class="layer-cap">(per-run, host-side &#x2014; &lt;workspace&gt;/.otto-tmp/, gitignored &#x2014; plus durable .otto/ state and the guardrails that bound the blast radius)</text>
+
+  <rect x="56" y="1748" width="320" height="92" rx="10" class="card-obs"/>
+  <text x="72" y="1774" class="card-t">&#x1F4DD; Rendered prompts</text>
+  <text x="72" y="1794" class="card-d">.run-&lt;pid&gt;-&lt;iter&gt;-&lt;ts&gt;.md &#x2014; cleaned in</text>
+  <text x="72" y="1810" class="card-d">finally; may leak on SIGKILL (safe to delete).</text>
+
+  <rect x="392" y="1748" width="320" height="92" rx="10" class="card-obs"/>
+  <text x="408" y="1774" class="card-t">&#x1F5C2; Spill dirs</text>
+  <text x="408" y="1794" class="card-d">spill-&lt;pid&gt;-&lt;iter&gt;-&lt;stage&gt;-&lt;ts&gt;/ &#x2014; e.g.</text>
+  <text x="408" y="1810" class="card-d">head.diff, issues.json the agent Reads.</text>
+
+  <rect x="728" y="1748" width="320" height="92" rx="10" class="card-obs"/>
+  <text x="744" y="1774" class="card-t">&#x1F4DC; NDJSON stream logs</text>
+  <text x="744" y="1794" class="card-d">logs/&lt;ts&gt;-iter&lt;N&gt;-&lt;stage&gt;.ndjson &#x2014; full</text>
+  <text x="744" y="1810" class="card-d">event stream per stage, kept for post-mortems.</text>
+
+  <rect x="1064" y="1748" width="320" height="92" rx="10" class="card-obs"/>
+  <text x="1080" y="1774" class="card-t">&#x1F4BE; Durable .otto/ state</text>
+  <text x="1080" y="1794" class="card-d">state.json (resume) &#xB7; verify-report.md &#xB7;</text>
+  <text x="1080" y="1810" class="card-d">review-followups.md &#xB7; config.json.</text>
+
+  <rect x="56" y="1854" width="320" height="92" rx="10" class="card-obs"/>
+  <text x="72" y="1880" class="card-t">&#x1FA7A; --print-config</text>
+  <text x="72" y="1900" class="card-d">Diagnose resolution: workspace dir, runner</text>
+  <text x="72" y="1916" class="card-d">mode, sandbox settings &#x2014; without running.</text>
+
+  <rect x="392" y="1854" width="320" height="92" rx="10" class="card-obs"/>
+  <text x="408" y="1880" class="card-t">&#x1F5A5; stream-render</text>
+  <text x="408" y="1900" class="card-d">Live console rendering of stream-json events.</text>
+  <text x="408" y="1916" class="card-d">NO_COLOR / TERM=dumb disable ANSI.</text>
+
+  <rect x="728" y="1854" width="656" height="92" rx="10" class="card-safe"/>
+  <text x="744" y="1880" class="card-t">&#x1F6E1; Safety boundaries</text>
+  <text x="744" y="1900" class="card-d">Default sandbox runner (Seatbelt) confines writes to the workspace (git-recoverable); bypassPermissions</text>
+  <text x="744" y="1916" class="card-d">scoped to workspace &#x2014; OTTO_RUNNER=host runs unsandboxed (git-recoverable workspace only).</text>
+
+  <!-- connector scratch → release -->
+  <line x1="720" y1="1966" x2="720" y2="1994" class="conn" marker-start="url(#arr)" marker-end="url(#arr)"/>
+
+  <!-- ══════════ Build, Test & Release Layer ══════════ -->
+  <rect x="32" y="2000" width="1376" height="180" rx="16" class="layer"/>
+  <rect x="560" y="1986" width="320" height="30" rx="15" fill="#111"/>
+  <text x="720" y="2006" text-anchor="middle" class="pill-t">Build, Test &amp; Release Layer</text>
+  <text x="720" y="2040" text-anchor="middle" class="layer-cap">(cross-cutting &#x2014; how Otto itself ships; release-please automates npm versions)</text>
+
+  <rect x="56" y="2058" width="300" height="100" rx="10" class="card-rel"/>
+  <text x="72" y="2084" class="card-t">&#x1F4E6; pnpm monorepo</text>
+  <text x="72" y="2104" class="card-d">apps/cli (@phamvuhoang/otto) &#xB7;</text>
+  <text x="72" y="2120" class="card-d">packages/core (@phamvuhoang/otto-core),</text>
+  <text x="72" y="2136" class="card-d">linked via workspace:^.</text>
+
+  <rect x="396" y="2058" width="300" height="100" rx="10" class="card-rel"/>
+  <text x="412" y="2084" class="card-t">&#x2705; Verification</text>
+  <text x="412" y="2104" class="card-d">pnpm -r typecheck &#xB7; vitest &#xB7;</text>
+  <text x="412" y="2120" class="card-d">node --test scripts/*.test.mjs &#xB7;</text>
+  <text x="412" y="2136" class="card-d">husky pre-commit (lint-staged).</text>
+
+  <rect x="736" y="2058" width="300" height="100" rx="10" class="card-rel"/>
+  <text x="752" y="2084" class="card-t">&#x1F680; GitHub Actions</text>
+  <text x="752" y="2104" class="card-d">CI &#xB7; release-please &#xB7; publish-npm &#xB7;</text>
+  <text x="752" y="2120" class="card-d">conventional-commits changelog</text>
+  <text x="752" y="2136" class="card-d">automation.</text>
+
+  <rect x="1076" y="2058" width="300" height="100" rx="10" class="card-rel"/>
+  <text x="1092" y="2084" class="card-t">&#x1F3F7; Artifacts</text>
+  <text x="1092" y="2104" class="card-d">npm: @phamvuhoang/otto + otto-core &#xB7;</text>
+  <text x="1092" y="2120" class="card-d">install globally, run otto-afk or</text>
+  <text x="1092" y="2136" class="card-d">otto-ghafk on any git repo.</text>
+
+  <line x1="356" y1="2108" x2="392" y2="2108" class="conn" marker-end="url(#arr)"/>
+  <line x1="696" y1="2108" x2="732" y2="2108" class="conn" marker-end="url(#arr)"/>
+  <line x1="1036" y1="2108" x2="1072" y2="2108" class="conn" marker-end="url(#arr)"/>
+
+  <!-- footer -->
+  <text x="720" y="2230" text-anchor="middle" class="foot">Each iteration loops Gate &#x2192; Implement &#x2192; Review with freshly rendered prompts and a growing .otto/LEARNINGS.md memory, running</text>
+  <text x="720" y="2250" text-anchor="middle" class="foot">claude directly on the host &#x2014; the sentinel &lt;promise&gt;NO MORE TASKS&lt;/promise&gt; exits early, otherwise the iteration budget runs out.</text>
+</svg>

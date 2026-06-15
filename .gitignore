@@ -1,0 +1,16 @@
+# Dependencies & build output
+node_modules/
+dist/
+*.tsbuildinfo
+.pnpm-store/
+
+# Otto runtime (scratch is gitignored; .otto/ content is tracked, state.json is not)
+.otto-tmp/
+.otto/state.json
+
+# Claude Code (shared: settings.json + CLAUDE.md; personal: *.local.json + locks)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# macOS Finder metadata
+.DS_Store

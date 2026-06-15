@@ -1,0 +1,43 @@
+{
+  "name": "@phamvuhoang/otto",
+  "version": "0.1.0",
+  "description": "CLI for the otto AFK loop (otto-afk, otto-ghafk).",
+  "type": "module",
+  "license": "MIT",
+  "author": "Henry Pham <phamvuhoang@gmail.com>",
+  "homepage": "https://github.com/phamvuhoang/otto/tree/main/apps/cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/phamvuhoang/otto.git",
+    "directory": "apps/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/phamvuhoang/otto/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "ai-agent",
+    "afk",
+    "automation",
+    "cli"
+  ],
+  "bin": {
+    "otto-afk": "./bin/otto-afk.js",
+    "otto-ghafk": "./bin/otto-ghafk.js"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "README.md"
+  ],
+  "dependencies": {
+    "@phamvuhoang/otto-core": "workspace:^"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

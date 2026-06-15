@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { runPreflight } from "./preflight.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 
 export type CliFlags = {
@@ -439,5 +440,16 @@ export function printConfig(
   branch                ${branchStatus}
   watch                 ${watchStatus}
   issue                 ${issueStatus}
+`);
+
+  // Preflight: report whether the run's prerequisites are satisfied so a user
+  // can debug setup before any paid `claude` invocation.
+  const preflight = runPreflight({ bin, workspaceDir });
+  const preflightLines = preflight
+    .map((r) => `  ${r.ok ? "✓" : "✗"} ${r.label.padEnd(20)}${r.detail}`)
+    .join("\n");
+  process.stdout.write(`
+[${bin}] preflight
+${preflightLines}
 `);
 }

@@ -9,3 +9,9 @@ export {
 } from "./render.js";
 export { runStage, type StageResult } from "./runner.js";
 export { runWatch, type RunWatchOptions } from "./watch.js";
+export {
+  runPreflight,
+  whichBin,
+  type PreflightResult,
+  type PreflightProbes,
+} from "./preflight.js";

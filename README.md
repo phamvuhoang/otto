@@ -130,7 +130,7 @@ Otto is configured by flags and environment variables. The essentials:
 | `OTTO_MODEL`      | _(CLI default)_  | Pin the Claude model (`--model` pass-through).                       |
 
 ```bash
-otto-afk --print-config     # resolve workspace / runner / sandbox / model, then exit
+otto-afk --print-config     # resolved config + a preflight check of run prerequisites, then exit
 ```
 
 Full environment reference, runner/sandbox details, and branch strategy: **[docs/CONFIG.md](./docs/CONFIG.md)**.

@@ -23,7 +23,11 @@ on `pnpm -r typecheck && pnpm -r test && pnpm test`.
       (complete / stopped (budget) / halted (rate limit) / done [with failures] /
       stopped (error)) funnels through it. `sawFailure` flag distinguishes a clean
       `done` from `done with failures`.
-- [ ] Docs: align README `--print-config` section + safety model with the
-      supported `claude` runtime.
+- [x] Docs: align README `--print-config` section + safety model with the
+      supported `claude` runtime. Documented the preflight diagnostics block
+      (added in 40a10d3 but absent from all user-facing docs) across README,
+      docs/CLI.md, docs/CONFIG.md (with example block), apps/cli/README, and the
+      `--print-config` `--help` line. Safety/runtime model already accurate from
+      the public-release docs (claude-on-host + bypassPermissions + sandbox).
 - [ ] Smoke: document + verify the pack-then-install local artifact test as the
       release smoke path.

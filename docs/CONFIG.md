@@ -65,7 +65,16 @@ gh auth status
 | `OTTO_BRANCH_PREFIX`     | `otto/`                      | Prefix for the generated branch/worktree name. Overrides `.otto/config.json`; overridden by `--branch-prefix`.                                                                                                         |
 | `NO_COLOR` / `TERM=dumb` | _(unset)_                    | Disable ANSI color in Otto's own output. Color is also auto-disabled when stdout/stderr is not a TTY, so piping to a file stays clean.                                                                                  |
 
-Run `otto-afk --print-config` to see how all of the above resolve for your current shell and workspace, without launching a loop.
+Run `otto-afk --print-config` to see how all of the above resolve for your current shell and workspace, without launching a loop. It prints two blocks: the **resolved config**, then a **preflight** check of the run's prerequisites — the `claude` CLI and its credentials, a git workspace to commit into, and (for `otto-ghafk`) the `gh` CLI and its credentials. Each line is marked `✓`/`✗` with a remediation hint, so you can fix setup before any paid `claude` invocation:
+
+```text
+[otto-afk] preflight
+  ✓ claude CLI          /usr/local/bin/claude
+  ✓ claude auth         credentials found
+  ✓ workspace git repo  /path/to/your/repo
+```
+
+`otto-ghafk` adds `gh CLI` and `gh auth` rows. Preflight reports only — it never exits non-zero or blocks the run.
 
 ---
 

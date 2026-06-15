@@ -305,7 +305,7 @@ Usage:
 Flags:
   -h, --help          show this help and exit
   -V, --version       print bin + core version and exit
-  --print-config      resolve workspace / runner / sandbox config, print, and exit
+  --print-config      print resolved config + a preflight check of run prerequisites, then exit
   --no-keep-alive     skip OS wake-lock acquisition (default: acquire system-sleep inhibitor for loop lifetime)
   --max-retries <N>   per-stage retry budget on transient failure (default: 3; 0 disables retries)
   --detach            fork the loop into a background process, print pid + log path, and exit (parent returns 0)

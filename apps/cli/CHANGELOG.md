@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.0](https://github.com/phamvuhoang/otto/compare/otto-v0.1.0...otto-v0.1.0) (2026-06-15)
+
+
+### Features
+
+* initial public release of Otto ([64b6161](https://github.com/phamvuhoang/otto/commit/64b6161df7e4386714bde30b1b69a7c5de263ab7))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @phamvuhoang/otto-core bumped to 0.1.0
+
+## Changelog
+
 ## otto 0.1.0 (baseline)
 
 Initial release of the Otto CLI, exposing the `otto-afk` (plan/PRD loop) and

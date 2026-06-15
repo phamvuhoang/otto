@@ -55,7 +55,7 @@ jobs:
       # Committing to main post-release keeps every Release PR branch a clean,
       # single-commit branch that release-please fully owns. The [skip ci] marker
       # stops this docs-only commit from re-triggering this workflow.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         if: steps.release.outputs.releases_created == 'true'
         with:
           fetch-depth: 0

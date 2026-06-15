@@ -174,6 +174,18 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     };
   };
 
+  // One consistent end-of-run summary across every terminal path: the exit
+  // reason, iterations run, and cumulative cost. Written to stdout (like the
+  // other completion lines) so it survives `> out.txt` redirection.
+  const summarize = (reason: string, iterations: number): void => {
+    const iters = `${iterations} iteration${iterations === 1 ? "" : "s"}`;
+    process.stdout.write(
+      `${greenOut(SYM_OUT.bullet)} ${boldOut(`Otto ${reason}`)}` +
+        `${dimOut(` · ${iters} · $${runCostUsd.toFixed(2)}`)}\n`
+    );
+  };
+  let sawFailure = false;
+
   const nowIso = () => new Date().toISOString();
   if (fresh) clearState(workspaceDir);
   const prior = fresh ? null : readState(workspaceDir);
@@ -227,9 +239,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
         // Budget gate: check before running each stage.
         if (budgetUsd != null && runCostUsd >= budgetUsd) {
-          process.stdout.write(
-            `${greenOut(SYM_OUT.bullet)} ${boldOut("budget reached")}${dimOut(` $${runCostUsd.toFixed(2)} ≥ $${budgetUsd.toFixed(2)} after ${i - 1} iterations`)}\n`
-          );
+          summarize("stopped (budget)", i - 1);
           return { costUsd: runCostUsd, sentinelHit };
         }
 
@@ -285,9 +295,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               );
               if (waitMs > maxWaitMs) {
                 persist(i, "interrupted", resetsAt);
-                process.stdout.write(
-                  `${red(SYM.cross)} ${bold("rate limit")}${dim(` — reset is beyond --max-wait; halting at iteration ${i}. Re-run to resume.`)}\n`
+                process.stderr.write(
+                  `${dim(`reset is beyond --max-wait; re-run to resume from iteration ${i}`)}\n`
                 );
+                summarize("halted (rate limit)", i - 1);
                 return { costUsd: runCostUsd, sentinelHit };
               }
               persist(i, "waiting-rate-limit", resetsAt);
@@ -312,6 +323,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           }
           const msg = `${red(SYM.cross)} ${bold("iteration " + i + " stage " + stage.name + " failed")} after ${maxRetries} retries: ${(err as Error).message}`;
           process.stderr.write(msg + "\n");
+          sawFailure = true;
           break;
         }
 
@@ -320,14 +332,9 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
         if (s === 0) {
           if (sr!.result.includes(SENTINEL)) {
-            const msg =
-              greenOut(SYM_OUT.bullet) +
-              " " +
-              boldOut("Otto complete") +
-              dimOut(" after " + i + " iterations");
-            process.stdout.write(msg + "\n");
             sentinelHit = true;
             completedIterations = i;
+            summarize("complete", i);
             persist(i, "complete");
             clearState(workspaceDir);
             return { costUsd: runCostUsd, sentinelHit };
@@ -349,6 +356,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     }
   } catch (err) {
     if (notify) notifyError((err as Error).message);
+    summarize("stopped (error)", completedIterations);
     throw err;
   } finally {
     if (onSigint) process.off("SIGINT", onSigint);
@@ -358,6 +366,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       notifyComplete(completedIterations, sentinelHit);
     }
   }
+  summarize(sawFailure ? "done with failures" : "done", completedIterations);
   clearState(workspaceDir);
   return { costUsd: runCostUsd, sentinelHit };
 }

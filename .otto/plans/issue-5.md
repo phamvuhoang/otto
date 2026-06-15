@@ -16,8 +16,13 @@ on `pnpm -r typecheck && pnpm -r test && pnpm test`.
       already released via `releaseOnce()`; the gap was scratch cleanup —
       `process.exit()` pre-empts the per-stage `finally`. Added `scratch.ts`
       (`cleanScratch`) swept synchronously in both signal handlers.
-- [ ] Run summary: ensure end-of-run summary line reports cost total, iterations,
-      and exit reason (sentinel / budget / error) consistently; test it.
+- [x] Run summary: ensure end-of-run summary line reports cost total, iterations,
+      and exit reason (sentinel / budget / error) consistently; test it. Added a
+      `summarize(reason, iterations)` helper in `loop.ts` that prints one stdout
+      line (`● Otto <reason> · N iterations · $cost`); every terminal path
+      (complete / stopped (budget) / halted (rate limit) / done [with failures] /
+      stopped (error)) funnels through it. `sawFailure` flag distinguishes a clean
+      `done` from `done with failures`.
 - [ ] Docs: align README `--print-config` section + safety model with the
       supported `claude` runtime.
 - [ ] Smoke: document + verify the pack-then-install local artifact test as the

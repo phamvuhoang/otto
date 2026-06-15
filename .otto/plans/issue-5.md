@@ -29,5 +29,10 @@ on `pnpm -r typecheck && pnpm -r test && pnpm test`.
       docs/CLI.md, docs/CONFIG.md (with example block), apps/cli/README, and the
       `--print-config` `--help` line. Safety/runtime model already accurate from
       the public-release docs (claude-on-host + bypassPermissions + sandbox).
-- [ ] Smoke: document + verify the pack-then-install local artifact test as the
-      release smoke path.
+- [x] Smoke: document + verify the pack-then-install local artifact test as the
+      release smoke path. Added `scripts/smoke-pack-install.mjs` — builds core,
+      packs both packages, installs the tarballs into an isolated prefix
+      (hermetic `--cache`, no global pollution), and asserts the installed
+      `otto-afk` prints usage (`--help`) and resolved config (`--print-config`).
+      Documented as the release smoke path in CONTRIBUTING.md and gated into the
+      RELEASING.md cut-a-release flow. Verified green by running it.

@@ -16,6 +16,13 @@
 
 ## Gotchas
 
+- The release smoke (`scripts/smoke-pack-install.mjs`) must pass `--cache <dir>`
+  to its `npm install`: the default shared `~/.npm/_cacache` is outside the
+  sandbox write-allowlist (only `~/.npm/_logs` is writable) and is also commonly
+  root-owned, so an install there fails `EPERM mkdtemp`. A per-run cache under the
+  throwaway work dir keeps the install hermetic and sandbox-safe. Both otto
+  packages are dependency-free except the CLI→core workspace link, so installing
+  the two local tarballs together resolves fully `--offline`.
 - The SIGINT/SIGTERM handlers in `loop.ts` call `process.exit()`, which runs
   **synchronously** and pre-empts pending promise `finally` blocks — so the
   per-stage scratch cleanup in `runner.ts`/`panel.ts` never runs on interrupt.

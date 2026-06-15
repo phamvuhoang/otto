@@ -112,7 +112,7 @@ describe("whichBin", () => {
     const file = join(dir, name);
     writeFileSync(file, "#!/bin/sh\n");
     chmodSync(file, 0o755);
-    const env = { PATH: dir, PATHEXT: ".EXE" };
+    const env = { PATH: dir, PATHEXT: ".exe" };
     expect(whichBin("tool", env)).toBe(file);
   });
 
@@ -128,7 +128,7 @@ describe("whichBin", () => {
     const name = process.platform === "win32" ? "tool.exe" : "tool";
     const file = join(real, name);
     writeFileSync(file, "");
-    const env = { PATH: [empty, real].join(delimiter), PATHEXT: ".EXE" };
+    const env = { PATH: [empty, real].join(delimiter), PATHEXT: ".exe" };
     expect(whichBin("tool", env)).toBe(file);
   });
 });

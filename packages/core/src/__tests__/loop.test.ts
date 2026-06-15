@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -301,6 +302,39 @@ describe("runLoop", () => {
     await loop;
     expect(mocks.release).toHaveBeenCalledTimes(1);
     expect(exit).toHaveBeenCalledWith(143);
+  });
+
+  it("sweeps ephemeral scratch but keeps logs on SIGINT", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const tmp = join(dirs.workspaceDir, ".otto-tmp");
+    mkdirSync(join(tmp, "logs"), { recursive: true });
+    writeFileSync(join(tmp, ".run-1-1-1.md"), "prompt", "utf8");
+    writeFileSync(join(tmp, ".sandbox-1-1-1.json"), "{}", "utf8");
+    mkdirSync(join(tmp, "spill-1-1-impl-1"));
+    writeFileSync(join(tmp, "logs", "iter1.ndjson"), "{}", "utf8");
+    vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit ${code}`);
+    }) as never);
+    mocks.runStage.mockImplementation((_s, _p, _w, _i, _sp, _l, options) => {
+      return new Promise((_resolve, reject) => {
+        options.signal!.addEventListener("abort", () =>
+          reject(new Error("aborted"))
+        );
+      });
+    });
+
+    const loop = runLoop(loopOptions(dirs, { maxRetries: 0 }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(() => process.emit("SIGINT")).toThrow("exit 130");
+    await loop;
+
+    expect(existsSync(join(tmp, ".run-1-1-1.md"))).toBe(false);
+    expect(existsSync(join(tmp, ".sandbox-1-1-1.json"))).toBe(false);
+    expect(existsSync(join(tmp, "spill-1-1-impl-1"))).toBe(false);
+    expect(existsSync(join(tmp, "logs", "iter1.ndjson"))).toBe(true);
   });
 
   it("stops cleanly once cumulative cost reaches the budget", async () => {

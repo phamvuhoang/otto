@@ -6,6 +6,7 @@ import { notifyComplete, notifyError } from "./notify.js";
 import { sleep, isThrottle, nextCooldownFactor } from "./pacing.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
+import { cleanScratch } from "./scratch.js";
 import { stageLogPath, type StageResult } from "./runner.js";
 import { executeStage } from "./stage-exec.js";
 import {
@@ -126,16 +127,20 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     const abortActiveStage = (): void => {
       if (!stageAbort!.signal.aborted) stageAbort!.abort();
     };
+    // process.exit() pre-empts the per-stage `finally` scratch cleanup, so the
+    // interrupt path sweeps ephemeral .otto-tmp artifacts synchronously here.
     onSigint = (): void => {
       abortActiveStage();
       if (notify) notifyError("interrupted (SIGINT)");
       releaseOnce();
+      cleanScratch(workspaceDir);
       process.exit(130);
     };
     onSigterm = (): void => {
       abortActiveStage();
       if (notify) notifyError("terminated (SIGTERM)");
       releaseOnce();
+      cleanScratch(workspaceDir);
       process.exit(143);
     };
     process.on("SIGINT", onSigint);

@@ -9,6 +9,13 @@
 
 ## Gotchas
 
+- The SIGINT/SIGTERM handlers in `loop.ts` call `process.exit()`, which runs
+  **synchronously** and pre-empts pending promise `finally` blocks — so the
+  per-stage scratch cleanup in `runner.ts`/`panel.ts` never runs on interrupt.
+  Anything that must happen on the interrupt path (wake-lock release, scratch
+  sweep via `cleanScratch`) has to be invoked **synchronously** in the handler
+  before `process.exit()`, not deferred to a `finally`.
+
 ## Decisions
 
 - `--print-config` prints two blocks: the resolved config, then a **preflight**

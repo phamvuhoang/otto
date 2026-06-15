@@ -11,8 +11,11 @@ on `pnpm -r typecheck && pnpm -r test && pnpm test`.
 
 ## Later candidate tasks (not yet started)
 
-- [ ] Harden unattended execution: audit wake-lock release + scratch cleanup on
-      the interrupt path (SIGINT/SIGTERM) and add a regression test.
+- [x] Harden unattended execution: audit wake-lock release + scratch cleanup on
+      the interrupt path (SIGINT/SIGTERM) and add a regression test. Wake-lock was
+      already released via `releaseOnce()`; the gap was scratch cleanup —
+      `process.exit()` pre-empts the per-stage `finally`. Added `scratch.ts`
+      (`cleanScratch`) swept synchronously in both signal handlers.
 - [ ] Run summary: ensure end-of-run summary line reports cost total, iterations,
       and exit reason (sentinel / budget / error) consistently; test it.
 - [ ] Docs: align README `--print-config` section + safety model with the

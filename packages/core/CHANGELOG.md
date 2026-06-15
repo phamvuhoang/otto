@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.1.0...otto-core-v0.1.0) (2026-06-15)
+
+
+### Features
+
+* initial public release of Otto ([64b6161](https://github.com/phamvuhoang/otto/commit/64b6161df7e4386714bde30b1b69a7c5de263ab7))
+
+## Changelog
+
 ## otto-core 0.1.0 (baseline)
 
 Initial release of the Claude Code AFK orchestration harness library: iteration

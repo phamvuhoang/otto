@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.3.0...otto-core-v0.4.0) (2026-06-16)
+
+
+### Features
+
+* otto-linear-afk (issue [#14](https://github.com/phamvuhoang/otto/issues/14)) ([#15](https://github.com/phamvuhoang/otto/issues/15)) ([d71f32d](https://github.com/phamvuhoang/otto/commit/d71f32d507703c987f579d38b240407642966dad))
+
 ## [0.3.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.2.0...otto-core-v0.3.0) (2026-06-16)
 
 

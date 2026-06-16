@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0](https://github.com/phamvuhoang/otto/compare/otto-v0.2.1...otto-v0.3.0) (2026-06-16)
+
+
+### Features
+
+* otto-linear-afk (issue [#14](https://github.com/phamvuhoang/otto/issues/14)) ([#15](https://github.com/phamvuhoang/otto/issues/15)) ([d71f32d](https://github.com/phamvuhoang/otto/commit/d71f32d507703c987f579d38b240407642966dad))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @phamvuhoang/otto-core bumped to 0.4.0
+
 ## [0.2.1](https://github.com/phamvuhoang/otto/compare/otto-v0.2.0...otto-v0.2.1) (2026-06-16)
 
 

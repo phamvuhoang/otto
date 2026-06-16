@@ -150,6 +150,19 @@ describe("runWatch", () => {
     expect(text).not.toMatch(/no open issues/i);
   });
 
+  it("auth failure: surfaces poll.detail so a misclassified error isn't swallowed", async () => {
+    mocks.pollIssues.mockReturnValue({
+      ok: false,
+      auth: true,
+      detail: "HTTP 401: Bad credentials",
+    });
+    mocks.sleep.mockImplementation(abortAfter(2));
+    await runWatch(baseOpts()).catch(() => {});
+    const text = stderr.join("");
+    expect(text).toMatch(/gh auth login/i);
+    expect(text).toMatch(/HTTP 401: Bad credentials/);
+  });
+
   it("poll failure: prints a poll-failed line distinct from idle", async () => {
     mocks.pollIssues.mockReturnValue({
       ok: false,

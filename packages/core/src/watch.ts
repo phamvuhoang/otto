@@ -145,7 +145,7 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
         // polling (auth may get fixed / a transient failure may clear).
         wasIdle = false;
         const why = poll.auth
-          ? `gh not authenticated — run 'gh auth login' (label ${watchLabel})`
+          ? `gh not authenticated — run 'gh auth login' (label ${watchLabel})${poll.detail ? ` — ${poll.detail}` : ""}`
           : `gh issue poll failed (label ${watchLabel})${poll.detail ? ` — ${poll.detail}` : ""}`;
         process.stderr.write(`${dim(why)}\n`);
       } else if (poll.count > 0) {

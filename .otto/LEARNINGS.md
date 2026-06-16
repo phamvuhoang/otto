@@ -2,6 +2,18 @@
 
 ## Conventions
 
+- **Review lenses are parametric + opt-in.** The panel renders any lens name from
+  `OTTO_REVIEW_LENSES` into `review-lens.md` via `{{ LENS }}` — adding a lens is
+  NOT a code change. Add one **definition bullet** to `review-lens.md`'s
+  lens-description list (the reviewer reasons from it) and leave `DEFAULT_LENSES`
+  in `run-bin.ts` (`correctness,security,tests`) untouched, so the new lens stays
+  opt-in (`OTTO_REVIEW_LENSES=task-fit,…`) and augments rather than replaces the
+  baseline. The `task-fit` lens ("did Otto solve the *right* problem / scope /
+  reviewer-usefulness", distinct from correctness/security/tests) was added this
+  way. Pinned by `review-lens.test.ts` (render-contract: definition present,
+  baseline three still present, header wiring). NOTE: rendering `review-lens.md`
+  in a test needs `spillHostDir`/`spillRefPath` opts (it uses `@spill?:head.diff`),
+  unlike `apply-review.md`/`quality-report.md` which have no `@spill`.
 - **Per-mode human-acceptance prompts** (Feature 2) live in a sibling fragment
   `templates/acceptance-prompts.md`, `@include`d ONCE at the tail of
   `quality-report.md`. Because every mode already includes the contract (directly

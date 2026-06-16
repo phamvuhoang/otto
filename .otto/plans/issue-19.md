@@ -50,10 +50,15 @@ incrementally on the `otto/19` branch; ships via PR (repo convention).
       task-fulfillment questions a human can challenge, beyond the generic
       checklist. Render-contract test pins the include + every mode's prompts
       (`quality-report.test.ts`).
-- [ ] **Task-fulfillment review lens.** Add a `task-fit` lens to the review panel
+- [x] **Task-fulfillment review lens.** Add a `task-fit` lens to the review panel
       (`review-lens.md` is lens-parametric) focused on "did Otto solve the right
       problem / is it reviewer-useful", separate from correctness/security/tests.
-      Test the lens wiring + default lens set unchanged.
+      Test the lens wiring + default lens set unchanged. Done: `task-fit` is an
+      opt-in lens *definition* added to `review-lens.md`'s lens-description list
+      (augments, not replaces the three); `DEFAULT_LENSES` in `run-bin.ts` stays
+      `correctness,security,tests` so it's opt-in via `OTTO_REVIEW_LENSES`.
+      Render-contract test (`review-lens.test.ts`) pins the definition, the
+      augment-not-replace invariant, and the generic `{{ LENS }}` header wiring.
 - [ ] **Sample verification transcripts.** Add `docs/` sample quality reports for
       a few realistic runs so users know what good output looks like. Doc-contract
       test pins their presence + required sections.

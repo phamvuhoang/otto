@@ -78,9 +78,12 @@ test("docs/BETA.md defines a ranking rubric and links to the capture template", 
     lower.includes("ranked backlog"),
     "docs/BETA.md must state the goal: feedback produces a ranked backlog"
   );
+  // The rubric must actually score along named axes, not just say "ranked".
+  // "ranked backlog" above already guarantees a /rank/ match, so asserting that
+  // again pins nothing — require the rubric's scoring dimensions instead.
   assert.ok(
-    /\brubric\b/i.test(doc) || /\brank(ing|ed)?\b/i.test(doc),
-    "docs/BETA.md must describe how feedback is ranked (a rubric)"
+    lower.includes("severity") && lower.includes("frequency"),
+    "docs/BETA.md must describe how feedback is ranked (severity × frequency)"
   );
 
   // The program doc must point at the capture form so the two artifacts stay

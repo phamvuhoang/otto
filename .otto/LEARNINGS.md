@@ -2,6 +2,16 @@
 
 ## Conventions
 
+- The **Otto quality report contract** lives in one includable fragment
+  `templates/quality-report.md` (Verdict / Task Source / What Changed / Evidence
+  / Human Acceptance Checklist / Gaps And Follow-Ups; verdict = Accepted ·
+  Accepted with follow-ups · Needs human review · Rejected, defaulting to *Needs
+  human review* when unsure; tests are evidence, not the verdict). Any mode that
+  emits a verification/completion summary (`verify.md` today; `ghafk`/`linear`
+  completion + `apply-review` per the issue-19 roadmap) must
+  `@include:quality-report.md` — never re-describe the shape inline, or the
+  provider workflows drift (the same drift-proofing as `ghprompt-workflow.md` /
+  `linear-completion.md`). Pinned by `quality-report.test.ts` render-contract.
 - `ghprompt-workflow.md` is **provider-agnostic** (RECONCILE → EXPLORATION →
   FEEDBACK → COMMIT → FINISHING → LEARNINGS, plus `@include:superpowers.md`). New
   provider-mode playbooks/templates (`linearprompt.md`, `linearafk-issue.md`,

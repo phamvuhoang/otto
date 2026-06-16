@@ -45,30 +45,8 @@ Put every task in exactly one bucket:
 
 # REPORT
 
-Write your report to `.otto-tmp/verify-report.md` using the `Write` tool (this path is gitignored scratch — it is the one write you may make). Structure it:
+Write your report to `.otto-tmp/verify-report.md` using the `Write` tool (this path is gitignored scratch — it is the one write you may make). Use the Otto quality report contract below: fold the RECONCILE/CLASSIFY results into it — DONE tasks (with their `file:line`/SHA evidence) into **What Changed** + **Evidence**, the suite pass/fail counts into the Test/typecheck evidence line, and GAP/DEFERRED tasks into **Gaps And Follow-Ups**.
 
-```
-# Verify report
+@include:quality-report.md
 
-## Verdict
-
-<one-line: all done / N gaps / N deferred>
-
-## Done
-
-- <task> — <evidence: file:line or commit>
-
-## Gaps
-
-- <task> — <what is missing>
-
-## Deferred
-
-- <task> — <why>
-
-## Suites
-
-- <command> — <pass/fail counts>
-```
-
-Also print the Verdict + section counts to your final message. Do not commit.
+Also print the Verdict + a one-line tally of done/gap/deferred to your final message. Do not commit.

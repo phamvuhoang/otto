@@ -424,6 +424,25 @@ describe("runLoop", () => {
       expect(stdoutText()).toContain("Otto done with failures · 1 iteration · $0.00");
     });
 
+    it("reports an aborted summary when the active stage is aborted mid-run", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockImplementation((_s, _p, _w, _i, _sp, _l, options) => {
+        return new Promise((_resolve, reject) => {
+          options.signal!.addEventListener("abort", () =>
+            reject(new Error("aborted"))
+          );
+        });
+      });
+      const ac = new AbortController();
+      const loop = runLoop(loopOptions(dirs, { signal: ac.signal, maxRetries: 0 }));
+      await Promise.resolve();
+      await Promise.resolve();
+      ac.abort();
+      await loop;
+      expect(stdoutText()).toContain("Otto aborted · 0 iterations");
+    });
+
     it("reports a rate-limit halt summary when the reset is beyond maxWaitMs", async () => {
       const dirs = makeDirs();
       roots.push(dirs.root);

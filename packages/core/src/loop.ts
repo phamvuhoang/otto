@@ -312,6 +312,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           }
         } catch (err) {
           if (activeSignal.aborted) {
+            summarize("aborted", i - 1);
             return { costUsd: runCostUsd, sentinelHit };
           }
           const stageLog = stageLogPath(workspaceDir, i, stage.name);

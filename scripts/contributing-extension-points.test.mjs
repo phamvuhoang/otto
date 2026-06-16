@@ -73,7 +73,7 @@ test("run-mode section names real flags and real STAGES gate stages", () => {
   const runMode = section(contributing, "Adding a run mode");
   const names = stageNames(stagesSrc);
 
-  for (const flag of ["--verify", "--apply-review"]) {
+  for (const flag of ["--verify", "--apply-review", "--issue"]) {
     assert.ok(
       runMode.includes(flag),
       `run-mode section must reference the \`${flag}\` mode flag`
@@ -83,7 +83,11 @@ test("run-mode section names real flags and real STAGES gate stages", () => {
   // The two stages a built-in mode swaps in as the gate. They MUST exist in the
   // real STAGES registry; if stages.ts renames one, this fails and forces a doc
   // (and test) update — the whole point of the contract.
-  for (const stage of ["verifier", "apply-review-implementer"]) {
+  for (const stage of [
+    "verifier",
+    "apply-review-implementer",
+    "ghafk-issue-implementer",
+  ]) {
     assert.ok(
       names.has(stage),
       `"${stage}" referenced by the docs is not a real STAGES name (stages.ts drift)`

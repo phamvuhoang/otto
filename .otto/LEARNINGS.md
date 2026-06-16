@@ -12,6 +12,13 @@
   `@include:quality-report.md` — never re-describe the shape inline, or the
   provider workflows drift (the same drift-proofing as `ghprompt-workflow.md` /
   `linear-completion.md`). Pinned by `quality-report.test.ts` render-contract.
+  The single `@include:quality-report.md` for the completion handoff lives in the
+  **shared `ghprompt-workflow.md` FINISHING section**, so the report *shape*
+  reaches every `*afk*` mode (gh + linear) through one include — provider-mode
+  fragments must NOT re-include it (that double-renders the contract). They only
+  override **placement** (WHERE the report lands): `linear-completion.md` points
+  it at the `otto-linear comment` body, GitHub uses the PR description / issue
+  comment. Placement varies per provider; shape is included once upstream.
 - `ghprompt-workflow.md` is **provider-agnostic** (RECONCILE → EXPLORATION →
   FEEDBACK → COMMIT → FINISHING → LEARNINGS, plus `@include:superpowers.md`). New
   provider-mode playbooks/templates (`linearprompt.md`, `linearafk-issue.md`,

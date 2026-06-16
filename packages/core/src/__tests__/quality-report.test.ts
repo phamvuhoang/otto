@@ -75,6 +75,48 @@ describe("quality report contract fragment", () => {
   });
 });
 
+describe("ghafk completion adopts the quality report contract", () => {
+  // The FINISHING handoff lives in the provider-agnostic ghprompt-workflow.md
+  // (shared by every *afk* mode), so emitting the report there gives GitHub the
+  // parity summary AND reaches every other mode through the same single include
+  // — the repo's drift-proofing convention. Linear then only overrides WHERE the
+  // report lands (otto-linear comment), not the shape.
+  it("includes the shared fragment in the workflow rather than re-describing it", () => {
+    const body = readFileSync(tpl("ghprompt-workflow.md"), "utf8");
+    expect(body).toContain("@include:quality-report.md");
+  });
+
+  it("instructs emitting the report into the PR/issue completion surface", () => {
+    const body = readFileSync(tpl("ghprompt-workflow.md"), "utf8");
+    expect(body).toContain("Otto quality report");
+    // GitHub-specific completion surfaces: the PR body and the issue comment,
+    // with concrete links/SHAs cited (parity goal: same human-readable signal).
+    expect(body).toContain("PR description");
+    expect(body).toContain("issue comment");
+    expect(body).toMatch(/PR URL/);
+  });
+
+  it("surfaces the contract sections end-to-end when a ghafk template renders", () => {
+    // Render the single-issue template through the include chain
+    // (ghafk-issue.md -> ghprompt-workflow.md -> quality-report.md) in a
+    // throwaway non-git workspace: the !? / @spill shell tags fall back and the
+    // included contract resolves.
+    const dir = mkdtempSync(join(tmpdir(), "otto-gq-"));
+    try {
+      const out = renderTemplate(
+        tpl("ghafk-issue.md"),
+        { INPUTS: "19" },
+        { cwd: dir, spillHostDir: dir, spillRefPath: "./.otto-tmp/spill" }
+      );
+      for (const section of CONTRACT_SECTIONS) {
+        expect(out).toContain(section);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("verify.md adopts the quality report contract", () => {
   it("includes the shared fragment rather than re-describing the shape", () => {
     const body = readFileSync(tpl("verify.md"), "utf8");

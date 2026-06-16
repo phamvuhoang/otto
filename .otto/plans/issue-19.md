@@ -15,11 +15,13 @@ incrementally on the `otto/19` branch; ships via PR (repo convention).
       in `verify.md` via `@include:quality-report.md`, replacing the ad-hoc
       report block while keeping the read-only / `.otto-tmp/verify-report.md`
       guardrails. Render-contract tests pin the fragment's sections + the include.
-- [ ] **Parity: ghafk completion summary.** `ghprompt-workflow.md` FINISHING
+- [x] **Parity: ghafk completion summary.** `ghprompt-workflow.md` FINISHING
       section instructs the agent to emit the quality-report contract (via
       `@include:quality-report.md`) into the PR body / issue comment, with
       GitHub-specific links. Render-contract test pins the include + GitHub link
-      prose.
+      prose. Done: the include lives in the *shared* workflow fragment, so the
+      report shape reaches every `*afk*` mode through one include (drift-proof);
+      Linear's next task only overrides placement, not shape — no second include.
 - [ ] **Parity: linear completion summary.** `linear-completion.md` includes the
       same contract for the Linear issue comment (verdict, branch/PR, evidence,
       checks, human next step), respecting "PR-based repos leave the issue open".

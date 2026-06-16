@@ -2,6 +2,19 @@
 
 ## Conventions
 
+- **Sample/illustrative docs are anchored to their source-of-truth template, not
+  hand-pinned.** `docs/quality-report-samples.md` ships filled-in example quality
+  reports (one per mode); its doc-contract test `scripts/quality-report-samples.test.mjs`
+  does NOT hardcode the expected section list — it PARSES the real contract
+  (`templates/quality-report.md`): the six `## ` section headings, the bolded
+  verdict vocabulary off the "One of — **…**" line, and the run modes off the
+  `Mode: <a | b | …>` placeholder, then asserts every sample carries all six
+  sections + a real verdict + a real mode. So a contract change forces the samples
+  (and a one-line `deepEqual` sanity guard) to update instead of going stale —
+  same drift-proofing philosophy as `security-doc-contract.test.mjs` parsing
+  `stages.ts`/`runner.ts`. Splitting the doc into individual reports keys off the
+  `# Otto quality report` H1 the contract emits. When adding a new mode/verdict to
+  the contract, add a sample, don't just edit the test.
 - **Review lenses are parametric + opt-in.** The panel renders any lens name from
   `OTTO_REVIEW_LENSES` into `review-lens.md` via `{{ LENS }}` — adding a lens is
   NOT a code change. Add one **definition bullet** to `review-lens.md`'s

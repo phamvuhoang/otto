@@ -59,9 +59,14 @@ incrementally on the `otto/19` branch; ships via PR (repo convention).
       `correctness,security,tests` so it's opt-in via `OTTO_REVIEW_LENSES`.
       Render-contract test (`review-lens.test.ts`) pins the definition, the
       augment-not-replace invariant, and the generic `{{ LENS }}` header wiring.
-- [ ] **Sample verification transcripts.** Add `docs/` sample quality reports for
+- [x] **Sample verification transcripts.** Add `docs/` sample quality reports for
       a few realistic runs so users know what good output looks like. Doc-contract
-      test pins their presence + required sections.
+      test pins their presence + required sections. Done: four filled-in samples in
+      `docs/quality-report-samples.md` (ghafk / linear-afk / apply-review / verify,
+      spanning the verdicts incl. the *Needs human review* default + GitHub↔Linear
+      parity); `scripts/quality-report-samples.test.mjs` pins them against the REAL
+      contract (`quality-report.md` sections + verdict vocab + modes, all parsed),
+      and the README docs-table link.
 
 ## Feature 3 — Close the feedback loop
 

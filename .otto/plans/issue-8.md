@@ -11,7 +11,7 @@ See `.otto/specs/issue-8-design.md` for problem/approach/assumptions.
       pointer from README) comparing `otto-afk`, `otto-ghafk`, `--verify`,
       `--apply-review`: input, gate stage, when to use. Success signal: choose a
       mode without reading source.
-- [ ] **Worked recipes.** Three end-to-end recipes in `docs/CLI.md`: issue
+- [x] **Worked recipes.** Three end-to-end recipes in `docs/CLI.md`: issue
       burn-down, external-review repair, overnight run — each a copy-pasteable
       command block + what the end-state summary looks like.
 - [ ] **Clearer watch-mode empty-queue & auth-failure output.** Distinguish "0

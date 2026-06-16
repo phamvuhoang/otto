@@ -7,6 +7,7 @@ Commands, flags, and modes for the two Otto bins. For environment variables, run
 - [`otto-ghafk` — GitHub-issue loop](#otto-ghafk--github-issue-loop)
 - [Running AFK (detach, notify, retries, resume)](#running-afk)
 - [Cost control, pacing & review panel](#cost-control-pacing--review-panel)
+- [Worked recipes](#worked-recipes)
 - [Verify & apply-review modes](#verify--apply-review-modes)
 - [Watch mode](#watch-mode-otto-ghafk-only)
 - [Single-issue mode](#single-issue-mode-otto-ghafk-only)
@@ -126,6 +127,87 @@ This forks into the background, holds an OS wake-lock so the host doesn't sleep,
 # cap spend, pace iterations, and use the reviewer panel
 otto-afk --budget 10 --cooldown 2000 --review-panel "<plan-and-prd>" 30
 ```
+
+---
+
+## Worked recipes
+
+Three end-to-end maintainer workflows. Each is a copy-pasteable command block plus the end-state summary Otto prints when it finishes — the same `summarize()` line on every terminal path: `● Otto <reason> · N iterations · $cost`, followed by a `→ next:` hint telling you what to do next.
+
+### Issue burn-down
+
+Chew through a GitHub issue backlog, one issue per iteration, capped at 20 iterations and \$15 of spend. Otto reconciles against git each iteration, so already-closed work is never redone.
+
+```bash
+gh auth login                                  # once, if not already authed
+OTTO_WORKSPACE=~/code/my-repo otto-ghafk --budget 15 20
+```
+
+When the backlog is empty the gate emits the sentinel and the run ends:
+
+```
+● Otto complete · 7 iterations · $4.82
+  → next: review the diff, then open a PR
+```
+
+If the budget bites first, work already committed is kept and the hint tells you how to resume:
+
+```
+● Otto stopped (budget) · 12 iterations · $15.01
+  → next: raise `--budget` and re-run to resume
+```
+
+To target a single issue instead of the whole backlog, swap in `--issue <n>` (see [Single-issue mode](#single-issue-mode-otto-ghafk-only)); to leave a daemon polling for new labelled issues, use `--watch` (see [Watch mode](#watch-mode-otto-ghafk-only)).
+
+### External-review repair
+
+Feed Otto a code-review document and have it fix the actionable findings one per iteration, each as its own `fix(review):` commit. Deferred findings are appended to the git-tracked `.otto/review-followups.md` and committed with the related fix.
+
+```bash
+/security-review > review.md                   # or any reviewer that emits a findings doc
+otto-afk --apply-review ./review.md --budget 8 25
+```
+
+The loop ends when no actionable findings remain:
+
+```
+● Otto complete · 9 iterations · $6.10
+  → next: review the diff, then open a PR
+```
+
+Then inspect the trail of everything it intentionally deferred:
+
+```bash
+git log --oneline --grep '^fix(review)'        # what landed
+cat .otto/review-followups.md                  # what was deferred, and why
+```
+
+See [`--apply-review`](#--apply-review-doc) for the full triage rules.
+
+### Overnight run
+
+Drive a local plan/PRD to completion unattended. `--detach` forks the loop into the background; `--notify` raises an OS toast + bell when it finishes or fails; the wake-lock keeps the host awake; transient stage failures retry with backoff.
+
+```bash
+otto-afk --detach --notify "./docs/plans/feature.md ./docs/prd/feature.md" 50
+tail -f ~/code/my-repo/.otto-tmp/logs/detached-*.log   # follow from any shell
+```
+
+In the morning, the final log line tells you the outcome and the next action:
+
+```
+● Otto done · 31 iterations · $22.40
+  → next: review the diff, then open a PR
+```
+
+If a stage hit an unrecoverable failure, the summary says so and points at the logs:
+
+```
+● Otto done with failures · 31 iterations · $22.40
+  → next: inspect the failed stage logs under `.otto-tmp/logs`, then re-run
+```
+
+A re-run resumes from the saved `.otto/state.json` iteration; committed work is never redone (see [Resilience & resume](#resilience--resume)).
 
 ---
 

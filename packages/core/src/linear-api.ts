@@ -16,9 +16,12 @@ const IDENTIFIER_RE = /^[A-Za-z][A-Za-z0-9]*-[1-9]\d*$/;
 // Issue UUID (RFC-4122 shape; we don't validate the version nibble).
 const UUID_RE =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-// `linear.app/<workspace>/issue/<IDENTIFIER>[/<slug>...]` — the identifier is
-// the path segment after `/issue/`.
-const URL_IDENTIFIER_RE = /\/issue\/([A-Za-z][A-Za-z0-9]*-[1-9]\d*)(?:[/?#]|$)/;
+// `https://linear.app/<workspace>/issue/<IDENTIFIER>[/<slug>...]` — the
+// identifier is the path segment after `/issue/`. Anchored to the linear.app
+// host so an arbitrary URL merely *containing* `/issue/ENG-1/` (e.g.
+// `https://evil.example/issue/ENG-1/`) does not silently resolve to a ref.
+const URL_IDENTIFIER_RE =
+  /^https?:\/\/linear\.app\/[^/]+\/issue\/([A-Za-z][A-Za-z0-9]*-[1-9]\d*)(?:[/?#]|$)/;
 
 /**
  * Normalize a user-supplied Linear issue reference to a {@link LinearRef}.

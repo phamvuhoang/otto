@@ -76,6 +76,9 @@ describe("parseLinearRef", () => {
     "ENG-12;rm",
     "ENG 12",
     "not-a-uuid-0000-0000-000000000000",
+    "https://evil.example/issue/ENG-1/x",
+    "ftp://linear.app/acme/issue/ENG-1",
+    "https://linear.app.evil.example/acme/issue/ENG-1",
   ])("rejects %j", (bad) => {
     expect(() => parseLinearRef(bad)).toThrow();
   });

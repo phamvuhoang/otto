@@ -37,3 +37,8 @@ export {
   defaultLinearAuthDeps,
   type LinearAuthCliDeps,
 } from "./linear-auth.js";
+export {
+  runLinear,
+  defaultLinearCliDeps,
+  type LinearCliDeps,
+} from "./linear-cli.js";

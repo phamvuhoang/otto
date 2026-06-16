@@ -25,8 +25,10 @@ incrementally on the `otto/14` branch; ships via PR (repo convention).
       (`--verify-live`)/`logout`; writes `~/.config/otto/linear.json` `0600`
       outside the repo. Core `runLinearAuth(argv, deps)` pure-ish with injected
       fs/stdin; CLI bin is a thin wrapper. Tests on the core fn.
-- [ ] **Bundled `linear` helper CLI.** `list/dump/view/comment/done` parallel
-      to `gh`; used by templates + agent. Thin layer over `linear-api.ts`.
+- [x] **Bundled `linear` helper CLI.** `list/dump/view/comment` parallel
+      to `gh`; used by templates + agent. Thin layer over `linear-api.ts`
+      (`runLinear(argv, deps)` core + `otto-linear` bin). `done` deferred to the
+      completion-behaviour task below, which owns done-state resolution.
 - [ ] **Stages + templates.** `STAGES.linearImplementer` (`linearafk.md`),
       `STAGES.linearIssueImplementer` (`linearafk-issue.md`), playbook
       `linearprompt.md`; reuse reviewer. Render-contract smoke test +
@@ -37,9 +39,10 @@ incrementally on the `otto/14` branch; ships via PR (repo convention).
 - [ ] **Watch mode.** Provider-specific Linear polling (count/identifier/title
       only, default 300s) with idle/auth/error classification, reusing the
       `ghafk` watch UX. Test poll classification with an injected poller.
-- [ ] **Completion behaviour.** PR repos → comment branch/PR info, leave open;
-      commit-to-branch repos → move to done state (`OTTO_LINEAR_DONE_STATE` →
-      first `type=completed` state; ambiguous → comment). Encoded in the
-      playbook + helper; test done-state resolution.
+- [ ] **Completion behaviour + `linear done`.** PR repos → comment branch/PR
+      info, leave open; commit-to-branch repos → move to done state
+      (`OTTO_LINEAR_DONE_STATE` → first `type=completed` state; ambiguous →
+      comment). Adds the `done` subcommand to the helper (done-state resolution)
+      and encodes the decision in the playbook; test done-state resolution.
 - [ ] **Docs.** README + `docs/CLI.md` mode table/recipes for the Linear mode;
       doc-contract test pins flags/stage names.

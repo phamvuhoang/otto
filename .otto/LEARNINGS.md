@@ -2,6 +2,17 @@
 
 ## Conventions
 
+- **Per-mode human-acceptance prompts** (Feature 2) live in a sibling fragment
+  `templates/acceptance-prompts.md`, `@include`d ONCE at the tail of
+  `quality-report.md`. Because every mode already includes the contract (directly
+  for `verify.md`/`apply-review.md`, transitively via `ghprompt-workflow.md`
+  FINISHING for the *afk* modes), the per-mode set reaches all of them through
+  that single existing include — do NOT add a second include per template, and
+  do NOT inline the prompts (same drift-proofing as the contract itself). The
+  fragment has one `### <mode> — <name>` block per Mode (`afk` / `ghafk` /
+  `linear-afk` / `apply-review` / `verify`) of task-fulfillment checkboxes that
+  augment (not replace) the generic Human Acceptance Checklist. Pinned by
+  `quality-report.test.ts`.
 - The **Otto quality report contract** lives in one includable fragment
   `templates/quality-report.md` (Verdict / Task Source / What Changed / Evidence
   / Human Acceptance Checklist / Gaps And Follow-Ups; verdict = Accepted ·

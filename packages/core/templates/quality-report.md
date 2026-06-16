@@ -57,3 +57,5 @@ One of — **Accepted** · **Accepted with follow-ups** · **Needs human review*
 - Deferred: <intentionally not done in this run + why, or "none">
 - Recommended next action: <what a maintainer should do next>
 ```
+
+@include:acceptance-prompts.md

@@ -41,10 +41,15 @@ incrementally on the `otto/19` branch; ships via PR (repo convention).
 
 ## Feature 2 — Human acceptance playbooks
 
-- [ ] **Per-mode acceptance prompts.** Mode-specific acceptance-check question
+- [x] **Per-mode acceptance prompts.** Mode-specific acceptance-check question
       sets (plan/PRD, GitHub burn-down, Linear burn-down, external review repair,
-      read-only verify) folded into the checklist section of the contract or a
-      sibling fragment. Render-contract test pins each mode's prompts.
+      read-only verify) live in a sibling fragment
+      `templates/acceptance-prompts.md`, `@include`d ONCE by `quality-report.md`
+      so every adopting mode inherits the set through the existing contract
+      include (drift-proof — no per-template re-description). Each mode set adds
+      task-fulfillment questions a human can challenge, beyond the generic
+      checklist. Render-contract test pins the include + every mode's prompts
+      (`quality-report.test.ts`).
 - [ ] **Task-fulfillment review lens.** Add a `task-fit` lens to the review panel
       (`review-lens.md` is lens-parametric) focused on "did Otto solve the right
       problem / is it reviewer-useful", separate from correctness/security/tests.

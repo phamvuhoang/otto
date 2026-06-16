@@ -117,6 +117,52 @@ describe("ghafk completion adopts the quality report contract", () => {
   });
 });
 
+describe("per-mode human acceptance prompts", () => {
+  // Feature 2: the generic Human Acceptance Checklist is mode-agnostic, but a
+  // maintainer reviewing a plan/PRD run needs different acceptance questions than
+  // one reviewing a review-repair round. The per-mode prompts live in ONE sibling
+  // fragment (acceptance-prompts.md) included ONCE by quality-report.md, so every
+  // mode inherits the same set through the existing contract include — the same
+  // drift-proofing convention as the contract itself.
+  const MODES = ["afk", "ghafk", "linear-afk", "apply-review", "verify"];
+
+  function renderPrompts(): string {
+    const dir = mkdtempSync(join(tmpdir(), "otto-ap-"));
+    try {
+      const wrap = join(dir, "wrap.md");
+      writeFileSync(wrap, `@include:${tpl("acceptance-prompts.md")}`, "utf8");
+      return renderTemplate(wrap, { INPUTS: "" }, { cwd: dir });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("the contract fragment includes the per-mode prompts rather than inlining them", () => {
+    const body = readFileSync(tpl("quality-report.md"), "utf8");
+    expect(body).toContain("@include:acceptance-prompts.md");
+  });
+
+  it("offers an acceptance prompt set for every run mode", () => {
+    const out = renderPrompts();
+    for (const mode of MODES) {
+      expect(out).toContain(mode);
+    }
+    // Mode-specific, not just the generic checklist: each set must pose
+    // task-fulfillment questions a human can challenge.
+    expect(out).toMatch(/acceptance criterion|stated problem|actually asked/i);
+  });
+
+  it("surfaces the per-mode prompts end-to-end when the contract renders", () => {
+    // Render quality-report.md through its own include chain in a throwaway
+    // workspace: the per-mode prompts must resolve via the single contract
+    // include, proving every adopting mode inherits them.
+    const out = renderFragment();
+    for (const mode of MODES) {
+      expect(out).toContain(mode);
+    }
+  });
+});
+
 describe("verify.md adopts the quality report contract", () => {
   it("includes the shared fragment rather than re-describing the shape", () => {
     const body = readFileSync(tpl("verify.md"), "utf8");

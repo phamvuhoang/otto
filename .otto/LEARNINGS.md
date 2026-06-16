@@ -152,6 +152,20 @@
     Otto runs against a *different* repo, the definition of done follows **that
     repo's** `.otto/LEARNINGS.md` / conventions — don't assume a PR is wanted
     there; do what that repo's learnings say (commit-only, PR, etc.).
+- **Release-quality gate is a RELEASING.md doc gate, not src.** The "both machine
+  verification AND a human-readable quality report before publishing major changes"
+  requirement (issue-19 Feature 3) is a `### Release-quality gate` subsection in
+  RELEASING.md §2 — no otto code behind it (same agent/docs-driven shape as the
+  quality-report contract itself). It names BOTH halves (machine:
+  typecheck/tests/smoke; human: a `--verify` Otto quality report) and clears only
+  on a human-accepted verdict (Accepted / Accepted with follow-ups), never *Needs
+  human review* / *Rejected* — green CI is evidence, not the verdict. It links the
+  REAL `packages/core/templates/quality-report.md` contract (drift-proof). Pinned
+  by a block in `scripts/releasing-contract.test.mjs` that extracts the section and
+  asserts heading + both halves + the contract link exists on disk + the
+  gate-clearing verdicts. **Test gotcha:** RELEASING.md line-wraps prose, so a
+  verdict phrase like "Needs human review" can split across a newline — normalize
+  whitespace (`section.replace(/\s+/g, " ")`) before matching multi-word phrases.
 
 ## Gotchas
 

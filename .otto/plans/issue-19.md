@@ -90,6 +90,12 @@ incrementally on the `otto/19` branch; ships via PR (repo convention).
       gaps/deferred). It is NOT a `##` in the shared `quality-report.md` — a
       cross-run rollup is not a per-run artifact and would pollute the
       six-section samples parse. Render-contract test in `quality-report.test.ts`.
-- [ ] **Release-quality gate.** Require a human-readable quality report (not just
+- [x] **Release-quality gate.** Require a human-readable quality report (not just
       typecheck/tests) before publishing major changes; wire into the release
-      docs/contract tests.
+      docs/contract tests. Done: a `### Release-quality gate` subsection in
+      RELEASING.md §2 requires BOTH machine verification (typecheck/tests/smoke)
+      AND a human-accepted Otto quality report (links the real
+      `quality-report.md` contract; clears only on Accepted / Accepted with
+      follow-ups, never Needs human review / Rejected). Pinned by a new block in
+      `scripts/releasing-contract.test.mjs` (heading present, both halves named,
+      contract link exists on disk, gate-clearing verdicts stated).

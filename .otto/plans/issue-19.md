@@ -22,10 +22,14 @@ incrementally on the `otto/19` branch; ships via PR (repo convention).
       prose. Done: the include lives in the *shared* workflow fragment, so the
       report shape reaches every `*afk*` mode through one include (drift-proof);
       Linear's next task only overrides placement, not shape — no second include.
-- [ ] **Parity: linear completion summary.** `linear-completion.md` includes the
-      same contract for the Linear issue comment (verdict, branch/PR, evidence,
-      checks, human next step), respecting "PR-based repos leave the issue open".
-      Render-contract test.
+- [x] **Parity: linear completion summary.** `linear-completion.md` overrides
+      *placement* — the Linear comment body IS the quality report (verdict,
+      branch/PR, evidence, checks, human next step), respecting "PR-based repos
+      leave the issue open". It does NOT re-include the fragment (the shape comes
+      once from the shared `ghprompt-workflow.md` FINISHING include); the Linear
+      single-issue chain already resolves the six contract sections end-to-end.
+      Render-contract tests pin the placement prose, the no-double-include
+      invariant, and the end-to-end sections.
 - [ ] **Parity: apply-review report.** `apply-review.md` emits the contract
       summarizing the review-fix round (CONFIRMED fixed, REJECTED, deferred).
       Render-contract test.

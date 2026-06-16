@@ -15,3 +15,13 @@ every Linear write — never raw GraphQL, and never `gh`:
   the issue for a human to move.
 
 When unsure which convention applies, comment and leave the issue OPEN.
+
+## Quality report placement (Linear)
+
+The FINISHING handoff above already defines the **Otto quality report** shape —
+do not re-describe it here. On Linear the **comment body IS that report**: write
+the full quality report (verdict, task source, what changed, evidence, human
+acceptance checklist, gaps/follow-ups) to a file and post it with
+`otto-linear comment <ref> --body-file <path>`, citing the branch/PR, the commit
+SHAs, the checks run, and the explicit human next step. For this PR-based repo
+that comment is the handoff surface — the issue stays OPEN until the PR merges.

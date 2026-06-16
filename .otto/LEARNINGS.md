@@ -54,4 +54,12 @@
   workspace; gh CLI/auth only for `otto-ghafk`). It reports only — never exits
   non-zero — because the flag is a read-only diagnostic.
 
+- Agent-driven behaviors with no otto code behind them (e.g. apply-review's
+  follow-up trail — nothing in src writes `.otto/review-followups.md`, the
+  `apply-review.md` template both surfaces the existing trail and instructs the
+  agent to append + commit it) are tested at the **template/render-contract**
+  level: render the template into a temp workspace and assert the renderer
+  surfaces the file (present → inlined, absent → `!?` fallback) plus pin the
+  instruction strings. See `apply-review.test.ts` / `superpowers-include.test.ts`.
+
 ## Dead ends

@@ -17,7 +17,7 @@ See `.otto/specs/issue-8-design.md` for problem/approach/assumptions.
 - [x] **Clearer watch-mode empty-queue & auth-failure output.** Distinguish "0
       open issues" (idle) from "gh poll failed / not authed" in `watch.ts`
       instead of collapsing both to "treating as no work". Test in `watch.test.ts`.
-- [ ] **apply-review follow-up-trail test.** Cover that deferred findings land
+- [x] **apply-review follow-up-trail test.** Cover that deferred findings land
       in `.otto/review-followups.md` and are committed with the fix (currently
       only flag-parsing is tested).
 - [ ] **Deferred-work count in summary (optional).** If cheap, surface a count

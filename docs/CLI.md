@@ -291,6 +291,14 @@ otto-ghafk --watch --watch-interval 300 5     # poll every 5 min, ≤5 iteration
 
 The trigger label defaults to `otto` (`OTTO_WATCH_LABEL` to change it). Under `--watch`, `--budget` caps total spend across the whole session; `Ctrl+C` stops cleanly. Cannot be combined with `--issue`.
 
+Each poll reports its state distinctly, so an idle daemon is never confused with a broken one:
+
+- **`no open issues labelled otto — idle, next poll in 300s`** — the queue is empty; nothing is wrong, Otto is waiting for labelled work.
+- **`gh not authenticated — run 'gh auth login' (label otto)`** — the poll failed because `gh` is not logged in; fix auth and it resumes on the next poll.
+- **`gh issue poll failed (label otto) — <detail>`** — any other poll failure (network, `gh` missing), with the first line of `gh`'s error as `<detail>`.
+
+It keeps polling in every case, so a transient failure or a fixed login recovers on its own.
+
 ---
 
 ## Single-issue mode (`otto-ghafk` only)

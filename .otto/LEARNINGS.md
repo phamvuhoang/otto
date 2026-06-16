@@ -40,6 +40,12 @@
   Anything that must happen on the interrupt path (wake-lock release, scratch
   sweep via `cleanScratch`) has to be invoked **synchronously** in the handler
   before `process.exit()`, not deferred to a `finally`.
+- vitest v4 gotcha: calling `mockReset()` on a `vi.fn()` and then giving it a
+  throwing `mockImplementation(() => { throw … })` makes the (otherwise caught)
+  throw surface as an *unhandled* error and fail the test — even though the code
+  under test catches it correctly. Don't `mockReset()` a mock you're about to
+  hand a throwing impl; set the impl fresh each test instead (it overrides the
+  prior one, so no reset is needed). See `watch.test.ts` `pollOpenIssues` cases.
 
 ## Decisions
 

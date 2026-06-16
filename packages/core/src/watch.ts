@@ -14,11 +14,22 @@ import {
 } from "./stream-render.js";
 import type { Stage } from "./stages.js";
 
-/** Count open issues carrying `label`, via gh. Returns 0 on any failure (keep polling). */
-export function openIssueCount(label: string, cwd: string): number {
+/**
+ * Outcome of one issue poll. Distinguishes a real idle queue (`ok` with
+ * `count: 0`) from a broken poll (`!ok`) so the daemon can say *why* it is not
+ * working — an empty queue and a failed/unauthenticated `gh` are very different
+ * states for a maintainer reading the log.
+ */
+export type PollResult =
+  | { ok: true; count: number }
+  | { ok: false; auth: boolean; detail: string };
+
+/** Poll open issues carrying `label`, via gh. Never throws. */
+export function pollOpenIssues(label: string, cwd: string): PollResult {
   try {
     // execFileSync (no shell) so `label` is passed as a literal argv entry — a
     // value like `$(rm -rf ~)` can never be shell-evaluated. See SECURITY.md.
+    // stderr is piped (not ignored) so a failure's message can be classified.
     const out = execFileSync(
       "gh",
       [
@@ -31,15 +42,25 @@ export function openIssueCount(label: string, cwd: string): number {
         "--json",
         "number",
       ],
-      { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+      { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
     );
     const arr = JSON.parse(out) as unknown[];
-    return Array.isArray(arr) ? arr.length : 0;
-  } catch {
-    process.stderr.write(
-      `${dim(`gh issue poll failed (label ${label}) — treating as no work`)}\n`
+    return { ok: true, count: Array.isArray(arr) ? arr.length : 0 };
+  } catch (err) {
+    const stderr = String(
+      (err as { stderr?: unknown })?.stderr ?? (err as Error)?.message ?? ""
     );
-    return 0;
+    // `gh` prints an auth hint ("gh auth login" / "not logged" / 401) when the
+    // user is unauthenticated — treat those as auth failures, everything else
+    // (network, gh missing, malformed output) as a generic poll failure.
+    const auth = /auth login|not logged|unauthenticated|credential|\b401\b/i.test(
+      stderr
+    );
+    const detail = stderr
+      .split("\n")
+      .map((l) => l.trim())
+      .find(Boolean) ?? "";
+    return { ok: false, auth, detail };
   }
 }
 
@@ -57,8 +78,8 @@ export type RunWatchOptions = {
   notify?: boolean;
   bin?: string;
   cliVersion?: string;
-  /** Injectable for tests; defaults to openIssueCount. */
-  countIssues?: (label: string, cwd: string) => number;
+  /** Injectable for tests; defaults to pollOpenIssues. */
+  pollIssues?: (label: string, cwd: string) => PollResult;
 };
 
 export async function runWatch(opts: RunWatchOptions): Promise<void> {
@@ -75,7 +96,7 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
     reviewLenses,
     notify = false,
     bin = "otto-ghafk",
-    countIssues = openIssueCount,
+    pollIssues = pollOpenIssues,
   } = opts;
 
   const releaser: Releaser = acquire({ reason: `${bin} watch` });
@@ -113,10 +134,17 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
         if (notify) notifyComplete(0, false);
         return;
       }
-      const count = countIssues(watchLabel, workspaceDir);
-      if (count > 0) {
+      const poll = pollIssues(watchLabel, workspaceDir);
+      if (!poll.ok) {
+        // Broken poll — say *why*, distinctly from an idle queue, and keep
+        // polling (auth may get fixed / a transient failure may clear).
+        const why = poll.auth
+          ? `gh not authenticated — run 'gh auth login' (label ${watchLabel})`
+          : `gh issue poll failed (label ${watchLabel})${poll.detail ? ` — ${poll.detail}` : ""}`;
+        process.stderr.write(`${dim(why)}\n`);
+      } else if (poll.count > 0) {
         process.stderr.write(
-          `${dim(`${count} open issue(s) labelled ${watchLabel} — running loop`)}\n`
+          `${dim(`${poll.count} open issue(s) labelled ${watchLabel} — running loop`)}\n`
         );
         const remaining =
           budgetUsd != null ? budgetUsd - cumulativeCost : undefined;
@@ -138,6 +166,10 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
         cumulativeCost += outcome.costUsd;
         process.stderr.write(
           `${dim(`watch run done — cumulative $${cumulativeCost.toFixed(2)}`)}\n`
+        );
+      } else {
+        process.stderr.write(
+          `${dim(`no open issues labelled ${watchLabel} — idle, next poll in ${watchIntervalSec}s`)}\n`
         );
       }
       await sleep(watchIntervalSec * 1000, daemonAbort.signal);

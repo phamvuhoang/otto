@@ -14,7 +14,7 @@ See `.otto/specs/issue-8-design.md` for problem/approach/assumptions.
 - [x] **Worked recipes.** Three end-to-end recipes in `docs/CLI.md`: issue
       burn-down, external-review repair, overnight run — each a copy-pasteable
       command block + what the end-state summary looks like.
-- [ ] **Clearer watch-mode empty-queue & auth-failure output.** Distinguish "0
+- [x] **Clearer watch-mode empty-queue & auth-failure output.** Distinguish "0
       open issues" (idle) from "gh poll failed / not authed" in `watch.ts`
       instead of collapsing both to "treating as no work". Test in `watch.test.ts`.
 - [ ] **apply-review follow-up-trail test.** Cover that deferred findings land

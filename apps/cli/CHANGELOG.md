@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0](https://github.com/phamvuhoang/otto/compare/otto-v0.1.0...otto-v0.2.0) (2026-06-16)
+
+
+### Features
+
+* stabilize the core loop (issue [#5](https://github.com/phamvuhoang/otto/issues/5)) ([#6](https://github.com/phamvuhoang/otto/issues/6)) ([04cd9e7](https://github.com/phamvuhoang/otto/commit/04cd9e7aff89b18f8fabe6073975db44dd416467))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @phamvuhoang/otto-core bumped to 0.2.0
+
 ## [0.1.0](https://github.com/phamvuhoang/otto/compare/otto-v0.1.0...otto-v0.1.0) (2026-06-15)
 
 

@@ -21,7 +21,7 @@ See `.otto/specs/issue-12-design.md` for problem/approach/assumptions.
       the `bypassPermissions` run line, the sandbox-vs-`OTTO_RUNNER=host` blast
       radius, and the static-shell-tag invariant — asserted against the real
       defaults in `runner.ts` / `render.ts` so a default change forces a doc edit.
-- [ ] **Beta-feedback capture template (non-code).** Add a structured feedback
+- [x] **Beta-feedback capture template (non-code).** Add a structured feedback
       template (e.g. `.github/ISSUE_TEMPLATE/beta-feedback.md` or a
       `docs/BETA.md`) capturing setup friction, confusing docs, and unsafe
       defaults, with a rubric for ranking the resulting backlog. Process artifact;

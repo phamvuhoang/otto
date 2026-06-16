@@ -17,6 +17,7 @@ import {
 import { detachAndExit } from "./detach.js";
 import { runLoop } from "./loop.js";
 import type { Stage } from "./stages.js";
+import type { PollResult, WatchProvider } from "./watch.js";
 
 export type RunBinConfig = {
   /** Bin name for usage/version/config output (e.g. "otto-afk"). */
@@ -34,8 +35,21 @@ export type RunBinConfig = {
    */
   takesInputArg: boolean;
   cliVersion?: string;
-  /** Whether this bin supports --watch. Only otto-ghafk sets this. */
+  /** Whether this bin supports --watch. otto-ghafk + otto-linear-afk set this. */
   supportsWatch?: boolean;
+  /**
+   * Provider-specific watch poller. Omitted → runWatch's default gh poller
+   * (otto-ghafk); otto-linear-afk passes a Linear poller. May be async.
+   */
+  watchPoll?: (label: string, cwd: string) => PollResult | Promise<PollResult>;
+  /** Provider-specific watch poll/auth messaging; omitted → gh. */
+  watchProvider?: WatchProvider;
+  /**
+   * Resolve the label that gates a --watch run. Omitted → `OTTO_WATCH_LABEL`
+   * (otto-ghafk). otto-linear-afk resolves `OTTO_LINEAR_LABEL` so watch polls
+   * the same labelled set its implementer selects.
+   */
+  resolveWatchLabel?: () => string;
   /** Alternate gate stage used when --issue is set. Only otto-ghafk sets this. */
   issueStage?: Stage;
   /** Single read-only gate stage used when --verify is set. Only otto-afk sets this. */
@@ -44,6 +58,12 @@ export type RunBinConfig = {
   applyReviewStage?: Stage;
   /** Run mode identifier threaded into runLoop state (e.g. "afk" / "ghafk"). */
   mode: string;
+  /**
+   * How to validate/normalize a `--issue` value. Defaults to the GitHub number
+   * ref; otto-linear-afk injects a Linear parser. The result must be shell-safe
+   * (it becomes OTTO_ISSUE, read by the issue template's static command).
+   */
+  parseIssue?: (raw: string) => number | string;
 };
 
 /**
@@ -75,7 +95,7 @@ function ensureStateGitignored(workspaceDir: string): void {
  * optionally fork into the background (--detach), then drive runLoop.
  */
 export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
-  const flags = parseFlags(argv);
+  const flags = parseFlags(argv, { parseIssue: cfg.parseIssue });
 
   if (flags.version) {
     printVersion(cfg.bin, cfg.cliVersion);
@@ -156,7 +176,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   }
 
   if (flags.issue != null && !cfg.issueStage) {
-    console.error("--issue is only supported by otto-ghafk");
+    console.error("--issue is only supported by otto-ghafk and otto-linear-afk");
     process.exit(1);
   }
 
@@ -220,8 +240,10 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       console.error("--issue cannot be combined with --watch");
       process.exit(1);
     }
-    // Validated positive integer (parseIssueRef) — safe for the static
-    // `gh issue view "$OTTO_ISSUE"` command in ghafk-issue.md. See render.ts.
+    // Validated by cfg.parseIssue (GitHub positive integer / Linear ref) — both
+    // admit only shell-safe chars, so it is safe for the static
+    // `gh issue view "$OTTO_ISSUE"` / `otto-linear view "$OTTO_ISSUE"` commands
+    // in the issue templates. See render.ts.
     process.env.OTTO_ISSUE = String(flags.issue);
   }
 
@@ -265,7 +287,9 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
 
   if (flags.watch) {
     if (!cfg.supportsWatch) {
-      console.error("--watch is only supported by otto-ghafk");
+      console.error(
+        "--watch is only supported by otto-ghafk and otto-linear-afk"
+      );
       process.exit(1);
     }
     const { runWatch } = await import("./watch.js");
@@ -275,7 +299,10 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       workspaceDir: effectiveWorkspaceDir,
       packageDir,
       watchIntervalSec: flags.watchIntervalSec ?? 300,
-      watchLabel: process.env.OTTO_WATCH_LABEL?.trim() || "otto",
+      watchLabel:
+        cfg.resolveWatchLabel?.() ||
+        process.env.OTTO_WATCH_LABEL?.trim() ||
+        "otto",
       budgetUsd: flags.budget,
       cooldownMs: flags.cooldownMs,
       maxRetries: flags.maxRetries,
@@ -283,6 +310,8 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       notify: flags.notify,
       bin: cfg.bin,
       cliVersion: cfg.cliVersion,
+      pollIssues: cfg.watchPoll,
+      provider: cfg.watchProvider,
     });
     return;
   }

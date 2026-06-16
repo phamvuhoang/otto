@@ -25,6 +25,16 @@ export const STAGES = {
     template: "ghafk-issue.md",
     permissionMode: "bypassPermissions",
   } satisfies Stage,
+  linearImplementer: {
+    name: "linear-implementer",
+    template: "linearafk.md",
+    permissionMode: "bypassPermissions",
+  } satisfies Stage,
+  linearIssueImplementer: {
+    name: "linear-issue-implementer",
+    template: "linearafk-issue.md",
+    permissionMode: "bypassPermissions",
+  } satisfies Stage,
   verifier: {
     name: "verifier",
     template: "verify.md",

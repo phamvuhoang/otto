@@ -12,6 +12,7 @@ function allPresentProbes(overrides: Partial<PreflightProbes> = {}): PreflightPr
     resolveBin: () => "/usr/local/bin/found",
     pathExists: () => true,
     home: "/home/user",
+    linearAuth: () => ({ token: "tok", source: "OTTO_LINEAR_API_KEY" }),
     ...overrides,
   };
 }
@@ -90,6 +91,30 @@ describe("runPreflight", () => {
     const git = byLabel(results)["workspace git repo"];
     expect(git.ok).toBe(false);
     expect(git.detail).toMatch(/git repo/);
+  });
+
+  it("includes a linear auth check only for otto-linear-afk", () => {
+    const linear = runPreflight(
+      { bin: "otto-linear-afk", workspaceDir: "/repo" },
+      allPresentProbes()
+    );
+    const ghafk = runPreflight(
+      { bin: "otto-ghafk", workspaceDir: "/repo" },
+      allPresentProbes()
+    );
+    expect(linear.map((r) => r.label)).toContain("linear auth");
+    expect(byLabel(linear)["linear auth"].ok).toBe(true);
+    expect(ghafk.map((r) => r.label)).not.toContain("linear auth");
+  });
+
+  it("flags missing linear auth with a remediation hint", () => {
+    const results = runPreflight(
+      { bin: "otto-linear-afk", workspaceDir: "/repo" },
+      allPresentProbes({ linearAuth: () => null })
+    );
+    const auth = byLabel(results)["linear auth"];
+    expect(auth.ok).toBe(false);
+    expect(auth.detail).toMatch(/otto-linear-auth login/);
   });
 
   it("flags missing gh auth for otto-ghafk", () => {

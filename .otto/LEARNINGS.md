@@ -2,10 +2,40 @@
 
 ## Conventions
 
+- `ghprompt-workflow.md` is **provider-agnostic** (RECONCILE → EXPLORATION →
+  FEEDBACK → COMMIT → FINISHING → LEARNINGS, plus `@include:superpowers.md`). New
+  provider-mode playbooks/templates (`linearprompt.md`, `linearafk-issue.md`,
+  and any future `*afk*` mode) `@include:ghprompt-workflow.md` rather than
+  forking the workflow — only the provider-specific issue-listing/selection prose
+  differs per mode. The render-contract tests pin the include + the
+  static-shell-tag invariant (no `{{ INPUTS }}` in a shell/@spill command body;
+  only the validated `$OTTO_ISSUE` env var may appear).
+- `--issue` parsing is **per-mode injectable**: `run-bin.ts`'s `RunBinConfig`
+  carries an optional `parseIssue` (default `parseIssueRef` → GitHub number;
+  `runLinearAfk` injects `parseLinearIssueArg` → Linear ref string), threaded
+  into `parseFlags(argv, { parseIssue })`. `CliFlags.issue` is `number | string`
+  accordingly, and `OTTO_ISSUE = String(flags.issue)` stays the shell-safe
+  invariant because **every** `parseIssue` must emit only `[A-Za-z0-9-]` (the one
+  ref fragment that reaches a host shell). A new provider mode adds its own
+  validating `parseIssue`; it must not loosen that charset. Per-mode preflight
+  rows hang off `opts.bin` in `runPreflight` (`otto-linear-afk` → `linear auth`
+  via the injectable `linearAuth` probe), mirroring the `otto-ghafk` gh rows.
 - Pure functions that touch the host (binary lookup, fs, credentials) take
   **injectable probes/deps** with host-wired defaults, so unit tests run without
   shelling out or hitting the real home dir. See `preflight.ts` (`runPreflight`
   probes) and `runner.ts`'s extracted argv builder.
+- **Watch mode is per-mode injectable, like `parseIssue`.** `RunBinConfig`
+  carries `supportsWatch`, `watchPoll` (poller, may be async), `watchProvider`
+  (`{name, authCmd}` for the poll/auth lines), and `resolveWatchLabel` (which env
+  var gates the run). Omitted → `runWatch`'s gh defaults (`pollOpenIssues`, `{gh,
+  gh auth login}`, `OTTO_WATCH_LABEL`). `runWatch` **awaits** the poller so async
+  pollers (Linear `fetch`) work; both pollers live in `watch.ts` and return the
+  same `PollResult` (`pollOpenIssues` / `pollLinearIssues`), auth-classified so
+  the daemon prints a re-login hint distinctly from a transient failure
+  (`LinearApiError.kind === "auth"`). **Linear watch polls `OTTO_LINEAR_LABEL`
+  (+`OTTO_LINEAR_TEAM`), not `OTTO_WATCH_LABEL`** — it must match the label its
+  implementer selects, else watch never triggers when a user overrides the label.
+  `printConfig`'s reported watch label mirrors this per-mode resolution.
 - Every terminal exit path in `loop.ts` funnels through one `summarize(reason,
   iterations)` helper that prints a single consistent stdout line (`● Otto
   <reason> · N iterations · $cost`). When adding a new exit reason, call
@@ -35,6 +65,11 @@
 
 ## Gotchas
 
+- Linear's GraphQL API authenticates a **personal API key** with a bare
+  `Authorization: <key>` header — **no `Bearer` prefix** (that prefix is for
+  OAuth access tokens only). `createLinearClient` in `linear-api.ts` sets the
+  header verbatim; getting this wrong yields a 401 that `LinearApiError`
+  classifies as `kind: "auth"`. Endpoint is `https://api.linear.app/graphql`.
 - Root contract tests (`scripts/*.test.mjs`, run by `pnpm test` → CI's "Root
   contract tests" step) are wired via a **glob**, not an explicit file list. An
   earlier explicit list silently dropped new contract tests
@@ -74,5 +109,17 @@
   level: render the template into a temp workspace and assert the renderer
   surfaces the file (present → inlined, absent → `!?` fallback) plus pin the
   instruction strings. See `apply-review.test.ts` / `superpowers-include.test.ts`.
+
+- **Linear completion (move-to-done) is split: pure resolution in code, the
+  comment-vs-move decision in the playbook.** `otto-linear done <ref>` resolves
+  the target state via `resolveDoneState(states, OTTO_LINEAR_DONE_STATE)` (named
+  state case-insensitively, else the first `type==="completed"` state by
+  ascending `position`). When it can't resolve one it does **not** guess or move
+  — it exits non-zero with a hint; the helper never auto-composes a comment.
+  Which path to take (PR repo → comment + leave open; commit-to-branch → `done`)
+  lives in the provider-specific `linear-completion.md` fragment, `@include`d by
+  both `linearprompt.md` (multi-issue) and `linearafk-issue.md` (single-issue) —
+  the same per-mode-prose-not-in-`ghprompt-workflow.md` convention as issue
+  selection. Pin the fragment + its include with a render-contract assertion.
 
 ## Dead ends

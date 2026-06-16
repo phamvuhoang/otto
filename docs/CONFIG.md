@@ -15,6 +15,7 @@ Environment variables, runner/sandbox behavior, branch strategy, prerequisites, 
 - **Node.js 20+** + **npm 9+** (or `pnpm`/`yarn`). For macOS/Linux: nvm, asdf, or distro package.
 - **Claude Code** authenticated: `claude /login` once. macOS is the primary supported target (Seatbelt sandbox). Linux works with the default sandbox runner if `bubblewrap` + `socat` are installed; otherwise use `OTTO_RUNNER=host`.
 - **`gh`** authenticated (only required for `otto-ghafk`): `gh auth login` once.
+- **Linear personal API key** (only required for `otto-linear-afk`): `otto-linear-auth login` once.
 
 Docker is not required. `claude` and `gh` on the host read `~/.claude`, `~/.claude.json`, and `~/.config/gh` natively.
 
@@ -61,6 +62,11 @@ gh auth status
 | `OTTO_REVIEW_LENSES`     | `correctness,security,tests` | Comma-separated lens list for the reviewer panel. Setting it implies `--review-panel`.                                                                                                                                 |
 | `OTTO_MAX_WAIT`          | `6h`                         | Maximum time to wait out a Claude rate-limit before halting cleanly and saving resume state. Accepts seconds (`90`) or a duration string (`90m`, `6h`). Equivalent to `--max-wait`.                                    |
 | `OTTO_WATCH_LABEL`       | `otto`                       | Issue label that gates a `--watch` run (`otto-ghafk`).                                                                                                                                                                 |
+| `OTTO_LINEAR_API_KEY`    | _(unset)_                    | Linear personal API key for `otto-linear-afk`. Highest-precedence source, then `LINEAR_API_KEY`, then `~/.config/otto/linear.json` (written by `otto-linear-auth login`).                                              |
+| `LINEAR_API_KEY`         | _(unset)_                    | Fallback Linear API key source (precedence below `OTTO_LINEAR_API_KEY`).                                                                                                                                               |
+| `OTTO_LINEAR_LABEL`      | `otto`                       | Label gating Linear issue selection and `--watch` polling (`otto-linear-afk`).                                                                                                                                         |
+| `OTTO_LINEAR_TEAM`       | _(unset)_                    | Optional Linear team-key narrowing for selection/polling (e.g. `ENG`).                                                                                                                                                 |
+| `OTTO_LINEAR_DONE_STATE` | _(unset)_                    | Name of the workflow state `otto-linear done` moves an issue to; else the first `type = completed` state.                                                                                                              |
 | `OTTO_BRANCH`            | _(unset → `current`)_        | Branch isolation strategy: `current`, `branch`, or `worktree`. Overrides `.otto/config.json`; overridden by `--branch`.                                                                                                |
 | `OTTO_BRANCH_PREFIX`     | `otto/`                      | Prefix for the generated branch/worktree name. Overrides `.otto/config.json`; overridden by `--branch-prefix`.                                                                                                         |
 | `NO_COLOR` / `TERM=dumb` | _(unset)_                    | Disable ANSI color in Otto's own output. Color is also auto-disabled when stdout/stderr is not a TTY, so piping to a file stays clean.                                                                                  |
@@ -74,7 +80,7 @@ Run `otto-afk --print-config` to see how all of the above resolve for your curre
   ✓ workspace git repo  /path/to/your/repo
 ```
 
-`otto-ghafk` adds `gh CLI` and `gh auth` rows. Preflight reports only — it never exits non-zero or blocks the run.
+`otto-ghafk` adds `gh CLI` and `gh auth` rows; `otto-linear-afk` adds a `linear auth` row (resolved credential source, or `run otto-linear-auth login` when absent). Preflight reports only — it never exits non-zero or blocks the run.
 
 ---
 

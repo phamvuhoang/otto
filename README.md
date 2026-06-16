@@ -83,6 +83,10 @@ otto-ghafk 10
 # Fix one specific issue and stop
 otto-ghafk --issue 42 5
 
+# Burn down a Linear backlog (label `otto`); --issue ENG-123 scopes to one
+otto-linear-auth login                         # paste a Linear personal API key, once
+otto-linear-afk 10
+
 # Keep spend on a leash for an exploratory spike
 otto-afk --budget 5 "./docs/plans/spike.md" 20
 
@@ -110,7 +114,7 @@ Full flag reference and more verify / apply-review recipes: **[docs/CLI.md](./do
 
 Otto ships as two npm packages:
 
-- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop) and `otto-ghafk` (GitHub-issue loop).
+- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool).
 - **[`@phamvuhoang/otto-core`](./packages/core)** — the library: iteration loop, native-sandbox runner, template renderer, stage registry. Importable from any Node project.
 
 Each iteration runs a **stage chain**: a **gate** stage (implement / verify / apply-review, depending on the bin and flags) followed by a **reviewer**. Before each stage, Otto renders a prompt template — expanding `@include`, `@spill`, `` !?`cmd` ``, `` !`cmd` ``, and `{{ INPUTS }}` tags — and injects the workspace's `.otto/LEARNINGS.md`. If the gate emits the sentinel `<promise>NO MORE TASKS</promise>`, the loop exits before the reviewer runs.
@@ -145,7 +149,7 @@ npm i -D @phamvuhoang/otto              # per-repo — ./node_modules/.bin/otto-
 npx -y @phamvuhoang/otto otto-afk …     # no install — bootstrap on demand
 ```
 
-Requires **Node 20+**, an authenticated **Claude Code** (`claude /login`), and — for `otto-ghafk` — an authenticated **`gh`**. See [docs/CONFIG.md → Prerequisites](./docs/CONFIG.md#prerequisites).
+Requires **Node 20+**, an authenticated **Claude Code** (`claude /login`), and — for `otto-ghafk` — an authenticated **`gh`** (for `otto-linear-afk`, a Linear personal API key via `otto-linear-auth login`). See [docs/CONFIG.md → Prerequisites](./docs/CONFIG.md#prerequisites).
 
 ---
 

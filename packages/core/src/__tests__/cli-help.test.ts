@@ -54,6 +54,15 @@ describe("parseFlags --issue", () => {
   it("throws when --issue value is invalid", () => {
     expect(() => parseFlags(["--issue", "foo", "5"])).toThrow();
   });
+  it("uses an injected parseIssue parser when provided (Linear mode)", () => {
+    const f = parseFlags(["--issue", "eng-12", "5"], {
+      parseIssue: (raw) => raw.toUpperCase(),
+    });
+    expect(f.issue).toBe("ENG-12");
+  });
+  it("still defaults to the GitHub number parser without opts", () => {
+    expect(parseFlags(["--issue", "42", "5"]).issue).toBe(42);
+  });
 });
 
 describe("parseDurationMs", () => {

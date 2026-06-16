@@ -1,5 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { acquire, type Releaser } from "./keepalive.js";
+import {
+  createLinearClient,
+  resolveLinearAuth,
+  LinearApiError,
+  type LinearAuth,
+  type LinearClient,
+} from "./linear-api.js";
 import { runLoop } from "./loop.js";
 import { notifyComplete, notifyError } from "./notify.js";
 import { sleep } from "./pacing.js";
@@ -64,6 +71,61 @@ export function pollOpenIssues(label: string, cwd: string): PollResult {
   }
 }
 
+/**
+ * Injectable deps for {@link pollLinearIssues}, so poll classification is
+ * unit-testable without a real credential file or network. Auth is re-resolved
+ * each poll (default `resolveLinearAuth`) so a mid-watch re-login is picked up.
+ */
+export type LinearPollDeps = {
+  label: string;
+  team?: string;
+  limit?: number;
+  /** Resolve the Linear credential; defaults to env/file precedence. */
+  resolveAuth?: () => LinearAuth | null;
+  /** Build a client from a token; defaults to the real GraphQL client. */
+  makeClient?: (token: string) => Pick<LinearClient, "listIssues">;
+};
+
+/**
+ * Poll open Linear issues carrying `label` (count only, no comments). Never
+ * throws — mirrors {@link pollOpenIssues}. A missing credential or a Linear
+ * `auth`-kind error is reported as `auth: true` so the daemon can print a
+ * re-login hint distinctly from a transient request/network failure.
+ */
+export async function pollLinearIssues(deps: LinearPollDeps): Promise<PollResult> {
+  const auth = (deps.resolveAuth ?? (() => resolveLinearAuth()))();
+  if (!auth) {
+    return {
+      ok: false,
+      auth: true,
+      detail: "no Linear API key — run 'otto-linear-auth login'",
+    };
+  }
+  try {
+    const client = (deps.makeClient ??
+      ((t: string) => createLinearClient({ token: t })))(auth.token);
+    const issues = await client.listIssues({
+      label: deps.label,
+      team: deps.team,
+      limit: deps.limit ?? 50,
+    });
+    return { ok: true, count: issues.length };
+  } catch (err) {
+    if (err instanceof LinearApiError) {
+      return { ok: false, auth: err.kind === "auth", detail: err.message };
+    }
+    return { ok: false, auth: false, detail: (err as Error).message };
+  }
+}
+
+/**
+ * Provider-specific bits of the watch UX: the noun used in poll lines and the
+ * command that re-authenticates. Defaults to GitHub's `gh`.
+ */
+export type WatchProvider = { name: string; authCmd: string };
+
+const GH_PROVIDER: WatchProvider = { name: "gh", authCmd: "gh auth login" };
+
 export type RunWatchOptions = {
   stages: [Stage, ...Stage[]];
   iterations: number;
@@ -78,8 +140,13 @@ export type RunWatchOptions = {
   notify?: boolean;
   bin?: string;
   cliVersion?: string;
-  /** Injectable for tests; defaults to pollOpenIssues. */
-  pollIssues?: (label: string, cwd: string) => PollResult;
+  /**
+   * Poller for open labelled issues. Defaults to the gh poller; otto-linear-afk
+   * passes a Linear poller. May be async. Injectable for tests too.
+   */
+  pollIssues?: (label: string, cwd: string) => PollResult | Promise<PollResult>;
+  /** Provider-specific poll/auth messaging; defaults to gh. */
+  provider?: WatchProvider;
 };
 
 export async function runWatch(opts: RunWatchOptions): Promise<void> {
@@ -97,6 +164,7 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
     notify = false,
     bin = "otto-ghafk",
     pollIssues = pollOpenIssues,
+    provider = GH_PROVIDER,
   } = opts;
 
   const releaser: Releaser = acquire({ reason: `${bin} watch` });
@@ -139,14 +207,15 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
         if (notify) notifyComplete(0, false);
         return;
       }
-      const poll = pollIssues(watchLabel, workspaceDir);
+      const poll = await pollIssues(watchLabel, workspaceDir);
       if (!poll.ok) {
         // Broken poll — say *why*, distinctly from an idle queue, and keep
         // polling (auth may get fixed / a transient failure may clear).
         wasIdle = false;
+        const suffix = poll.detail ? ` — ${poll.detail}` : "";
         const why = poll.auth
-          ? `gh not authenticated — run 'gh auth login' (label ${watchLabel})${poll.detail ? ` — ${poll.detail}` : ""}`
-          : `gh issue poll failed (label ${watchLabel})${poll.detail ? ` — ${poll.detail}` : ""}`;
+          ? `${provider.name} not authenticated — run '${provider.authCmd}' (label ${watchLabel})${suffix}`
+          : `${provider.name} issue poll failed (label ${watchLabel})${suffix}`;
         process.stderr.write(`${dim(why)}\n`);
       } else if (poll.count > 0) {
         wasIdle = false;

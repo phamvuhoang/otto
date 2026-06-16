@@ -5,6 +5,7 @@ Commands, flags, and modes for the two Otto bins. For environment variables, run
 - [Choosing a mode](#choosing-a-mode)
 - [`otto-afk` — plan/PRD loop](#otto-afk--planprd-loop)
 - [`otto-ghafk` — GitHub-issue loop](#otto-ghafk--github-issue-loop)
+- [`otto-linear-afk` — Linear-issue loop](#otto-linear-afk--linear-issue-loop)
 - [Running AFK (detach, notify, retries, resume)](#running-afk)
 - [Cost control, pacing & review panel](#cost-control-pacing--review-panel)
 - [Worked recipes](#worked-recipes)
@@ -23,12 +24,13 @@ Every command also supports `--help` / `-h`, `--version` / `-V`, and `--print-co
 
 ## Choosing a mode
 
-Otto has one build loop with four entry points. They share the same resilience, sandbox, and reconcile-against-git behavior — they differ only in where the task comes from and what the **gate stage** (the first, sentinel-checked stage) does. Pick by where your work lives:
+Otto has one build loop with several entry points. They share the same resilience, sandbox, and reconcile-against-git behavior — they differ only in where the task comes from and what the **gate stage** (the first, sentinel-checked stage) does. Pick by where your work lives:
 
 | Mode                                 | Input                                                           | Gate stage                 | When to use                                                                                             |
 | ------------------------------------ | --------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `otto-afk "<plan-and-prd>" <n>`      | A plan/PRD string (conventionally file paths) + iteration count | `implementer`              | Drive a local plan or PRD to completion, implementing one task per iteration.                           |
 | `otto-ghafk <n>`                     | Open GitHub issues (no input arg)                               | `ghafk-implementer`        | Burn down a GitHub issue backlog, one issue per iteration. `--issue` targets one; `--watch` daemonizes. |
+| `otto-linear-afk <n>`                | Open Linear issues labelled `otto` (no input arg)               | `linear-implementer`       | Burn down a Linear backlog, one issue per iteration. `--issue ENG-123` targets one; `--watch` daemonizes. |
 | `otto-afk --verify "<plan-and-prd>"` | A plan/PRD string (one-shot — no iteration count)               | `verifier` (read-only)     | Audit what actually landed: a DONE/GAP/DEFERRED report + suite run. Changes nothing, no reviewer stage. |
 | `otto-afk --apply-review <doc> <n>`  | An external code-review document + iteration count              | `apply-review-implementer` | Fix the actionable findings of an external review, one per iteration; deferred ones tracked in git.     |
 
@@ -81,6 +83,79 @@ No plan/PRD arg — context comes from open GitHub issues.
 2. **ghafk-implementer stage** (gate) — the agent picks one open AFK issue, implements it, commits, and closes / comments on the issue.
 3. **Sentinel check** — same as `otto-afk`.
 4. **Reviewer stage** — same as `otto-afk`.
+
+---
+
+## `otto-linear-afk` — Linear-issue loop
+
+```bash
+otto-linear-afk <iterations>
+```
+
+The Linear-backed sibling of `otto-ghafk`: same loop, same flags (`--budget`, `--cooldown`, `--review-panel`, `--detach`, `--notify`, `--issue`, `--watch`, `--print-config`), but it triages **Linear** issues over the GraphQL API instead of GitHub issues. No plan/PRD arg — context comes from open Linear issues labelled `otto`.
+
+### Auth — `otto-linear-auth`
+
+Linear access uses a **personal API key** (not OAuth, in v1). Create one in Linear → Settings → API → Personal API keys, then:
+
+```bash
+otto-linear-auth login          # paste the key on stdin; stored at ~/.config/otto/linear.json (0600)
+otto-linear-auth status         # report whether a credential resolves, and from where
+otto-linear-auth status --verify-live   # also call the API to confirm the key works
+otto-linear-auth logout         # delete the stored credential file
+```
+
+The key is stored **outside any repo** at `~/.config/otto/linear.json` (`{ "type": "apiKey", "token": "…" }`, mode `0600`). Resolution precedence: `OTTO_LINEAR_API_KEY` → `LINEAR_API_KEY` → that file. `otto-linear-afk --print-config` adds a `linear auth` preflight row reporting the resolved source, or `run otto-linear-auth login` when absent.
+
+### Issue selection
+
+The loop lists **open** Linear issues carrying the label `otto` (override with `OTTO_LINEAR_LABEL`), optionally narrowed to one team with `OTTO_LINEAR_TEAM=ENG`. Full issue bodies + comments are spilled to `.otto-tmp/spill-…/issues.json` for the agent to `Read` before picking a task — the same lean-index-plus-spill shape as `otto-ghafk`.
+
+### What happens per iteration
+
+1. **Render template** `linearafk.md`: recent commits, the `otto-linear list` index, and the spilled `otto-linear dump` issue detail, plus `@include:linearprompt.md` (the playbook, which reuses the provider-agnostic `ghprompt-workflow.md` fragment).
+2. **`linear-implementer` stage** (gate) — the agent picks one open labelled issue, implements it, commits, and completes the issue per repo convention (below).
+3. **Sentinel check** — same as `otto-afk`.
+4. **Reviewer stage** — same as `otto-afk`.
+
+### The bundled `otto-linear` helper
+
+Templates and the agent use a small bundled helper (parallel to `gh`) over the Linear GraphQL API:
+
+```bash
+otto-linear list --label otto --limit 50          # labelled open issues (identifier/title/state/url)
+otto-linear dump --label otto --limit 50          # full issue detail as JSON (bodies + comments), for spilling
+otto-linear view ENG-123                          # one issue's full detail as JSON
+otto-linear comment ENG-123 --body-file <path>    # add a comment from a file
+otto-linear done ENG-123                           # move to a completed workflow state
+```
+
+### Completion behaviour
+
+Completion follows the target repo's convention (see its `.otto/LEARNINGS.md`):
+
+- **PR repos** — `otto-linear comment ENG-123 --body-file <path>` with the branch/PR info, leaving the issue open (it closes when the PR merges).
+- **Commit-to-branch repos** — `otto-linear done ENG-123` moves the issue to a completed state. The target state resolves via `OTTO_LINEAR_DONE_STATE` (by name, case-insensitive) first, else the first workflow state of `type = completed`. When that is ambiguous, `done` refuses to guess (exits non-zero) and the agent comments instead.
+
+### Single-issue & watch modes
+
+```bash
+otto-linear-afk --issue ENG-123 5                                   # identifier
+otto-linear-afk --issue https://linear.app/acme/issue/ENG-123/x 5   # full Linear URL
+otto-linear-afk --watch --watch-interval 300 5                      # daemon, poll every 5 min
+```
+
+`--issue` accepts a Linear identifier (`ENG-123`, case-insensitive), an issue UUID, or a Linear issue URL — it scopes the loop to that one issue (gate stage `linear-issue-implementer`). `--watch` polls the **same** labelled set the implementer selects — `OTTO_LINEAR_LABEL` (+`OTTO_LINEAR_TEAM`), not `OTTO_WATCH_LABEL` — every `--watch-interval` seconds (default 300; Linear discourages aggressive polling). A missing/invalid key is reported distinctly (`run otto-linear-auth login`) from a transient poll failure, and the daemon keeps polling either way. `--issue` and `--watch` are mutually exclusive.
+
+### Linear environment variables
+
+| Variable                 | Default | What it does                                                                                          |
+| ------------------------ | ------- | ----------------------------------------------------------------------------------------------------- |
+| `OTTO_LINEAR_API_KEY`    | _unset_ | Linear personal API key (highest-precedence source; then `LINEAR_API_KEY`, then `~/.config/otto/linear.json`). |
+| `LINEAR_API_KEY`         | _unset_ | Fallback key source (precedence below `OTTO_LINEAR_API_KEY`).                                          |
+| `OTTO_LINEAR_LABEL`      | `otto`  | Label gating issue selection and `--watch` polling.                                                   |
+| `OTTO_LINEAR_TEAM`       | _unset_ | Optional team-key narrowing (e.g. `ENG`).                                                              |
+| `OTTO_LINEAR_DONE_STATE` | _unset_ | Name of the workflow state `otto-linear done` moves an issue to; else the first `type = completed` state. |
 
 ---
 
@@ -371,13 +446,15 @@ The agent playbooks are self-contained: `prompt.md` (plan/PRD source + progress 
 | File / dir                                    | Purpose                                                                       |
 | --------------------------------------------- | ----------------------------------------------------------------------------- |
 | `apps/cli/bin/otto-afk.js` / `otto-ghafk.js`  | Bin entry points (`@phamvuhoang/otto`).                                       |
+| `apps/cli/bin/otto-linear-afk.js` / `otto-linear.js` / `otto-linear-auth.js` | Linear mode bins: the loop, the GraphQL helper, and the credential tool. |
+| `packages/core/src/linear-main.ts` / `linear-api.ts` / `linear-cli.ts` / `linear-auth.ts` | `runLinearAfk`; GraphQL ops + ref parsing; `otto-linear` helper; `otto-linear-auth`. |
 | `apps/cli/scripts/afk.sh` / `ghafk.sh`        | Optional shims; fall back to `npx @phamvuhoang/otto`. Shipped in the tarball. |
 | `packages/core/src/main.ts` / `gh-main.ts`    | Export `runAfk(argv)` / `runGhAfk(argv)`.                                     |
 | `packages/core/src/run-bin.ts`                | `runBin`: parse flags, resolve dirs, dispatch to `runLoop` / `runWatch`.      |
 | `packages/core/src/loop.ts`                   | Iteration driver. Runs the stage chain; first stage is the gate.              |
 | `packages/core/src/render.ts`                 | Template renderer (`@include` / `@spill` / `!?` / `!` / `{{ INPUTS }}`).      |
 | `packages/core/src/runner.ts`                 | Native-sandbox runner: spawn `claude` + NDJSON stream + sandbox settings.     |
-| `packages/core/src/stages.ts`                 | Stage registry — `implementer`, `ghafkImplementer`, `reviewer`.               |
+| `packages/core/src/stages.ts`                 | Stage registry — `implementer`, `ghafkImplementer`, `linearImplementer`, `reviewer`. |
 | `packages/core/src/panel.ts`                  | `--review-panel`: lenses → adversarial verify → synth.                        |
 | `packages/core/src/branch.ts` / `state.ts`    | Branch strategy + `.otto/config.json`; resume state (`.otto/state.json`).     |
 | `packages/core/src/cli-help.ts`               | Flag parsing; `--help` / `--version` / `--print-config` output.               |

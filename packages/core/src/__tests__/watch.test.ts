@@ -14,7 +14,8 @@ vi.mock("../loop.js", () => ({ runLoop: mocks.runLoop }));
 vi.mock("../pacing.js", () => ({ sleep: mocks.sleep }));
 vi.mock("node:child_process", () => ({ execFileSync: mocks.execFileSync }));
 
-import { runWatch, pollOpenIssues } from "../watch.js";
+import { runWatch, pollOpenIssues, pollLinearIssues } from "../watch.js";
+import { LinearApiError, type LinearAuth } from "../linear-api.js";
 
 const stage: Stage = { name: "ghafk-implementer", template: "ghafk.md" };
 const baseOpts = (over = {}) => ({
@@ -69,6 +70,98 @@ describe("pollOpenIssues", () => {
     const r = pollOpenIssues("otto", "/ws");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.auth).toBe(false);
+  });
+});
+
+describe("pollLinearIssues", () => {
+  const auth: LinearAuth = { token: "lin_key", source: "OTTO_LINEAR_API_KEY" };
+
+  it("returns ok + count from listIssues", async () => {
+    const r = await pollLinearIssues({
+      label: "otto",
+      resolveAuth: () => auth,
+      makeClient: () => ({ listIssues: async () => [{ id: "1" }, { id: "2" }] as any }),
+    });
+    expect(r).toEqual({ ok: true, count: 2 });
+  });
+
+  it("classifies missing auth as an auth failure (no network call)", async () => {
+    let made = false;
+    const r = await pollLinearIssues({
+      label: "otto",
+      resolveAuth: () => null,
+      makeClient: () => {
+        made = true;
+        return { listIssues: async () => [] };
+      },
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.auth).toBe(true);
+      expect(r.detail).toMatch(/otto-linear-auth login/);
+    }
+    expect(made).toBe(false);
+  });
+
+  it("classifies a LinearApiError auth kind as an auth failure", async () => {
+    const r = await pollLinearIssues({
+      label: "otto",
+      resolveAuth: () => auth,
+      makeClient: () => ({
+        listIssues: async () => {
+          throw new LinearApiError("Linear GraphQL error: 401", "auth", 401);
+        },
+      }),
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.auth).toBe(true);
+      expect(r.detail).toMatch(/401/);
+    }
+  });
+
+  it("classifies a non-auth LinearApiError as a poll failure", async () => {
+    const r = await pollLinearIssues({
+      label: "otto",
+      resolveAuth: () => auth,
+      makeClient: () => ({
+        listIssues: async () => {
+          throw new LinearApiError("Linear request failed: down", "network");
+        },
+      }),
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.auth).toBe(false);
+  });
+
+  it("classifies an unexpected error as a poll failure", async () => {
+    const r = await pollLinearIssues({
+      label: "otto",
+      resolveAuth: () => auth,
+      makeClient: () => ({
+        listIssues: async () => {
+          throw new Error("boom");
+        },
+      }),
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.auth).toBe(false);
+  });
+
+  it("forwards label + team to listIssues", async () => {
+    let seen: unknown;
+    await pollLinearIssues({
+      label: "ops",
+      team: "ENG",
+      resolveAuth: () => auth,
+      makeClient: () => ({
+        listIssues: async (o: unknown) => {
+          seen = o;
+          return [];
+        },
+      }),
+    });
+    expect(seen).toMatchObject({ label: "ops", team: "ENG" });
   });
 });
 
@@ -161,6 +254,25 @@ describe("runWatch", () => {
     const text = stderr.join("");
     expect(text).toMatch(/gh auth login/i);
     expect(text).toMatch(/HTTP 401: Bad credentials/);
+  });
+
+  it("provider: a Linear auth failure prints the otto-linear-auth hint, not the gh one", async () => {
+    mocks.pollIssues.mockReturnValue({
+      ok: false,
+      auth: true,
+      detail: "Linear GraphQL error: 401",
+    });
+    mocks.sleep.mockImplementation(abortAfter(2));
+    await runWatch(
+      baseOpts({
+        provider: { name: "Linear", authCmd: "otto-linear-auth login" },
+      })
+    ).catch(() => {});
+    const text = stderr.join("");
+    expect(text).toMatch(/Linear not authenticated/);
+    expect(text).toMatch(/otto-linear-auth login/);
+    expect(text).not.toMatch(/gh auth login/);
+    expect(text).not.toMatch(/no open issues/i);
   });
 
   it("poll failure: prints a poll-failed line distinct from idle", async () => {

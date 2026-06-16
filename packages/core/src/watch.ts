@@ -125,6 +125,11 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
   );
 
   let cumulativeCost = 0;
+  // Track idle state so the "no open issues" line prints only on the
+  // idle→busy→idle transition, not on every empty poll — otherwise an
+  // overnight watch floods the detached log with ~1 identical line per poll
+  // and buries the auth/poll-failure signal this is built to surface.
+  let wasIdle = false;
   try {
     for (;;) {
       if (budgetUsd != null && cumulativeCost >= budgetUsd) {
@@ -138,11 +143,13 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
       if (!poll.ok) {
         // Broken poll — say *why*, distinctly from an idle queue, and keep
         // polling (auth may get fixed / a transient failure may clear).
+        wasIdle = false;
         const why = poll.auth
           ? `gh not authenticated — run 'gh auth login' (label ${watchLabel})`
           : `gh issue poll failed (label ${watchLabel})${poll.detail ? ` — ${poll.detail}` : ""}`;
         process.stderr.write(`${dim(why)}\n`);
       } else if (poll.count > 0) {
+        wasIdle = false;
         process.stderr.write(
           `${dim(`${poll.count} open issue(s) labelled ${watchLabel} — running loop`)}\n`
         );
@@ -167,7 +174,10 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
         process.stderr.write(
           `${dim(`watch run done — cumulative $${cumulativeCost.toFixed(2)}`)}\n`
         );
-      } else {
+      } else if (!wasIdle) {
+        // First empty poll after activity — announce idle once, then stay quiet
+        // until the queue becomes non-empty (or a poll fails) and idles again.
+        wasIdle = true;
         process.stderr.write(
           `${dim(`no open issues labelled ${watchLabel} — idle, next poll in ${watchIntervalSec}s`)}\n`
         );

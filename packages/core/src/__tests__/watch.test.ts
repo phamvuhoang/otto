@@ -129,6 +129,17 @@ describe("runWatch", () => {
     expect(text).not.toMatch(/failed|auth/i);
   });
 
+  it("idle: prints the idle line once across repeated empty polls (no log-spam)", async () => {
+    mocks.pollIssues.mockReturnValue({ ok: true, count: 0 });
+    mocks.sleep.mockImplementation(abortAfter(5));
+    await runWatch(baseOpts()).catch(() => {});
+    const idleLines = stderr
+      .join("")
+      .split("\n")
+      .filter((l) => /no open issues/i.test(l));
+    expect(idleLines).toHaveLength(1);
+  });
+
   it("auth failure: prints a distinct gh-auth hint, not an idle line", async () => {
     mocks.pollIssues.mockReturnValue({ ok: false, auth: true, detail: "" });
     mocks.sleep.mockImplementation(abortAfter(2));

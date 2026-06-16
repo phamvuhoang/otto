@@ -36,7 +36,10 @@ describe("apply-review follow-up trail", () => {
       const out = render(ws);
       // The recorded follow-up is inlined into the <existing-followups> block,
       // not collapsed to the fallback — the next run can see what was deferred.
-      expect(out).toContain("re-reads N days every pull");
+      // Assert a fixture-unique substring: "re-reads N days every pull" also
+      // appears verbatim in the template's own TRIAGE example, so it would pass
+      // even if the fixture were never inlined.
+      expect(out).toContain("deferred, out of scope");
       expect(out).not.toContain("_No follow-ups recorded yet._");
     } finally {
       rmSync(ws, { recursive: true, force: true });

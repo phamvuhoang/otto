@@ -211,6 +211,21 @@ describe("runLinear comment", () => {
     expect(code).toBe(2);
     expect(err.join("\n")).toMatch(/body-file|read/i);
   });
+
+  it("returns 2 when the body file is empty or whitespace-only", async () => {
+    const addComment = vi.fn(async () => ({ id: "comment-1" }));
+    const { deps, err } = harness({
+      readFile: () => "   \n\t ",
+      makeClient: () => fakeClient({ addComment }),
+    });
+    const code = await runLinear(
+      ["comment", "ENG-123", "--body-file", "/tmp/empty.md"],
+      deps
+    );
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/empty/i);
+    expect(addComment).not.toHaveBeenCalled();
+  });
 });
 
 describe("runLinear done", () => {

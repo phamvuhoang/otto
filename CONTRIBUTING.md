@@ -195,6 +195,48 @@ loop-specific behavior. The renderer's `@include` is single-pass (a file pulled 
 `afk.md` / `ghafk.md` — don't nest an `@include` inside `prompt.md` / `ghprompt.md`. After
 editing, run `node scripts/smoke-templates.mjs` to confirm it still renders.
 
+## Adding a run mode
+
+A **run mode** is a CLI flag that selects a different **stage chain** for the same
+bin. The built-in modes are wired in [`run-bin.ts`](./packages/core/src/run-bin.ts),
+which assembles the `stages` array before calling `runLoop`:
+
+```ts
+// packages/core/src/run-bin.ts — flag → chain (gate at index 0)
+const stages = flags.verify
+  ? [cfg.verifyStage!] //                       --verify       → [verifier]
+  : flags.applyReview != null
+    ? [cfg.applyReviewStage!, ...cfg.stages.slice(1)] // --apply-review → [apply-review-implementer, reviewer]
+    : flags.issue != null
+      ? [cfg.issueStage!, ...cfg.stages.slice(1)] //     --issue        → [ghafk-issue-implementer, reviewer]
+      : cfg.stages; //                                   default        → bin's base chain
+```
+
+The pattern: a mode **swaps the gate** (index-0) stage for a mode-specific stage,
+while reusing the rest of the bin's base chain (`...cfg.stages.slice(1)` — normally
+just the `reviewer`). The mode-gate stages live in `STAGES` like any other:
+`verifier` (read-only one-shot) and `apply-review-implementer` (applies an external
+review). To add a mode:
+
+1. **Register the gate stage** in `STAGES` (+ its `templates/*.md`) — see
+   [Adding a pipeline stage](#adding-a-pipeline-stage).
+2. **Add the flag** in [`cli-help.ts`](./packages/core/src/cli-help.ts) and thread
+   the stage through `run-bin.ts`'s chain selection above (a new branch that puts
+   your stage at index 0). Pass it from the bin (`main.ts` / `gh-main.ts`) via a
+   field like `verifyStage` / `applyReviewStage`.
+
+Hard invariants a mode **must not** break (the same contract every chain obeys):
+
+- **The first stage is the gate.** Only index 0 is sentinel-checked for the exact
+  literal `<promise>NO MORE TASKS</promise>`; the loop exits before the rest of the
+  chain when the gate emits it. Your mode's stage goes at index 0.
+- **The reviewer never gates.** Keep the `reviewer` (or any review-panel stage) as
+  a trailing, non-index-0 stage — `slice(1)` preserves it. A mode that drops the
+  reviewer ships unreviewed work; a mode that puts the reviewer at index 0 would
+  gate on review output, which is wrong.
+- **New modes are mutually exclusive** with the existing `--issue` / `--verify` /
+  `--apply-review` / `--watch` flags — `run-bin.ts` rejects combining them.
+
 ## Smoke-test published artifacts
 
 Verify the _published shape_ before cutting a release with the pack-then-install

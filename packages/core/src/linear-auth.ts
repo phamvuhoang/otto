@@ -1,6 +1,12 @@
 import { homedir } from "node:os";
 import { dirname } from "node:path";
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 
 import {
   createLinearClient,
@@ -57,6 +63,9 @@ export const defaultLinearAuthDeps: LinearAuthCliDeps = {
   writeFile: (p, contents, mode) => {
     mkdirSync(dirname(p), { recursive: true, mode: 0o700 });
     writeFileSync(p, contents, { mode });
+    // `mode` above only applies when the file is created, so re-tighten an
+    // existing credential file whose perms may have drifted looser.
+    chmodSync(p, mode);
   },
   removeFile: (p) => {
     try {

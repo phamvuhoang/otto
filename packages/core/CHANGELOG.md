@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.2.0...otto-core-v0.3.0) (2026-06-16)
+
+
+### Features
+
+* improve maintainer workflows (issue [#8](https://github.com/phamvuhoang/otto/issues/8)) ([#9](https://github.com/phamvuhoang/otto/issues/9)) ([9d09155](https://github.com/phamvuhoang/otto/commit/9d091556aeac0891bc67df1d3d87daa686bdb288))
+
+
+### Bug Fixes
+
+* **playbook:** ship via PR instead of closing the issue on commit ([#10](https://github.com/phamvuhoang/otto/issues/10)) ([a2ed00e](https://github.com/phamvuhoang/otto/commit/a2ed00eeeb5f5ce5a8b5a6aa631280cd486a6a45))
+
 ## [0.2.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.1.0...otto-core-v0.2.0) (2026-06-16)
 
 

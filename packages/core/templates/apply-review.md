@@ -28,7 +28,7 @@
 
 `<review-doc>` names a code-review document (a file path). `Read` it. It contains findings, usually with severities. Your job is to fix the actionable ones — ONE finding per iteration — and track the rest.
 
-When every actionable finding has been addressed (fixed, or already fixed in git, or recorded as a follow-up), output `<promise>NO MORE TASKS</promise>`.
+When every actionable finding has been addressed (fixed, or already fixed in git, or recorded as a follow-up), produce the completion report (see COMPLETION REPORT below), then output `<promise>NO MORE TASKS</promise>`.
 
 # TRIAGE
 
@@ -65,6 +65,23 @@ Make a single `git commit -am` with a short message:
 - Subject (≤72 chars): `fix(review): <what changed>`
 - Body: which finding (and its review section), key decision, and a one-line note of any follow-ups recorded.
 - No file lists, no `Co-Authored-By`.
+
+# COMPLETION REPORT
+
+Only on the final iteration — when every actionable finding has been addressed
+and you are about to output the sentinel — hand the maintainer one readable
+summary of the whole review-fix round. Do NOT emit it per-iteration. Map the
+contract below onto this round:
+
+- **What Changed / Evidence:** the findings you CONFIRMED and fixed, each with
+  its `fix(review):` commit SHA and the review section it came from; the
+  feedback loops you ran (tests / typecheck) and their result.
+- **Gaps And Follow-Ups:** findings you DEFERRED to `./.otto/review-followups.md`
+  (with why), and any REJECTED / won't-fix findings with their reason. Verdict
+  defaults to **Needs human review** when any actionable finding was left
+  unfixed.
+
+@include:quality-report.md
 
 # FINAL RULES
 

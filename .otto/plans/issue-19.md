@@ -30,9 +30,14 @@ incrementally on the `otto/19` branch; ships via PR (repo convention).
       single-issue chain already resolves the six contract sections end-to-end.
       Render-contract tests pin the placement prose, the no-double-include
       invariant, and the end-to-end sections.
-- [ ] **Parity: apply-review report.** `apply-review.md` emits the contract
+- [x] **Parity: apply-review report.** `apply-review.md` emits the contract
       summarizing the review-fix round (CONFIRMED fixed, REJECTED, deferred).
-      Render-contract test.
+      apply-review is a standalone gate template (no `ghprompt-workflow.md`
+      include), so it `@include:quality-report.md` *directly* like `verify.md` —
+      not via the shared FINISHING include. New COMPLETION REPORT section emits
+      it once, only on the final iteration alongside the NO MORE TASKS sentinel
+      (not per-iteration), mapping fixed→evidence and deferred/won't-fix→gaps.
+      Render-contract test pins the include + sections + the round-summary prose.
 
 ## Feature 2 — Human acceptance playbooks
 

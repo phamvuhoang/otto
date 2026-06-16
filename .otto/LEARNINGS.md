@@ -19,6 +19,14 @@
   override **placement** (WHERE the report lands): `linear-completion.md` points
   it at the `otto-linear comment` body, GitHub uses the PR description / issue
   comment. Placement varies per provider; shape is included once upstream.
+  **Two include classes, don't conflate them:** *afk* modes inherit the fragment
+  transitively via the shared `ghprompt-workflow.md` FINISHING include (and must
+  NOT re-include — double-render). **Standalone gate templates that do NOT
+  `@include:ghprompt-workflow.md` — `verify.md` and `apply-review.md` — own their
+  report and `@include:quality-report.md` *directly*.** apply-review emits it once
+  in a `# COMPLETION REPORT` section gated to the final iteration (alongside the
+  NO MORE TASKS sentinel, never per-iteration), mapping CONFIRMED-fixed→Evidence
+  and deferred/won't-fix→Gaps. Pinned by `apply-review.test.ts`.
 - `ghprompt-workflow.md` is **provider-agnostic** (RECONCILE → EXPLORATION →
   FEEDBACK → COMMIT → FINISHING → LEARNINGS, plus `@include:superpowers.md`). New
   provider-mode playbooks/templates (`linearprompt.md`, `linearafk-issue.md`,

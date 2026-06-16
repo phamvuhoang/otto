@@ -63,17 +63,25 @@ export function nextActionFor(reason: string): string {
 // a bullet whose block is marked FIXED/RESOLVED (on the bullet line or any of
 // its indented continuation lines) is excluded — otherwise the count measures
 // file age, not outstanding work. Headings, prose, blank lines, the lazy
-// placeholder, and nested detail bullets are ignored. Pure + exported so it is
-// unit-testable without a workspace.
+// placeholder, and nested detail bullets are ignored. Lines inside a fenced
+// code block (```…```) are skipped entirely, so a quoted diff or left-margin
+// list in a finding's detail neither inflates the count nor ends the enclosing
+// bullet. Pure + exported so it is unit-testable without a workspace.
 export function countDeferredFollowups(text: string): number {
   const resolved = /\b(FIXED|RESOLVED)\b/;
   let n = 0;
   let open = false; // currently inside a top-level bullet not yet seen resolved
+  let inFence = false; // inside a ``` fenced code block — its lines never count
   const flush = () => {
     if (open) n++;
     open = false;
   };
   for (const line of text.split("\n")) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence; // fence delimiter: toggle, never a bullet/heading
+      continue;
+    }
+    if (inFence) continue; // code content neither counts nor ends a bullet
     if (/^- /.test(line)) {
       flush(); // close the previous bullet
       open = !resolved.test(line);

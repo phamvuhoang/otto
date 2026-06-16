@@ -578,6 +578,20 @@ describe("runLoop", () => {
         )
       ).toBe(2);
     });
+
+    it("ignores bullets quoted inside a fenced code block", () => {
+      expect(
+        countDeferredFollowups(
+          "- #1 still open (low) — deferred\n" +
+            "  example diff:\n" +
+            "```diff\n" +
+            "- removed line\n" +
+            "- another removed line\n" +
+            "```\n" +
+            "- #2 still open (low) — deferred\n"
+        )
+      ).toBe(2);
+    });
   });
 
   describe("nextActionFor", () => {

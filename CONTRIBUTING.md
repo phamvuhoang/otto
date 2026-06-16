@@ -201,6 +201,14 @@ Verify the _published shape_ before cutting a release with the pack-then-install
 path. `pnpm link --global` is brittle here (pnpm 9 rewrites the dependent's
 manifest), so don't use it. The `*.tgz` globs below are version-agnostic.
 
+**Release smoke (automated):** `node scripts/smoke-pack-install.mjs` runs the whole
+path end-to-end — builds core, packs both packages, installs the tarballs into an
+isolated throwaway prefix (no global pollution, hermetic `--cache`), and asserts the
+installed `otto-afk` prints usage (`--help`) and resolved config (`--print-config`).
+A green run proves the published `@phamvuhoang/otto` resolves a real
+`@phamvuhoang/otto-core`. Run it before every release. The manual steps below are
+the same path by hand (e.g. to inspect a real global install).
+
 ```bash
 pnpm -r build
 (cd packages/core && pnpm pack --pack-destination /tmp/otto-packs)

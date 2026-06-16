@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { runPreflight } from "./preflight.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 
 export type CliFlags = {
@@ -304,7 +305,7 @@ Usage:
 Flags:
   -h, --help          show this help and exit
   -V, --version       print bin + core version and exit
-  --print-config      resolve workspace / runner / sandbox config, print, and exit
+  --print-config      print resolved config + a preflight check of run prerequisites, then exit
   --no-keep-alive     skip OS wake-lock acquisition (default: acquire system-sleep inhibitor for loop lifetime)
   --max-retries <N>   per-stage retry budget on transient failure (default: 3; 0 disables retries)
   --detach            fork the loop into a background process, print pid + log path, and exit (parent returns 0)
@@ -439,5 +440,16 @@ export function printConfig(
   branch                ${branchStatus}
   watch                 ${watchStatus}
   issue                 ${issueStatus}
+`);
+
+  // Preflight: report whether the run's prerequisites are satisfied so a user
+  // can debug setup before any paid `claude` invocation.
+  const preflight = runPreflight({ bin, workspaceDir });
+  const preflightLines = preflight
+    .map((r) => `  ${r.ok ? "✓" : "✗"} ${r.label.padEnd(20)}${r.detail}`)
+    .join("\n");
+  process.stdout.write(`
+[${bin}] preflight
+${preflightLines}
 `);
 }

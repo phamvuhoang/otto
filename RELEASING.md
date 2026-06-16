@@ -63,6 +63,12 @@ Release PR appears.
    > manifest every time. One combined PR removes the sibling that caused the conflict.
 3. Review the PR: confirm the proposed versions and the CHANGELOG diffs read the way
    you want users to see them.
+
+   > **Smoke the published shape first.** Run `node scripts/smoke-pack-install.mjs`
+   > on the Release PR branch. It packs both packages, installs the tarballs into an
+   > isolated prefix, and asserts the installed `otto-afk` prints usage and resolved
+   > config — proving `@phamvuhoang/otto` resolves a real `@phamvuhoang/otto-core`
+   > before you publish. (Details: CONTRIBUTING.md § Smoke-test published artifacts.)
 4. **Merge the Release PR.** That single action creates each released component's tag
    (`<component>-vX.Y.Z`) and GitHub Release.
 5. The tag triggers the matching publish workflow:

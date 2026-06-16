@@ -29,7 +29,7 @@ cd /path/to/your/workspace
 otto-afk "<plan-and-prd>" 5      # plan/PRD loop
 otto-ghafk 5                     # GitHub-issue loop
 otto-afk --help                  # flags, env vars
-otto-afk --print-config          # diagnose workspace / runner / sandbox config
+otto-afk --print-config          # resolved config + preflight prerequisite checks
 ```
 
 Requires an authenticated Claude Code login (and `gh` for `otto-ghafk`). First-run

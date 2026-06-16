@@ -6,6 +6,7 @@ import { notifyComplete, notifyError } from "./notify.js";
 import { sleep, isThrottle, nextCooldownFactor } from "./pacing.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
+import { cleanScratch } from "./scratch.js";
 import { stageLogPath, type StageResult } from "./runner.js";
 import { executeStage } from "./stage-exec.js";
 import {
@@ -126,16 +127,20 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     const abortActiveStage = (): void => {
       if (!stageAbort!.signal.aborted) stageAbort!.abort();
     };
+    // process.exit() pre-empts the per-stage `finally` scratch cleanup, so the
+    // interrupt path sweeps ephemeral .otto-tmp artifacts synchronously here.
     onSigint = (): void => {
       abortActiveStage();
       if (notify) notifyError("interrupted (SIGINT)");
       releaseOnce();
+      cleanScratch(workspaceDir);
       process.exit(130);
     };
     onSigterm = (): void => {
       abortActiveStage();
       if (notify) notifyError("terminated (SIGTERM)");
       releaseOnce();
+      cleanScratch(workspaceDir);
       process.exit(143);
     };
     process.on("SIGINT", onSigint);
@@ -168,6 +173,18 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       cooldownFactor,
     };
   };
+
+  // One consistent end-of-run summary across every terminal path: the exit
+  // reason, iterations run, and cumulative cost. Written to stdout (like the
+  // other completion lines) so it survives `> out.txt` redirection.
+  const summarize = (reason: string, iterations: number): void => {
+    const iters = `${iterations} iteration${iterations === 1 ? "" : "s"}`;
+    process.stdout.write(
+      `${greenOut(SYM_OUT.bullet)} ${boldOut(`Otto ${reason}`)}` +
+        `${dimOut(` · ${iters} · $${runCostUsd.toFixed(2)}`)}\n`
+    );
+  };
+  let sawFailure = false;
 
   const nowIso = () => new Date().toISOString();
   if (fresh) clearState(workspaceDir);
@@ -222,9 +239,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
         // Budget gate: check before running each stage.
         if (budgetUsd != null && runCostUsd >= budgetUsd) {
-          process.stdout.write(
-            `${greenOut(SYM_OUT.bullet)} ${boldOut("budget reached")}${dimOut(` $${runCostUsd.toFixed(2)} ≥ $${budgetUsd.toFixed(2)} after ${i - 1} iterations`)}\n`
-          );
+          summarize("stopped (budget)", i - 1);
           return { costUsd: runCostUsd, sentinelHit };
         }
 
@@ -280,9 +295,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               );
               if (waitMs > maxWaitMs) {
                 persist(i, "interrupted", resetsAt);
-                process.stdout.write(
-                  `${red(SYM.cross)} ${bold("rate limit")}${dim(` — reset is beyond --max-wait; halting at iteration ${i}. Re-run to resume.`)}\n`
+                process.stderr.write(
+                  `${dim(`reset is beyond --max-wait; re-run to resume from iteration ${i}`)}\n`
                 );
+                summarize("halted (rate limit)", i - 1);
                 return { costUsd: runCostUsd, sentinelHit };
               }
               persist(i, "waiting-rate-limit", resetsAt);
@@ -296,6 +312,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           }
         } catch (err) {
           if (activeSignal.aborted) {
+            summarize("aborted", i - 1);
             return { costUsd: runCostUsd, sentinelHit };
           }
           const stageLog = stageLogPath(workspaceDir, i, stage.name);
@@ -307,6 +324,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           }
           const msg = `${red(SYM.cross)} ${bold("iteration " + i + " stage " + stage.name + " failed")} after ${maxRetries} retries: ${(err as Error).message}`;
           process.stderr.write(msg + "\n");
+          sawFailure = true;
           break;
         }
 
@@ -315,14 +333,9 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
         if (s === 0) {
           if (sr!.result.includes(SENTINEL)) {
-            const msg =
-              greenOut(SYM_OUT.bullet) +
-              " " +
-              boldOut("Otto complete") +
-              dimOut(" after " + i + " iterations");
-            process.stdout.write(msg + "\n");
             sentinelHit = true;
             completedIterations = i;
+            summarize("complete", i);
             persist(i, "complete");
             clearState(workspaceDir);
             return { costUsd: runCostUsd, sentinelHit };
@@ -343,7 +356,15 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       }
     }
   } catch (err) {
+    // A graceful abort (e.g. watch-mode shutdown during the inter-iteration
+    // cooldown sleep) rejects past the inner stage guard into here — report it
+    // as an abort, not an error, matching the mid-stage abort path above.
+    if (activeSignal.aborted) {
+      summarize("aborted", completedIterations);
+      return { costUsd: runCostUsd, sentinelHit };
+    }
     if (notify) notifyError((err as Error).message);
+    summarize("stopped (error)", completedIterations);
     throw err;
   } finally {
     if (onSigint) process.off("SIGINT", onSigint);
@@ -353,6 +374,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       notifyComplete(completedIterations, sentinelHit);
     }
   }
+  summarize(sawFailure ? "done with failures" : "done", completedIterations);
   clearState(workspaceDir);
   return { costUsd: runCostUsd, sentinelHit };
 }

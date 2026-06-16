@@ -15,7 +15,7 @@ Commands, flags, and modes for the two Otto bins. For environment variables, run
 - [Customizing the pipeline](#customizing-the-pipeline)
 - [Source map](#source-map)
 
-Every command also supports `--help` / `-h`, `--version` / `-V`, and `--print-config` (resolve workspace/runner/sandbox config, then exit).
+Every command also supports `--help` / `-h`, `--version` / `-V`, and `--print-config` (print the resolved config plus a preflight check of run prerequisites — `claude`/`gh` CLIs, credentials, git workspace — then exit). See [CONFIG.md → Prerequisites](./CONFIG.md#prerequisites) for the preflight block.
 
 ---
 

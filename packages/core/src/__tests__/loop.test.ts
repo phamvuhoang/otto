@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -97,6 +98,12 @@ function makeDirs(): LoopDirs {
   );
 
   return { root, packageDir, workspaceDir };
+}
+
+function stdoutText(): string {
+  return (process.stdout.write as unknown as { mock: { calls: unknown[][] } })
+    .mock.calls.map((c) => String(c[0]))
+    .join("");
 }
 
 function loopOptions(dirs: LoopDirs, overrides = {}) {
@@ -303,6 +310,39 @@ describe("runLoop", () => {
     expect(exit).toHaveBeenCalledWith(143);
   });
 
+  it("sweeps ephemeral scratch but keeps logs on SIGINT", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const tmp = join(dirs.workspaceDir, ".otto-tmp");
+    mkdirSync(join(tmp, "logs"), { recursive: true });
+    writeFileSync(join(tmp, ".run-1-1-1.md"), "prompt", "utf8");
+    writeFileSync(join(tmp, ".sandbox-1-1-1.json"), "{}", "utf8");
+    mkdirSync(join(tmp, "spill-1-1-impl-1"));
+    writeFileSync(join(tmp, "logs", "iter1.ndjson"), "{}", "utf8");
+    vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit ${code}`);
+    }) as never);
+    mocks.runStage.mockImplementation((_s, _p, _w, _i, _sp, _l, options) => {
+      return new Promise((_resolve, reject) => {
+        options.signal!.addEventListener("abort", () =>
+          reject(new Error("aborted"))
+        );
+      });
+    });
+
+    const loop = runLoop(loopOptions(dirs, { maxRetries: 0 }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(() => process.emit("SIGINT")).toThrow("exit 130");
+    await loop;
+
+    expect(existsSync(join(tmp, ".run-1-1-1.md"))).toBe(false);
+    expect(existsSync(join(tmp, ".sandbox-1-1-1.json"))).toBe(false);
+    expect(existsSync(join(tmp, "spill-1-1-impl-1"))).toBe(false);
+    expect(existsSync(join(tmp, "logs", "iter1.ndjson"))).toBe(true);
+  });
+
   it("stops cleanly once cumulative cost reaches the budget", async () => {
     const dirs = makeDirs();
     roots.push(dirs.root);
@@ -339,6 +379,110 @@ describe("runLoop", () => {
     const outcome = await runLoop(loopOptions(dirs));
     expect(outcome).toMatchObject({ sentinelHit: true });
     expect(outcome.costUsd).toBeCloseTo(0.25);
+  });
+
+  describe("end-of-run summary", () => {
+    it("reports complete + iterations + cost on sentinel exit", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(ok(sentinel, 0.25));
+      await runLoop(loopOptions(dirs));
+      expect(stdoutText()).toContain("Otto complete · 1 iteration · $0.25");
+    });
+
+    it("reports a budget exit with the iterations run and cost", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const reviewer: Stage = { name: "reviewer", template: "stage.md" };
+      mocks.runStage.mockImplementation((s) =>
+        Promise.resolve(ok(s.name === "implementer" ? "go" : "ok", 0.6))
+      );
+      await runLoop(
+        loopOptions(dirs, {
+          stages: [stage, reviewer] as [Stage, Stage],
+          iterations: 5,
+          budgetUsd: 1.0,
+          maxRetries: 0,
+        })
+      );
+      expect(stdoutText()).toContain("Otto stopped (budget) · 1 iteration · $1.20");
+    });
+
+    it("reports a plain done summary when iterations exhaust without the sentinel", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(ok("keep going", 0.1)); // never sentinel
+      await runLoop(loopOptions(dirs, { iterations: 2, maxRetries: 0 }));
+      expect(stdoutText()).toContain("Otto done · 2 iterations · $0.20");
+    });
+
+    it("flags failures in the done summary when a stage failed", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockRejectedValue(new Error("boom"));
+      await runLoop(loopOptions(dirs, { iterations: 1, maxRetries: 0 }));
+      expect(stdoutText()).toContain("Otto done with failures · 1 iteration · $0.00");
+    });
+
+    it("reports an aborted summary when the active stage is aborted mid-run", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockImplementation((_s, _p, _w, _i, _sp, _l, options) => {
+        return new Promise((_resolve, reject) => {
+          options.signal!.addEventListener("abort", () =>
+            reject(new Error("aborted"))
+          );
+        });
+      });
+      const ac = new AbortController();
+      const loop = runLoop(loopOptions(dirs, { signal: ac.signal, maxRetries: 0 }));
+      await Promise.resolve();
+      await Promise.resolve();
+      ac.abort();
+      await loop;
+      expect(stdoutText()).toContain("Otto aborted · 0 iterations");
+    });
+
+    it("reports an aborted summary (not an error) when aborted during the cooldown", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(ok("keep going")); // never sentinel
+      const ac = new AbortController();
+      // The cooldown sleep is the only sleep in this run; simulate an external
+      // shutdown arriving while parked in it.
+      mocks.sleep.mockImplementation(
+        (_ms: number, signal?: AbortSignal) =>
+          new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener("abort", () =>
+              reject(new Error("sleep aborted"))
+            );
+            ac.abort();
+          })
+      );
+      await runLoop(
+        loopOptions(dirs, {
+          signal: ac.signal,
+          iterations: 2,
+          cooldownMs: 3000,
+          maxRetries: 0,
+        })
+      );
+      expect(stdoutText()).toContain("Otto aborted · 1 iteration");
+    });
+
+    it("reports a rate-limit halt summary when the reset is beyond maxWaitMs", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const { RateLimitError } = await import("../rate-limit.js");
+      const far = Math.floor(Date.now() / 1000) + 10 * 3600;
+      mocks.runStage.mockRejectedValue(
+        new RateLimitError("session limit", far)
+      );
+      await runLoop(
+        loopOptions(dirs, { bin: "otto-afk", maxWaitMs: 6 * 3600_000 })
+      );
+      expect(stdoutText()).toContain("Otto halted (rate limit)");
+    });
   });
 
   it("uses an injected signal and installs no process signal handlers", async () => {

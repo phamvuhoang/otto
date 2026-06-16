@@ -40,12 +40,10 @@ const VERDICTS = verdictLine
   : [];
 
 // Source of truth #3: the run modes — the `Mode: <a | b | ...>` placeholder.
+// Parse ONLY the `<...>` placeholder so the "Mode" label can't leak a junk token.
 const modeLine = contract.split("\n").find((l) => l.includes("Mode:"));
-const MODES = modeLine
-  ? [...modeLine.matchAll(/[a-z][a-z-]+/g)]
-      .map((m) => m[0])
-      .filter((w) => w !== "mode")
-  : [];
+const modeMatch = modeLine ? modeLine.match(/<([^>]+)>/) : null;
+const MODES = modeMatch ? modeMatch[1].split("|").map((s) => s.trim()) : [];
 
 // Split the doc into individual sample reports on the `# Otto quality report`
 // title (the same H1 the contract emits).

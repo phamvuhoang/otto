@@ -153,6 +153,15 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       ? "review"
       : cfg.mode;
 
+  // Single source of truth for the --watch label: the per-mode resolver
+  // (otto-linear-afk → OTTO_LINEAR_LABEL) falling back to OTTO_WATCH_LABEL.
+  // Both --print-config and the runWatch call below read this, so the reported
+  // label can't drift from what a watch run actually polls.
+  const watchLabel =
+    cfg.resolveWatchLabel?.() ||
+    process.env.OTTO_WATCH_LABEL?.trim() ||
+    "otto";
+
   if (flags.printConfig) {
     printConfig(cfg.bin, workspaceDir, packageDir, {
       cliVersion: cfg.cliVersion,
@@ -167,6 +176,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       reviewLenses: reviewLenses ?? [],
       watch: flags.watch,
       watchIntervalSec: flags.watchIntervalSec,
+      watchLabel,
       issue: flags.issue,
       maxWaitMs,
       branchStrategy: branchStrategyArg,
@@ -299,10 +309,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       workspaceDir: effectiveWorkspaceDir,
       packageDir,
       watchIntervalSec: flags.watchIntervalSec ?? 300,
-      watchLabel:
-        cfg.resolveWatchLabel?.() ||
-        process.env.OTTO_WATCH_LABEL?.trim() ||
-        "otto",
+      watchLabel,
       budgetUsd: flags.budget,
       cooldownMs: flags.cooldownMs,
       maxRetries: flags.maxRetries,

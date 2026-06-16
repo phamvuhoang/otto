@@ -373,6 +373,12 @@ export type PrintConfigOptions = {
   reviewLenses?: string[];
   watch?: boolean;
   watchIntervalSec?: number;
+  /**
+   * Label a --watch run would poll, pre-resolved by run-bin's per-mode
+   * resolveWatchLabel. Passed in (not re-derived here) so the reported label
+   * can't drift from the actual watch run. Defaults to the gh resolution.
+   */
+  watchLabel?: string;
   issue?: number | string;
   maxWaitMs?: number;
   mode?: string;
@@ -398,6 +404,7 @@ export function printConfig(
     reviewLenses = [],
     watch = false,
     watchIntervalSec,
+    watchLabel = process.env.OTTO_WATCH_LABEL?.trim() || "otto",
     issue,
     maxWaitMs,
     mode,
@@ -432,15 +439,6 @@ export function printConfig(
   const reviewStatus = reviewLenses.length
     ? `panel: ${reviewLenses.join(", ")}`
     : "single reviewer";
-  // Linear watch polls OTTO_LINEAR_LABEL (the label its implementer selects);
-  // every other mode polls OTTO_WATCH_LABEL. Mirror run-bin's resolution so the
-  // reported label matches what a --watch run would actually poll. Linear mode
-  // never falls back to OTTO_WATCH_LABEL: run-bin's resolveWatchLabel returns
-  // OTTO_LINEAR_LABEL || "otto", short-circuiting before OTTO_WATCH_LABEL.
-  const watchLabel =
-    mode === "linear"
-      ? process.env.OTTO_LINEAR_LABEL?.trim() || "otto"
-      : process.env.OTTO_WATCH_LABEL?.trim() || "otto";
   const watchStatus = watch
     ? `on (every ${watchIntervalSec ?? 300}s, label "${watchLabel}")`
     : "off";

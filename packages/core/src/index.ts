@@ -15,3 +15,4 @@ export {
   type PreflightResult,
   type PreflightProbes,
 } from "./preflight.js";
+export { parseLinearRef, type LinearRef } from "./linear-api.js";

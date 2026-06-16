@@ -132,7 +132,7 @@ otto-afk --budget 10 --cooldown 2000 --review-panel "<plan-and-prd>" 30
 
 ## Worked recipes
 
-Three end-to-end maintainer workflows. Each is a copy-pasteable command block plus the end-state summary Otto prints when it finishes — the same `summarize()` line on every terminal path: `● Otto <reason> · N iterations · $cost`, followed by a `→ next:` hint telling you what to do next.
+Three end-to-end maintainer workflows. Each is a copy-pasteable command block plus the end-state summary Otto prints when it finishes — the same `summarize()` line on every terminal path: `● Otto <reason> · N iterations · $cost`, followed by a `→ next:` hint telling you what to do next (and, when `.otto/review-followups.md` holds deferred findings, a `⚑ N deferred follow-ups` tally).
 
 ### Issue burn-down
 
@@ -168,11 +168,12 @@ Feed Otto a code-review document and have it fix the actionable findings one per
 otto-afk --apply-review ./review.md --budget 8 25
 ```
 
-The loop ends when no actionable findings remain:
+The loop ends when no actionable findings remain. When the backlog still holds deferred findings, the summary tallies them so you know work remains:
 
 ```
 ● Otto complete · 9 iterations · $6.10
   → next: review the diff, then open a PR
+  ⚑ 3 deferred follow-ups in .otto/review-followups.md
 ```
 
 Then inspect the trail of everything it intentionally deferred:

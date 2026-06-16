@@ -20,5 +20,7 @@ See `.otto/specs/issue-8-design.md` for problem/approach/assumptions.
 - [x] **apply-review follow-up-trail test.** Cover that deferred findings land
       in `.otto/review-followups.md` and are committed with the fix (currently
       only flag-parsing is tested).
-- [ ] **Deferred-work count in summary (optional).** If cheap, surface a count
+- [x] **Deferred-work count in summary (optional).** If cheap, surface a count
       of open `.otto/review-followups.md` entries in the end-of-run summary.
+      Done: pure exported `countDeferredFollowups()` tallies top-level bullets;
+      `summarize()` appends a `⚑ N deferred follow-ups` line when >0.

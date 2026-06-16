@@ -61,7 +61,7 @@ vi.mock("../stream-render.js", () => ({
   SYM_OUT: { bullet: "*" },
 }));
 
-import { runLoop, nextActionFor } from "../loop.js";
+import { runLoop, nextActionFor, countDeferredFollowups } from "../loop.js";
 
 const stage: Stage = { name: "implementer", template: "stage.md" };
 const sentinel = "<promise>NO MORE TASKS</promise>";
@@ -518,6 +518,54 @@ describe("runLoop", () => {
       expect(stdoutText()).toContain(
         "→ next: inspect the failed stage logs under `.otto-tmp/logs`, then re-run"
       );
+    });
+
+    it("surfaces the deferred-work count when review-followups.md has entries", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mkdirSync(join(dirs.workspaceDir, ".otto"), { recursive: true });
+      writeFileSync(
+        join(dirs.workspaceDir, ".otto", "review-followups.md"),
+        "## 2026-06-16 review\n\n- perf: re-reads N days every pull (low) — deferred\n- ops: backfill at deploy (med) — deferred\n",
+        "utf8"
+      );
+      mocks.runStage.mockResolvedValue(ok(sentinel, 0.25));
+      await runLoop(loopOptions(dirs));
+      expect(stdoutText()).toContain(
+        "2 deferred follow-ups in .otto/review-followups.md"
+      );
+    });
+
+    it("omits the deferred-work line when no follow-ups are recorded", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(ok(sentinel, 0.25));
+      await runLoop(loopOptions(dirs));
+      expect(stdoutText()).not.toContain("deferred follow-up");
+    });
+  });
+
+  describe("countDeferredFollowups", () => {
+    it("counts one top-level bullet per deferred finding", () => {
+      expect(
+        countDeferredFollowups(
+          "## 2026-06-16 review\n\n- a (low) — deferred\n- b (med) — deferred\n"
+        )
+      ).toBe(2);
+    });
+
+    it("ignores headings, prose, blanks, and the lazy placeholder", () => {
+      expect(countDeferredFollowups("_No follow-ups recorded yet._")).toBe(0);
+      expect(countDeferredFollowups("")).toBe(0);
+      expect(
+        countDeferredFollowups("## heading only\n\nprose, no bullets\n")
+      ).toBe(0);
+    });
+
+    it("counts only top-level bullets, not nested detail", () => {
+      expect(
+        countDeferredFollowups("- finding one\n  - sub detail\n- finding two\n")
+      ).toBe(2);
     });
   });
 

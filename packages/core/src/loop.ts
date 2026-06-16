@@ -1,4 +1,5 @@
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { readCoreVersion } from "./cli-help.js";
 import { acquire, type Releaser } from "./keepalive.js";
@@ -54,6 +55,26 @@ const NEXT_ACTION: Record<string, string> = {
 
 export function nextActionFor(reason: string): string {
   return NEXT_ACTION[reason] ?? "re-run to resume";
+}
+
+// Counts deferred findings recorded in `.otto/review-followups.md` by tallying
+// top-level Markdown bullets (lines starting with "- ", no leading indent).
+// Headings, prose, blank lines, the lazy placeholder, and nested detail bullets
+// are ignored. Pure + exported so it is unit-testable without a workspace.
+export function countDeferredFollowups(text: string): number {
+  let n = 0;
+  for (const line of text.split("\n")) if (/^- /.test(line)) n++;
+  return n;
+}
+
+function deferredFollowupCount(workspaceDir: string): number {
+  try {
+    return countDeferredFollowups(
+      readFileSync(join(workspaceDir, ".otto", "review-followups.md"), "utf8")
+    );
+  } catch {
+    return 0; // absent/unreadable trail → nothing deferred to surface.
+  }
 }
 
 export type LoopOptions = {
@@ -199,11 +220,15 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // (like the other completion lines) so it survives `> out.txt` redirection.
   const summarize = (reason: string, iterations: number): void => {
     const iters = `${iterations} iteration${iterations === 1 ? "" : "s"}`;
-    process.stdout.write(
+    let line =
       `${greenOut(SYM_OUT.bullet)} ${boldOut(`Otto ${reason}`)}` +
-        `${dimOut(` · ${iters} · $${runCostUsd.toFixed(2)}`)}\n` +
-        `${dimOut(`  → next: ${nextActionFor(reason)}`)}\n`
-    );
+      `${dimOut(` · ${iters} · $${runCostUsd.toFixed(2)}`)}\n` +
+      `${dimOut(`  → next: ${nextActionFor(reason)}`)}\n`;
+    const deferred = deferredFollowupCount(workspaceDir);
+    if (deferred > 0) {
+      line += `${dimOut(`  ⚑ ${deferred} deferred follow-up${deferred === 1 ? "" : "s"} in .otto/review-followups.md`)}\n`;
+    }
+    process.stdout.write(line);
   };
   let sawFailure = false;
 

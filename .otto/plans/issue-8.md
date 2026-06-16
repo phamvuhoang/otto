@@ -7,7 +7,7 @@ See `.otto/specs/issue-8-design.md` for problem/approach/assumptions.
       `nextActionFor(reason)` and append a `→ next: <hint>` line (stdout,
       `dimOut`) inside `summarize` in `loop.ts`. Tests: unit per reason +
       integration on `complete` / `stopped (budget)` / `done with failures`.
-- [ ] **Mode comparison table in docs.** A table in `docs/CLI.md` (and a
+- [x] **Mode comparison table in docs.** A table in `docs/CLI.md` (and a
       pointer from README) comparing `otto-afk`, `otto-ghafk`, `--verify`,
       `--apply-review`: input, gate stage, when to use. Success signal: choose a
       mode without reading source.

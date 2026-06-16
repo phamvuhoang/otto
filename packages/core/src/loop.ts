@@ -356,6 +356,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       }
     }
   } catch (err) {
+    // A graceful abort (e.g. watch-mode shutdown during the inter-iteration
+    // cooldown sleep) rejects past the inner stage guard into here — report it
+    // as an abort, not an error, matching the mid-stage abort path above.
+    if (activeSignal.aborted) {
+      summarize("aborted", completedIterations);
+      return { costUsd: runCostUsd, sentinelHit };
+    }
     if (notify) notifyError((err as Error).message);
     summarize("stopped (error)", completedIterations);
     throw err;

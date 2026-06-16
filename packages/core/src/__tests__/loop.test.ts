@@ -443,6 +443,33 @@ describe("runLoop", () => {
       expect(stdoutText()).toContain("Otto aborted · 0 iterations");
     });
 
+    it("reports an aborted summary (not an error) when aborted during the cooldown", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(ok("keep going")); // never sentinel
+      const ac = new AbortController();
+      // The cooldown sleep is the only sleep in this run; simulate an external
+      // shutdown arriving while parked in it.
+      mocks.sleep.mockImplementation(
+        (_ms: number, signal?: AbortSignal) =>
+          new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener("abort", () =>
+              reject(new Error("sleep aborted"))
+            );
+            ac.abort();
+          })
+      );
+      await runLoop(
+        loopOptions(dirs, {
+          signal: ac.signal,
+          iterations: 2,
+          cooldownMs: 3000,
+          maxRetries: 0,
+        })
+      );
+      expect(stdoutText()).toContain("Otto aborted · 1 iteration");
+    });
+
     it("reports a rate-limit halt summary when the reset is beyond maxWaitMs", async () => {
       const dirs = makeDirs();
       roots.push(dirs.root);

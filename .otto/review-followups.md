@@ -11,9 +11,9 @@
 - **#3 `preflight.ts:91` gh-auth false positive** (medium) — deferred, same
   class as #2; also should honour `GH_CONFIG_DIR` and probe `hosts.yml`.
 - **#4 `loop.ts:359` abort during `--cooldown` mislabels as `stopped (error)`**
-  (medium-low) — deferred: the cooldown `sleep` sits in the outer try, so an
-  abort there rejects past the inner guard. Fix is real but a separate code path
-  from #1; addressing next iteration.
+  (medium-low) — FIXED: the outer catch now checks `activeSignal.aborted` and
+  routes through `summarize("aborted", completedIterations)`, returning cleanly
+  without rethrow, mirroring the inner mid-stage abort guard.
 - **#5 `preflight.ts:37` `whichBin` uses `existsSync` only** (low) — deferred:
   a directory/non-executable named `claude`/`gh` on PATH reports a false `✓`.
   Harden with `statSync().isFile()`.

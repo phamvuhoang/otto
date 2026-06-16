@@ -33,6 +33,8 @@ export type LinearAuthCliDeps = {
   removeFile: (path: string) => boolean;
   /** Read the API key the user pastes on stdin (login). */
   readStdin: () => Promise<string>;
+  /** Whether stdin is an interactive TTY (gates the paste/Ctrl-D hint). */
+  stdinIsTTY: boolean;
   /** Print one line to stdout. */
   out: (msg: string) => void;
   /** Print one line to stderr. */
@@ -89,6 +91,7 @@ export const defaultLinearAuthDeps: LinearAuthCliDeps = {
     }
   },
   readStdin: readAllStdin,
+  stdinIsTTY: Boolean(process.stdin.isTTY),
   out: (m) => process.stdout.write(`${m}\n`),
   err: (m) => process.stderr.write(`${m}\n`),
   verify: (token) => createLinearClient({ token }).whoami(),
@@ -119,6 +122,22 @@ export async function runLinearAuth(
 
   switch (sub) {
     case "login": {
+      // A key on the command line would silently hang (login reads stdin, not
+      // argv) and leak into shell history / `ps` — reject it with guidance.
+      if (rest.length > 0) {
+        deps.err(
+          "login reads the API key from stdin, not an argument " +
+            "(a key on the command line leaks into shell history and `ps`).\n" +
+            "Run `otto-linear-auth login` and paste your key, then press Ctrl-D — " +
+            "or pipe it: printf '%s' <key> | otto-linear-auth login"
+        );
+        return 2;
+      }
+      // On an interactive terminal stdin blocks until EOF with no output, which
+      // looks frozen; tell the user to paste then send EOF (Ctrl-D).
+      if (deps.stdinIsTTY) {
+        deps.err("Paste your Linear personal API key, then press Ctrl-D:");
+      }
       const token = (await deps.readStdin()).trim();
       if (!token) {
         deps.err("No API key provided. Paste your Linear personal API key.");

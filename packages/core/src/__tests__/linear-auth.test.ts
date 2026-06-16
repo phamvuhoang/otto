@@ -20,6 +20,7 @@ function harness(over: Partial<LinearAuthCliDeps> = {}) {
       return true;
     },
     readStdin: async () => "",
+    stdinIsTTY: false,
     out: (m) => out.push(m),
     err: (m) => err.push(m),
     verify: async () => ({ id: "u1", name: "Ada", email: "a@b.c" }),
@@ -63,6 +64,58 @@ describe("runLinearAuth login", () => {
     expect(code).toBe(1);
     expect(writes).toHaveLength(0);
     expect(err.join("\n")).toMatch(/no api key/i);
+  });
+
+  it("rejects a key passed as an argument instead of hanging on stdin", async () => {
+    const readStdin = vi.fn(async () => "");
+    const { deps, writes, err } = harness({
+      readStdin,
+      stdinIsTTY: true,
+    });
+
+    const code = await runLinearAuth(["login", "lin_api_abc"], deps);
+
+    expect(code).toBe(2);
+    expect(writes).toHaveLength(0);
+    // never reads stdin (no hang) and tells the user how to do it
+    expect(readStdin).not.toHaveBeenCalled();
+    expect(err.join("\n")).toMatch(/stdin/i);
+    expect(err.join("\n")).toMatch(/ctrl-d|pipe/i);
+    // never echoes the secret it refused
+    expect(err.join("\n")).not.toContain("lin_api_abc");
+  });
+
+  it("prints a paste/Ctrl-D hint before reading when stdin is a TTY", async () => {
+    const order: string[] = [];
+    const { deps } = harness({
+      stdinIsTTY: true,
+      err: (m) => order.push(`err:${m}`),
+      readStdin: async () => {
+        order.push("read");
+        return "lin_api_abc";
+      },
+    });
+
+    const code = await runLinearAuth(["login"], deps);
+
+    expect(code).toBe(0);
+    // the hint is printed, and printed BEFORE stdin is read
+    const hintIdx = order.findIndex((e) => /ctrl-d/i.test(e));
+    const readIdx = order.indexOf("read");
+    expect(hintIdx).toBeGreaterThanOrEqual(0);
+    expect(hintIdx).toBeLessThan(readIdx);
+  });
+
+  it("prints no hint when stdin is piped (not a TTY)", async () => {
+    const { deps, err } = harness({
+      stdinIsTTY: false,
+      readStdin: async () => "lin_api_abc",
+    });
+
+    const code = await runLinearAuth(["login"], deps);
+
+    expect(code).toBe(0);
+    expect(err.join("\n")).not.toMatch(/ctrl-d/i);
   });
 });
 

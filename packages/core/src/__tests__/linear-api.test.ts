@@ -5,6 +5,7 @@ import {
   LinearApiError,
   linearConfigPath,
   parseLinearRef,
+  parseLinearIssueArg,
   resolveLinearAuth,
 } from "../linear-api.js";
 
@@ -75,6 +76,30 @@ describe("parseLinearRef", () => {
     "not-a-uuid-0000-0000-000000000000",
   ])("rejects %j", (bad) => {
     expect(() => parseLinearRef(bad)).toThrow();
+  });
+});
+
+describe("parseLinearIssueArg", () => {
+  it("canonicalizes an identifier ref to the uppercased identifier", () => {
+    expect(parseLinearIssueArg("eng-12")).toBe("ENG-12");
+  });
+  it("canonicalizes a URL to its identifier", () => {
+    expect(
+      parseLinearIssueArg("https://linear.app/acme/issue/eng-9/slug")
+    ).toBe("ENG-9");
+  });
+  it("canonicalizes a UUID ref to the lowercased UUID", () => {
+    expect(parseLinearIssueArg("9BDA4F9E-1C2D-4E3F-8A9B-0C1D2E3F4A5B")).toBe(
+      "9bda4f9e-1c2d-4e3f-8a9b-0c1d2e3f4a5b"
+    );
+  });
+  it("returns only shell-safe characters (OTTO_ISSUE invariant)", () => {
+    for (const raw of ["ENG-12", "9bda4f9e-1c2d-4e3f-8a9b-0c1d2e3f4a5b"]) {
+      expect(parseLinearIssueArg(raw)).toMatch(/^[A-Za-z0-9-]+$/);
+    }
+  });
+  it("rejects a malformed ref (delegates to parseLinearRef)", () => {
+    expect(() => parseLinearIssueArg("$(rm -rf ~)")).toThrow();
   });
 });
 

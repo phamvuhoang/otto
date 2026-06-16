@@ -1,5 +1,6 @@
 export { runAfk } from "./main.js";
 export { runGhAfk } from "./gh-main.js";
+export { runLinearAfk, type RunLinearAfkOptions } from "./linear-main.js";
 export { runLoop, type LoopOptions, type LoopOutcome } from "./loop.js";
 export { STAGES, type Stage } from "./stages.js";
 export {
@@ -17,6 +18,7 @@ export {
 } from "./preflight.js";
 export {
   parseLinearRef,
+  parseLinearIssueArg,
   resolveLinearAuth,
   linearConfigPath,
   createLinearClient,

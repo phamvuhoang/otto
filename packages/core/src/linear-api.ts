@@ -49,6 +49,18 @@ export function parseLinearRef(raw: string): LinearRef {
   );
 }
 
+/**
+ * Parse + canonicalize a `--issue` value to the single shell-safe string Otto
+ * exports as `OTTO_ISSUE` for the Linear single-issue template. Identifiers are
+ * uppercased, UUIDs lowercased; both admit only `[A-Za-z0-9-]`, so the result is
+ * safe to interpolate into the static `otto-linear view "$OTTO_ISSUE"` command.
+ * Throws (via {@link parseLinearRef}) on anything malformed.
+ */
+export function parseLinearIssueArg(raw: string): string {
+  const ref = parseLinearRef(raw);
+  return ref.kind === "uuid" ? ref.uuid : ref.identifier;
+}
+
 /** A resolved Linear credential plus where it came from (for `--print-config`). */
 export type LinearAuth = { token: string; source: string };
 

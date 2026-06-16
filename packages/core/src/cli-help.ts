@@ -19,7 +19,12 @@ export type CliFlags = {
   reviewPanel: boolean;
   watch: boolean;
   watchIntervalSec?: number;
-  issue?: number;
+  /**
+   * Normalized `--issue` value. A number for GitHub refs (the default parser);
+   * a canonical string for Linear refs (`ENG-123` / UUID, via an injected
+   * `parseIssue`). In both cases it is shell-safe for `OTTO_ISSUE`.
+   */
+  issue?: number | string;
   maxWaitMs?: number;
   fresh: boolean;
   verify: boolean;
@@ -75,7 +80,20 @@ export function parseIssueRef(raw: string): number {
   return n;
 }
 
-export function parseFlags(argv: string[]): CliFlags {
+/** Options for {@link parseFlags}. */
+export type ParseFlagsOptions = {
+  /**
+   * How to validate/normalize the `--issue` value. Defaults to the GitHub
+   * number ref ({@link parseIssueRef}); otto-linear-afk injects a Linear parser.
+   */
+  parseIssue?: (raw: string) => number | string;
+};
+
+export function parseFlags(
+  argv: string[],
+  opts: ParseFlagsOptions = {}
+): CliFlags {
+  const parseIssue = opts.parseIssue ?? parseIssueRef;
   let help = false;
   let version = false;
   let printConfig = false;
@@ -94,7 +112,7 @@ export function parseFlags(argv: string[]): CliFlags {
   let watch = false;
   let watchIntervalSec: number | undefined;
   let expectingWatchInterval = false;
-  let issue: number | undefined;
+  let issue: number | string | undefined;
   let expectingIssue = false;
   let maxWaitMs: number | undefined;
   let expectingMaxWait = false;
@@ -155,7 +173,7 @@ export function parseFlags(argv: string[]): CliFlags {
       continue;
     }
     if (expectingIssue) {
-      issue = parseIssueRef(a);
+      issue = parseIssue(a);
       expectingIssue = false;
       continue;
     }
@@ -355,7 +373,7 @@ export type PrintConfigOptions = {
   reviewLenses?: string[];
   watch?: boolean;
   watchIntervalSec?: number;
-  issue?: number;
+  issue?: number | string;
   maxWaitMs?: number;
   mode?: string;
   branchStrategy?: "current" | "branch" | "worktree";
@@ -418,7 +436,10 @@ export function printConfig(
   const watchStatus = watch
     ? `on (every ${watchIntervalSec ?? 300}s, label "${watchLabel}")`
     : "off";
-  const issueStatus = issue != null ? `#${issue}` : "off";
+  // GitHub refs are numbers (rendered `#42`); Linear refs are already-canonical
+  // strings (`ENG-123` / UUID) and stand alone.
+  const issueStatus =
+    issue == null ? "off" : typeof issue === "number" ? `#${issue}` : issue;
   const branchStatus = `${branchStrategy ?? "current"} (prefix "${branchPrefix ?? "otto/"}")`;
 
   process.stdout.write(`[${bin}] resolved config

@@ -34,7 +34,7 @@ incrementally on the `otto/14` branch; ships via PR (repo convention).
       `linearprompt.md`; reuse reviewer. Render-contract smoke test +
       static-shell-tag invariant. `linearafk-issue.md` + `linearprompt.md` reuse
       the provider-agnostic `ghprompt-workflow.md` fragment (no fork).
-- [ ] **`runLinearAfk` + run-bin wiring.** Parallel to `runGhAfk`: `mode:
+- [x] **`runLinearAfk` + run-bin wiring.** Parallel to `runGhAfk`: `mode:
       "linear"`, `--issue` via `parseLinearRef`, `--print-config` Linear-auth
       line, mutual-exclusion guards. Bin `apps/cli/bin/otto-linear-afk.js`.
 - [ ] **Watch mode.** Provider-specific Linear polling (count/identifier/title

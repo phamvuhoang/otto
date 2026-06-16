@@ -44,6 +44,12 @@ export type RunBinConfig = {
   applyReviewStage?: Stage;
   /** Run mode identifier threaded into runLoop state (e.g. "afk" / "ghafk"). */
   mode: string;
+  /**
+   * How to validate/normalize a `--issue` value. Defaults to the GitHub number
+   * ref; otto-linear-afk injects a Linear parser. The result must be shell-safe
+   * (it becomes OTTO_ISSUE, read by the issue template's static command).
+   */
+  parseIssue?: (raw: string) => number | string;
 };
 
 /**
@@ -75,7 +81,7 @@ function ensureStateGitignored(workspaceDir: string): void {
  * optionally fork into the background (--detach), then drive runLoop.
  */
 export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
-  const flags = parseFlags(argv);
+  const flags = parseFlags(argv, { parseIssue: cfg.parseIssue });
 
   if (flags.version) {
     printVersion(cfg.bin, cfg.cliVersion);
@@ -156,7 +162,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   }
 
   if (flags.issue != null && !cfg.issueStage) {
-    console.error("--issue is only supported by otto-ghafk");
+    console.error("--issue is only supported by otto-ghafk and otto-linear-afk");
     process.exit(1);
   }
 
@@ -220,8 +226,10 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       console.error("--issue cannot be combined with --watch");
       process.exit(1);
     }
-    // Validated positive integer (parseIssueRef) — safe for the static
-    // `gh issue view "$OTTO_ISSUE"` command in ghafk-issue.md. See render.ts.
+    // Validated by cfg.parseIssue (GitHub positive integer / Linear ref) — both
+    // admit only shell-safe chars, so it is safe for the static
+    // `gh issue view "$OTTO_ISSUE"` / `otto-linear view "$OTTO_ISSUE"` commands
+    // in the issue templates. See render.ts.
     process.env.OTTO_ISSUE = String(flags.issue);
   }
 

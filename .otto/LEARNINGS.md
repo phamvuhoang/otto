@@ -10,6 +10,16 @@
   differs per mode. The render-contract tests pin the include + the
   static-shell-tag invariant (no `{{ INPUTS }}` in a shell/@spill command body;
   only the validated `$OTTO_ISSUE` env var may appear).
+- `--issue` parsing is **per-mode injectable**: `run-bin.ts`'s `RunBinConfig`
+  carries an optional `parseIssue` (default `parseIssueRef` → GitHub number;
+  `runLinearAfk` injects `parseLinearIssueArg` → Linear ref string), threaded
+  into `parseFlags(argv, { parseIssue })`. `CliFlags.issue` is `number | string`
+  accordingly, and `OTTO_ISSUE = String(flags.issue)` stays the shell-safe
+  invariant because **every** `parseIssue` must emit only `[A-Za-z0-9-]` (the one
+  ref fragment that reaches a host shell). A new provider mode adds its own
+  validating `parseIssue`; it must not loosen that charset. Per-mode preflight
+  rows hang off `opts.bin` in `runPreflight` (`otto-linear-afk` → `linear auth`
+  via the injectable `linearAuth` probe), mirroring the `otto-ghafk` gh rows.
 - Pure functions that touch the host (binary lookup, fs, credentials) take
   **injectable probes/deps** with host-wired defaults, so unit tests run without
   shelling out or hitting the real home dir. See `preflight.ts` (`runPreflight`

@@ -2,6 +2,8 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 
+import { resolveLinearAuth, type LinearAuth } from "./linear-api.js";
+
 /** One prerequisite check rendered by `--print-config`. */
 export type PreflightResult = { label: string; ok: boolean; detail: string };
 
@@ -16,6 +18,8 @@ export type PreflightProbes = {
   pathExists: (p: string) => boolean;
   /** Home directory holding credential files. */
   home: string;
+  /** Resolve the stored/env Linear credential (for otto-linear-afk), or null. */
+  linearAuth: () => LinearAuth | null;
 };
 
 /**
@@ -45,6 +49,7 @@ const defaultProbes: PreflightProbes = {
   resolveBin: (name) => whichBin(name),
   pathExists: existsSync,
   home: homedir(),
+  linearAuth: () => resolveLinearAuth(),
 };
 
 /**
@@ -56,7 +61,7 @@ export function runPreflight(
   opts: { bin: string; workspaceDir: string },
   probes: PreflightProbes = defaultProbes
 ): PreflightResult[] {
-  const { resolveBin, pathExists, home } = probes;
+  const { resolveBin, pathExists, home, linearAuth } = probes;
   const results: PreflightResult[] = [];
 
   const claude = resolveBin("claude");
@@ -93,6 +98,17 @@ export function runPreflight(
       label: "gh auth",
       ok: ghAuth,
       detail: ghAuth ? "credentials found" : "run `gh auth login`",
+    });
+  }
+
+  if (opts.bin === "otto-linear-afk") {
+    const auth = linearAuth();
+    results.push({
+      label: "linear auth",
+      ok: auth != null,
+      detail: auth
+        ? `credentials found (${auth.source})`
+        : "run `otto-linear-auth login`",
     });
   }
 

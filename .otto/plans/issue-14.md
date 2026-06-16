@@ -45,5 +45,5 @@ incrementally on the `otto/14` branch; ships via PR (repo convention).
       (`OTTO_LINEAR_DONE_STATE` → first `type=completed` state; ambiguous →
       comment). Adds the `done` subcommand to the helper (done-state resolution)
       and encodes the decision in the playbook; test done-state resolution.
-- [ ] **Docs.** README + `docs/CLI.md` mode table/recipes for the Linear mode;
+- [x] **Docs.** README + `docs/CLI.md` mode table/recipes for the Linear mode;
       doc-contract test pins flags/stage names.

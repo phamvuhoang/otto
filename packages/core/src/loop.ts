@@ -1,4 +1,5 @@
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { readCoreVersion } from "./cli-help.js";
 import { acquire, type Releaser } from "./keepalive.js";
@@ -36,6 +37,73 @@ const SENTINEL = "<promise>NO MORE TASKS</promise>";
 const RATE_LIMIT_BUFFER_MS = 30_000;
 const RATE_LIMIT_FALLBACK_MS = 15 * 60_000;
 const DEFAULT_MAX_WAIT_MS = 6 * 3600_000;
+
+// Maps each end-of-run exit reason (the strings passed to `summarize`) to a
+// terse imperative hint telling the maintainer what to do next. Pure and
+// exported so it is unit-testable; unknown reasons fall back to a generic hint
+// rather than throwing.
+const NEXT_ACTION: Record<string, string> = {
+  complete: "review the diff, then open a PR",
+  done: "review the diff, then open a PR",
+  "done with failures":
+    "inspect the failed stage logs under `.otto-tmp/logs`, then re-run",
+  "stopped (budget)": "raise `--budget` and re-run to resume",
+  "halted (rate limit)": "re-run after the limit resets to resume",
+  aborted: "re-run to resume from the saved iteration",
+  "stopped (error)": "inspect the error above, then re-run",
+};
+
+export function nextActionFor(reason: string): string {
+  return NEXT_ACTION[reason] ?? "re-run to resume";
+}
+
+// Counts *open* deferred findings recorded in `.otto/review-followups.md` by
+// tallying top-level Markdown bullets (lines starting with "- ", no leading
+// indent). The file is append-only across review sessions and never prunes, so
+// a bullet whose block is marked FIXED/RESOLVED (on the bullet line or any of
+// its indented continuation lines) is excluded — otherwise the count measures
+// file age, not outstanding work. Headings, prose, blank lines, the lazy
+// placeholder, and nested detail bullets are ignored. Lines inside a fenced
+// code block (```…```) are skipped entirely, so a quoted diff or left-margin
+// list in a finding's detail neither inflates the count nor ends the enclosing
+// bullet. Pure + exported so it is unit-testable without a workspace.
+export function countDeferredFollowups(text: string): number {
+  const resolved = /\b(FIXED|RESOLVED)\b/;
+  let n = 0;
+  let open = false; // currently inside a top-level bullet not yet seen resolved
+  let inFence = false; // inside a ``` fenced code block — its lines never count
+  const flush = () => {
+    if (open) n++;
+    open = false;
+  };
+  for (const line of text.split("\n")) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence; // fence delimiter: toggle, never a bullet/heading
+      continue;
+    }
+    if (inFence) continue; // code content neither counts nor ends a bullet
+    if (/^- /.test(line)) {
+      flush(); // close the previous bullet
+      open = !resolved.test(line);
+    } else if (/^\s/.test(line)) {
+      if (open && resolved.test(line)) open = false; // continuation marks it done
+    } else {
+      flush(); // heading/prose/blank at col 0 ends the current bullet
+    }
+  }
+  flush();
+  return n;
+}
+
+function deferredFollowupCount(workspaceDir: string): number {
+  try {
+    return countDeferredFollowups(
+      readFileSync(join(workspaceDir, ".otto", "review-followups.md"), "utf8")
+    );
+  } catch {
+    return 0; // absent/unreadable trail → nothing deferred to surface.
+  }
+}
 
 export type LoopOptions = {
   // First stage is the gate: its result is checked for the completion sentinel.
@@ -175,14 +243,20 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   };
 
   // One consistent end-of-run summary across every terminal path: the exit
-  // reason, iterations run, and cumulative cost. Written to stdout (like the
-  // other completion lines) so it survives `> out.txt` redirection.
+  // reason, iterations run, and cumulative cost, then a next-action hint so a
+  // maintainer reading the final line knows what to do next. Written to stdout
+  // (like the other completion lines) so it survives `> out.txt` redirection.
   const summarize = (reason: string, iterations: number): void => {
     const iters = `${iterations} iteration${iterations === 1 ? "" : "s"}`;
-    process.stdout.write(
+    let line =
       `${greenOut(SYM_OUT.bullet)} ${boldOut(`Otto ${reason}`)}` +
-        `${dimOut(` · ${iters} · $${runCostUsd.toFixed(2)}`)}\n`
-    );
+      `${dimOut(` · ${iters} · $${runCostUsd.toFixed(2)}`)}\n` +
+      `${dimOut(`  → next: ${nextActionFor(reason)}`)}\n`;
+    const deferred = deferredFollowupCount(workspaceDir);
+    if (deferred > 0) {
+      line += `${dimOut(`  ⚑ ${deferred} deferred follow-up${deferred === 1 ? "" : "s"} in .otto/review-followups.md`)}\n`;
+    }
+    process.stdout.write(line);
   };
   let sawFailure = false;
 

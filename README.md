@@ -123,11 +123,11 @@ The [architecture diagram](#otto) above maps the full stack: CLI + template laye
 
 Otto is configured by flags and environment variables. The essentials:
 
-| Variable          | Default          | Purpose                                                              |
-| ----------------- | ---------------- | ------------------------------------------------------------------- |
-| `OTTO_WORKSPACE`  | `cwd`            | Host repo Claude runs against; also where `.otto-tmp/` is written.   |
-| `OTTO_RUNNER`     | `sandbox`        | `sandbox` confines writes to the workspace; `host` runs unsandboxed. |
-| `OTTO_MODEL`      | _(CLI default)_  | Pin the Claude model (`--model` pass-through).                       |
+| Variable         | Default         | Purpose                                                              |
+| ---------------- | --------------- | -------------------------------------------------------------------- |
+| `OTTO_WORKSPACE` | `cwd`           | Host repo Claude runs against; also where `.otto-tmp/` is written.   |
+| `OTTO_RUNNER`    | `sandbox`       | `sandbox` confines writes to the workspace; `host` runs unsandboxed. |
+| `OTTO_MODEL`     | _(CLI default)_ | Pin the Claude model (`--model` pass-through).                       |
 
 ```bash
 otto-afk --print-config     # resolved config + a preflight check of run prerequisites, then exit
@@ -151,15 +151,15 @@ Requires **Node 20+**, an authenticated **Claude Code** (`claude /login`), and �
 
 ## Documentation
 
-| Doc                                            | What's in it                                                         |
-| ---------------------------------------------- | ------------------------------------------------------------------- |
-| **[QUICKSTART.md](./QUICKSTART.md)**           | Zero-to-first-loop getting started.                                 |
-| **[docs/CLI.md](./docs/CLI.md)**               | Every command, flag, and mode (verify, apply-review, watch, …).     |
-| **[docs/CONFIG.md](./docs/CONFIG.md)**         | Environment variables, runner/sandbox, branch strategy, setup.      |
-| **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** | Runtime internals and data flow for library extenders.          |
-| **[SECURITY.md](./SECURITY.md)**               | Threat model and the `bypassPermissions` blast-radius story.        |
-| **[CONTRIBUTING.md](./CONTRIBUTING.md)**       | Dev loop, tests, adding a stage, release pipeline.                  |
-| **[RELEASING.md](./RELEASING.md)**             | release-please flow, version policy, secrets, rollback.             |
+| Doc                                                | What's in it                                                                                                                        |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **[QUICKSTART.md](./QUICKSTART.md)**               | Zero-to-first-loop getting started.                                                                                                 |
+| **[docs/CLI.md](./docs/CLI.md)**                   | Every command, flag, and mode — start at [Choosing a mode](./docs/CLI.md#choosing-a-mode) (afk vs ghafk vs verify vs apply-review). |
+| **[docs/CONFIG.md](./docs/CONFIG.md)**             | Environment variables, runner/sandbox, branch strategy, setup.                                                                      |
+| **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** | Runtime internals and data flow for library extenders.                                                                              |
+| **[SECURITY.md](./SECURITY.md)**                   | Threat model and the `bypassPermissions` blast-radius story.                                                                        |
+| **[CONTRIBUTING.md](./CONTRIBUTING.md)**           | Dev loop, tests, adding a stage, release pipeline.                                                                                  |
+| **[RELEASING.md](./RELEASING.md)**                 | release-please flow, version policy, secrets, rollback.                                                                             |
 
 ---
 

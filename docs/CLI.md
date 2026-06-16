@@ -2,10 +2,12 @@
 
 Commands, flags, and modes for the two Otto bins. For environment variables, runner/sandbox behavior, and branch strategy see **[CONFIG.md](./CONFIG.md)**.
 
+- [Choosing a mode](#choosing-a-mode)
 - [`otto-afk` — plan/PRD loop](#otto-afk--planprd-loop)
 - [`otto-ghafk` — GitHub-issue loop](#otto-ghafk--github-issue-loop)
 - [Running AFK (detach, notify, retries, resume)](#running-afk)
 - [Cost control, pacing & review panel](#cost-control-pacing--review-panel)
+- [Worked recipes](#worked-recipes)
 - [Verify & apply-review modes](#verify--apply-review-modes)
 - [Watch mode](#watch-mode-otto-ghafk-only)
 - [Single-issue mode](#single-issue-mode-otto-ghafk-only)
@@ -16,6 +18,21 @@ Commands, flags, and modes for the two Otto bins. For environment variables, run
 - [Source map](#source-map)
 
 Every command also supports `--help` / `-h`, `--version` / `-V`, and `--print-config` (print the resolved config plus a preflight check of run prerequisites — `claude`/`gh` CLIs, credentials, git workspace — then exit). See [CONFIG.md → Prerequisites](./CONFIG.md#prerequisites) for the preflight block.
+
+---
+
+## Choosing a mode
+
+Otto has one build loop with four entry points. They share the same resilience, sandbox, and reconcile-against-git behavior — they differ only in where the task comes from and what the **gate stage** (the first, sentinel-checked stage) does. Pick by where your work lives:
+
+| Mode                                 | Input                                                           | Gate stage                 | When to use                                                                                             |
+| ------------------------------------ | --------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `otto-afk "<plan-and-prd>" <n>`      | A plan/PRD string (conventionally file paths) + iteration count | `implementer`              | Drive a local plan or PRD to completion, implementing one task per iteration.                           |
+| `otto-ghafk <n>`                     | Open GitHub issues (no input arg)                               | `ghafk-implementer`        | Burn down a GitHub issue backlog, one issue per iteration. `--issue` targets one; `--watch` daemonizes. |
+| `otto-afk --verify "<plan-and-prd>"` | A plan/PRD string (one-shot — no iteration count)               | `verifier` (read-only)     | Audit what actually landed: a DONE/GAP/DEFERRED report + suite run. Changes nothing, no reviewer stage. |
+| `otto-afk --apply-review <doc> <n>`  | An external code-review document + iteration count              | `apply-review-implementer` | Fix the actionable findings of an external review, one per iteration; deferred ones tracked in git.     |
+
+`--verify` and `--apply-review` are `otto-afk` modes that swap the gate stage; they are mutually exclusive with each other and with `--issue` / `--watch`. `--review-panel` is orthogonal — it upgrades the **reviewer** stage in any of the above (it reviews Otto's _own_ diff), not the gate. Full per-mode detail follows.
 
 ---
 
@@ -75,11 +92,11 @@ Both bins are designed to chew through long runs unattended.
 | ------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
 | `--no-keep-alive`   | off (wake-lock acquired)                               | Skip the OS wake-lock for the loop's lifetime.                                                                          |
 | `--max-retries <N>` | `3`                                                    | Per-stage retry budget on transient failures. `0` restores fail-fast.                                                   |
-| `--detach`          | off                                                    | Fork the loop into a background process, print pid + log path, and exit.                                               |
-| `--log <path>`      | `<workspace>/.otto-tmp/logs/detached-<parent-pid>.log` | Override the detached log target. Only meaningful with `--detach`.                                                     |
-| `--notify`          | off                                                    | OS toast + terminal bell on loop completion or unrecoverable failure.                                                  |
+| `--detach`          | off                                                    | Fork the loop into a background process, print pid + log path, and exit.                                                |
+| `--log <path>`      | `<workspace>/.otto-tmp/logs/detached-<parent-pid>.log` | Override the detached log target. Only meaningful with `--detach`.                                                      |
+| `--notify`          | off                                                    | OS toast + terminal bell on loop completion or unrecoverable failure.                                                   |
 | `--max-wait <dur>`  | `6h`                                                   | Maximum time to wait out a Claude rate-limit before halting. Accepts seconds (`90`) or a duration string (`90m`, `6h`). |
-| `--fresh`           | off                                                    | Ignore any saved `.otto/state.json` and restart from iteration 1.                                                     |
+| `--fresh`           | off                                                    | Ignore any saved `.otto/state.json` and restart from iteration 1.                                                       |
 
 Canonical overnight recipe:
 
@@ -100,10 +117,10 @@ This forks into the background, holds an OS wake-lock so the host doesn't sleep,
 
 ## Cost control, pacing & review panel
 
-| Flag              | Default | What it does                                                                                                                                                                  |
-| ----------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--budget <usd>`  | off     | Stop the loop once cumulative Claude spend reaches this dollar amount (committed work is kept). Cost is printed per stage.                                                    |
-| `--cooldown <ms>` | `0`     | Sleep between iterations; grows automatically (×2, capped) when the API signals throttling.                                                                                  |
+| Flag              | Default | What it does                                                                                                                                                                                                                                                                                                   |
+| ----------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--budget <usd>`  | off     | Stop the loop once cumulative Claude spend reaches this dollar amount (committed work is kept). Cost is printed per stage.                                                                                                                                                                                     |
+| `--cooldown <ms>` | `0`     | Sleep between iterations; grows automatically (×2, capped) when the API signals throttling.                                                                                                                                                                                                                    |
 | `--review-panel`  | off     | Replace the single reviewer with a paced panel — read-only `correctness`/`security`/`tests` lenses → an adversarial verify pass (a skeptic refutes findings, defaulting to reject when uncertain) → one `fix(review):` commit that fixes only confirmed defects. Also enabled by setting `OTTO_REVIEW_LENSES`. |
 
 ```bash
@@ -113,12 +130,94 @@ otto-afk --budget 10 --cooldown 2000 --review-panel "<plan-and-prd>" 30
 
 ---
 
+## Worked recipes
+
+Three end-to-end maintainer workflows. Each is a copy-pasteable command block plus the end-state summary Otto prints when it finishes — the same `summarize()` line on every terminal path: `● Otto <reason> · N iterations · $cost`, followed by a `→ next:` hint telling you what to do next (and, when `.otto/review-followups.md` holds deferred findings, a `⚑ N deferred follow-ups` tally).
+
+### Issue burn-down
+
+Chew through a GitHub issue backlog, one issue per iteration, capped at 20 iterations and \$15 of spend. Otto reconciles against git each iteration, so already-closed work is never redone.
+
+```bash
+gh auth login                                  # once, if not already authed
+OTTO_WORKSPACE=~/code/my-repo otto-ghafk --budget 15 20
+```
+
+When the backlog is empty the gate emits the sentinel and the run ends:
+
+```
+● Otto complete · 7 iterations · $4.82
+  → next: review the diff, then open a PR
+```
+
+If the budget bites first, work already committed is kept and the hint tells you how to resume:
+
+```
+● Otto stopped (budget) · 12 iterations · $15.01
+  → next: raise `--budget` and re-run to resume
+```
+
+To target a single issue instead of the whole backlog, swap in `--issue <n>` (see [Single-issue mode](#single-issue-mode-otto-ghafk-only)); to leave a daemon polling for new labelled issues, use `--watch` (see [Watch mode](#watch-mode-otto-ghafk-only)).
+
+### External-review repair
+
+Feed Otto a code-review document and have it fix the actionable findings one per iteration, each as its own `fix(review):` commit. Deferred findings are appended to the git-tracked `.otto/review-followups.md` and committed with the related fix.
+
+```bash
+your-reviewer > review.md                      # any tool/command that emits a findings doc
+otto-afk --apply-review ./review.md --budget 8 25
+```
+
+The loop ends when no actionable findings remain. When the backlog still holds deferred findings, the summary tallies them so you know work remains:
+
+```
+● Otto complete · 9 iterations · $6.10
+  → next: review the diff, then open a PR
+  ⚑ 3 deferred follow-ups in .otto/review-followups.md
+```
+
+Then inspect the trail of everything it intentionally deferred:
+
+```bash
+git log --oneline --grep '^fix(review)'        # what landed
+cat .otto/review-followups.md                  # what was deferred, and why
+```
+
+See [`--apply-review`](#--apply-review-doc) for the full triage rules.
+
+### Overnight run
+
+Drive a local plan/PRD to completion unattended. `--detach` forks the loop into the background; `--notify` raises an OS toast + bell when it finishes or fails; the wake-lock keeps the host awake; transient stage failures retry with backoff.
+
+```bash
+OTTO_WORKSPACE=~/code/my-repo otto-afk --detach --notify "./docs/plans/feature.md ./docs/prd/feature.md" 50
+tail -f ~/code/my-repo/.otto-tmp/logs/detached-*.log   # follow from any shell
+```
+
+In the morning, the final log line tells you the outcome and the next action:
+
+```
+● Otto done · 31 iterations · $22.40
+  → next: review the diff, then open a PR
+```
+
+If a stage hit an unrecoverable failure, the summary says so and points at the logs:
+
+```
+● Otto done with failures · 31 iterations · $22.40
+  → next: inspect the failed stage logs under `.otto-tmp/logs`, then re-run
+```
+
+A re-run resumes from the saved `.otto/state.json` iteration; committed work is never redone (see [Resilience & resume](#resilience--resume)).
+
+---
+
 ## Verify & apply-review modes
 
 Two alternate `otto-afk` modes reuse the loop's resilience and reconcile-against-git behavior but swap the gate stage. Both are distinct from `--review-panel` (which reviews Otto's _own_ diff). They are mutually exclusive with each other and with `--issue` / `--watch`.
 
 | Flag                   | Default | What it does                                                                                                                                    |
-| ---------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| ---------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--verify`             | off     | Read-only: reconcile the plan against git + working tree, run the test/type suites, and write a report. One pass; takes no iterations argument. |
 | `--apply-review <doc>` | off     | Fix the actionable findings of an external code-review document — one finding per iteration — recording deferred ones and skipping cosmetics.   |
 
@@ -193,6 +292,14 @@ otto-ghafk --watch --watch-interval 300 5     # poll every 5 min, ≤5 iteration
 
 The trigger label defaults to `otto` (`OTTO_WATCH_LABEL` to change it). Under `--watch`, `--budget` caps total spend across the whole session; `Ctrl+C` stops cleanly. Cannot be combined with `--issue`.
 
+Each poll reports its state distinctly, so an idle daemon is never confused with a broken one:
+
+- **`no open issues labelled otto — idle, next poll in 300s`** — the queue is empty; nothing is wrong, Otto is waiting for labelled work.
+- **`gh not authenticated — run 'gh auth login' (label otto)`** — the poll failed because `gh` is not logged in; fix auth and it resumes on the next poll.
+- **`gh issue poll failed (label otto) — <detail>`** — any other poll failure (network, `gh` missing), with the first line of `gh`'s error as `<detail>`.
+
+It keeps polling in every case, so a transient failure or a fixed login recovers on its own.
+
 ---
 
 ## Single-issue mode (`otto-ghafk` only)
@@ -261,21 +368,21 @@ The agent playbooks are self-contained: `prompt.md` (plan/PRD source + progress 
 
 ## Source map
 
-| File / dir                                        | Purpose                                                                       |
-| ------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `apps/cli/bin/otto-afk.js` / `otto-ghafk.js`      | Bin entry points (`@phamvuhoang/otto`).                                        |
-| `apps/cli/scripts/afk.sh` / `ghafk.sh`            | Optional shims; fall back to `npx @phamvuhoang/otto`. Shipped in the tarball.  |
-| `packages/core/src/main.ts` / `gh-main.ts`        | Export `runAfk(argv)` / `runGhAfk(argv)`.                                      |
-| `packages/core/src/run-bin.ts`                    | `runBin`: parse flags, resolve dirs, dispatch to `runLoop` / `runWatch`.      |
-| `packages/core/src/loop.ts`                       | Iteration driver. Runs the stage chain; first stage is the gate.              |
-| `packages/core/src/render.ts`                     | Template renderer (`@include` / `@spill` / `!?` / `!` / `{{ INPUTS }}`).       |
-| `packages/core/src/runner.ts`                     | Native-sandbox runner: spawn `claude` + NDJSON stream + sandbox settings.     |
-| `packages/core/src/stages.ts`                     | Stage registry — `implementer`, `ghafkImplementer`, `reviewer`.               |
-| `packages/core/src/panel.ts`                      | `--review-panel`: lenses → adversarial verify → synth.                        |
-| `packages/core/src/branch.ts` / `state.ts`        | Branch strategy + `.otto/config.json`; resume state (`.otto/state.json`).      |
-| `packages/core/src/cli-help.ts`                   | Flag parsing; `--help` / `--version` / `--print-config` output.               |
-| `packages/core/src/retry.ts` / `keepalive.ts`     | Per-stage retry/backoff; OS wake-lock.                                         |
-| `packages/core/src/detach.ts` / `notify.ts`       | `--detach` fork-and-exit; `--notify` toast + bell.                            |
-| `packages/core/templates/*.md`                    | Stage templates + agent playbooks (ship in the core tarball).                 |
+| File / dir                                    | Purpose                                                                       |
+| --------------------------------------------- | ----------------------------------------------------------------------------- |
+| `apps/cli/bin/otto-afk.js` / `otto-ghafk.js`  | Bin entry points (`@phamvuhoang/otto`).                                       |
+| `apps/cli/scripts/afk.sh` / `ghafk.sh`        | Optional shims; fall back to `npx @phamvuhoang/otto`. Shipped in the tarball. |
+| `packages/core/src/main.ts` / `gh-main.ts`    | Export `runAfk(argv)` / `runGhAfk(argv)`.                                     |
+| `packages/core/src/run-bin.ts`                | `runBin`: parse flags, resolve dirs, dispatch to `runLoop` / `runWatch`.      |
+| `packages/core/src/loop.ts`                   | Iteration driver. Runs the stage chain; first stage is the gate.              |
+| `packages/core/src/render.ts`                 | Template renderer (`@include` / `@spill` / `!?` / `!` / `{{ INPUTS }}`).      |
+| `packages/core/src/runner.ts`                 | Native-sandbox runner: spawn `claude` + NDJSON stream + sandbox settings.     |
+| `packages/core/src/stages.ts`                 | Stage registry — `implementer`, `ghafkImplementer`, `reviewer`.               |
+| `packages/core/src/panel.ts`                  | `--review-panel`: lenses → adversarial verify → synth.                        |
+| `packages/core/src/branch.ts` / `state.ts`    | Branch strategy + `.otto/config.json`; resume state (`.otto/state.json`).     |
+| `packages/core/src/cli-help.ts`               | Flag parsing; `--help` / `--version` / `--print-config` output.               |
+| `packages/core/src/retry.ts` / `keepalive.ts` | Per-stage retry/backoff; OS wake-lock.                                        |
+| `packages/core/src/detach.ts` / `notify.ts`   | `--detach` fork-and-exit; `--notify` toast + bell.                            |
+| `packages/core/templates/*.md`                | Stage templates + agent playbooks (ship in the core tarball).                 |
 
 Deeper runtime data-flow lives in [ARCHITECTURE.md](./ARCHITECTURE.md).

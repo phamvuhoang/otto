@@ -61,7 +61,7 @@ vi.mock("../stream-render.js", () => ({
   SYM_OUT: { bullet: "*" },
 }));
 
-import { runLoop } from "../loop.js";
+import { runLoop, nextActionFor, countDeferredFollowups } from "../loop.js";
 
 const stage: Stage = { name: "implementer", template: "stage.md" };
 const sentinel = "<promise>NO MORE TASKS</promise>";
@@ -482,6 +482,141 @@ describe("runLoop", () => {
         loopOptions(dirs, { bin: "otto-afk", maxWaitMs: 6 * 3600_000 })
       );
       expect(stdoutText()).toContain("Otto halted (rate limit)");
+    });
+
+    it("appends a next-action hint to the summary", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(ok(sentinel, 0.25));
+      await runLoop(loopOptions(dirs));
+      expect(stdoutText()).toContain("→ next: review the diff, then open a PR");
+    });
+
+    it("tailors the next-action hint to the exit reason", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const reviewer: Stage = { name: "reviewer", template: "stage.md" };
+      mocks.runStage.mockImplementation((s) =>
+        Promise.resolve(ok(s.name === "implementer" ? "go" : "ok", 0.6))
+      );
+      await runLoop(
+        loopOptions(dirs, {
+          stages: [stage, reviewer] as [Stage, Stage],
+          iterations: 5,
+          budgetUsd: 1.0,
+          maxRetries: 0,
+        })
+      );
+      expect(stdoutText()).toContain("→ next: raise `--budget` and re-run to resume");
+    });
+
+    it("points failures at the stage logs", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockRejectedValue(new Error("boom"));
+      await runLoop(loopOptions(dirs, { iterations: 1, maxRetries: 0 }));
+      expect(stdoutText()).toContain(
+        "→ next: inspect the failed stage logs under `.otto-tmp/logs`, then re-run"
+      );
+    });
+
+    it("surfaces the deferred-work count when review-followups.md has entries", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mkdirSync(join(dirs.workspaceDir, ".otto"), { recursive: true });
+      writeFileSync(
+        join(dirs.workspaceDir, ".otto", "review-followups.md"),
+        "## 2026-06-16 review\n\n- perf: re-reads N days every pull (low) — deferred\n- ops: backfill at deploy (med) — deferred\n",
+        "utf8"
+      );
+      mocks.runStage.mockResolvedValue(ok(sentinel, 0.25));
+      await runLoop(loopOptions(dirs));
+      expect(stdoutText()).toContain(
+        "2 deferred follow-ups in .otto/review-followups.md"
+      );
+    });
+
+    it("omits the deferred-work line when no follow-ups are recorded", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(ok(sentinel, 0.25));
+      await runLoop(loopOptions(dirs));
+      expect(stdoutText()).not.toContain("deferred follow-up");
+    });
+  });
+
+  describe("countDeferredFollowups", () => {
+    it("counts one top-level bullet per deferred finding", () => {
+      expect(
+        countDeferredFollowups(
+          "## 2026-06-16 review\n\n- a (low) — deferred\n- b (med) — deferred\n"
+        )
+      ).toBe(2);
+    });
+
+    it("ignores headings, prose, blanks, and the lazy placeholder", () => {
+      expect(countDeferredFollowups("_No follow-ups recorded yet._")).toBe(0);
+      expect(countDeferredFollowups("")).toBe(0);
+      expect(
+        countDeferredFollowups("## heading only\n\nprose, no bullets\n")
+      ).toBe(0);
+    });
+
+    it("counts only top-level bullets, not nested detail", () => {
+      expect(
+        countDeferredFollowups("- finding one\n  - sub detail\n- finding two\n")
+      ).toBe(2);
+    });
+
+    it("excludes bullets marked FIXED/RESOLVED on a continuation line", () => {
+      expect(
+        countDeferredFollowups(
+          "- #1 still open (med) — deferred\n" +
+            "- #2 abort mislabel (low)\n  (medium-low) — FIXED: routed through summarize\n" +
+            "- #3 done (low) — RESOLVED in a later commit\n" +
+            "- #4 still open (low) — deferred\n"
+        )
+      ).toBe(2);
+    });
+
+    it("ignores bullets quoted inside a fenced code block", () => {
+      expect(
+        countDeferredFollowups(
+          "- #1 still open (low) — deferred\n" +
+            "  example diff:\n" +
+            "```diff\n" +
+            "- removed line\n" +
+            "- another removed line\n" +
+            "```\n" +
+            "- #2 still open (low) — deferred\n"
+        )
+      ).toBe(2);
+    });
+  });
+
+  describe("nextActionFor", () => {
+    it("maps each known exit reason to an imperative hint", () => {
+      expect(nextActionFor("complete")).toBe("review the diff, then open a PR");
+      expect(nextActionFor("done")).toBe("review the diff, then open a PR");
+      expect(nextActionFor("done with failures")).toBe(
+        "inspect the failed stage logs under `.otto-tmp/logs`, then re-run"
+      );
+      expect(nextActionFor("stopped (budget)")).toBe(
+        "raise `--budget` and re-run to resume"
+      );
+      expect(nextActionFor("halted (rate limit)")).toBe(
+        "re-run after the limit resets to resume"
+      );
+      expect(nextActionFor("aborted")).toBe(
+        "re-run to resume from the saved iteration"
+      );
+      expect(nextActionFor("stopped (error)")).toBe(
+        "inspect the error above, then re-run"
+      );
+    });
+
+    it("falls back to a generic hint for an unknown reason", () => {
+      expect(nextActionFor("something new")).toBe("re-run to resume");
     });
   });
 

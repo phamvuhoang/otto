@@ -236,6 +236,48 @@ describe("human-verdict trail", () => {
   });
 });
 
+describe("cross-run quality summary (verify.md)", () => {
+  // Feature 3: beyond a single run's per-plan report, a maintainer wants a
+  // quality rollup *across* runs — completion count, common failure causes,
+  // outstanding gaps/deferred — so they can spot recurring output-quality
+  // failures without reading every NDJSON log. It lives in the read-only
+  // verify gate (the only inspection mode) and derives from the git-tracked
+  // human-verdict trail (.otto/verdicts.md) verify already surfaces — NOT a new
+  // ## section in the shared contract (that would pollute the six-section
+  // samples parse and bind a cross-run rollup into the per-run report shape).
+
+  it("instructs verify to roll up quality across runs from the verdict trail", () => {
+    const body = readFileSync(tpl("verify.md"), "utf8");
+    expect(body).toContain("Cross-Run Quality Summary");
+    // Sourced from the git-tracked cross-run record, not the NDJSON logs.
+    expect(body).toContain("./.otto/verdicts.md");
+    // The dimensions the issue names: completion count, common causes, and
+    // outstanding gaps/deferred work.
+    const lower = body.toLowerCase();
+    expect(lower).toMatch(/completion|tally|per verdict/);
+    expect(lower).toMatch(/common cause|recurring/);
+    expect(lower).toMatch(/deferred|gap/);
+    // Read-only: verify must not mutate the trail.
+    expect(lower).toMatch(/read-only|do not edit|do not commit/);
+  });
+
+  it("surfaces the cross-run summary when verify renders, staying read-only", () => {
+    const dir = mkdtempSync(join(tmpdir(), "otto-cr-"));
+    try {
+      const out = renderTemplate(
+        tpl("verify.md"),
+        { INPUTS: "plan.md and prd.md", RESUME: "" },
+        { cwd: dir }
+      );
+      expect(out).toContain("Cross-Run Quality Summary");
+      expect(out).toContain("./.otto/verdicts.md");
+      expect(out).toMatch(/NO commits|Do not commit/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("verify.md adopts the quality report contract", () => {
   it("includes the shared fragment rather than re-describing the shape", () => {
     const body = readFileSync(tpl("verify.md"), "utf8");

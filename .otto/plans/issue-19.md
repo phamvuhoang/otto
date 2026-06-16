@@ -81,8 +81,15 @@ incrementally on the `otto/19` branch; ships via PR (repo convention).
       samples doc-contract's six-`##`-section parse. Render-contract tested in
       `quality-report.test.ts` (surface-when-present, fallback, append
       instruction), mirroring the apply-review follow-up trail.
-- [ ] **Cross-run quality summary.** A read-only command/section summarizing
+- [x] **Cross-run quality summary.** A read-only command/section summarizing
       completion count, gaps, deferred items, rejected runs, common causes.
+      Done: a `# CROSS-RUN QUALITY SUMMARY (READ-ONLY)` section in `verify.md`
+      (the only read-only inspection gate) that reads the git-tracked
+      `.otto/verdicts.md` trail and appends a `## Cross-Run Quality Summary`
+      block to the verify report (per-verdict tally, common causes, outstanding
+      gaps/deferred). It is NOT a `##` in the shared `quality-report.md` — a
+      cross-run rollup is not a per-run artifact and would pollute the
+      six-section samples parse. Render-contract test in `quality-report.test.ts`.
 - [ ] **Release-quality gate.** Require a human-readable quality report (not just
       typecheck/tests) before publishing major changes; wire into the release
       docs/contract tests.

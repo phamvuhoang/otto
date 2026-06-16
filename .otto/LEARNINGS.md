@@ -2,6 +2,17 @@
 
 ## Conventions
 
+- **Cross-run quality summary vs. per-run report — keep them apart.** A rollup
+  *across* runs (per-verdict tally, common rejection/follow-up causes, still-open
+  gaps/deferred) is NOT a per-run artifact, so it does **not** belong in the
+  shared `quality-report.md` contract (and a new `## ` there would break the
+  six-section samples parse anyway — see the verdict-trail note). It lives as a
+  `# CROSS-RUN QUALITY SUMMARY (READ-ONLY)` section in `verify.md` — the only
+  read-only inspection gate — and derives from the git-tracked `.otto/verdicts.md`
+  trail (the cross-run record; the agent `Read`s it, skips if absent) rather than
+  the NDJSON logs, appending a `## Cross-Run Quality Summary` block to the
+  read-only verify report. Pinned by `quality-report.test.ts`
+  ("cross-run quality summary (verify.md)").
 - **Human-verdict trail** (Feature 3) lives in the SAME single shared
   `quality-report.md` fragment as the report shape — never a per-mode edit. It
   has two halves, both in that one fragment: a `<verdict-trail>` block surfacing

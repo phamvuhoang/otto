@@ -49,4 +49,22 @@ Write your report to `.otto-tmp/verify-report.md` using the `Write` tool (this p
 
 @include:quality-report.md
 
+# CROSS-RUN QUALITY SUMMARY (READ-ONLY)
+
+Beyond *this* run, give the maintainer a quality rollup **across** runs so they can
+spot recurring output-quality failures without reading every NDJSON log. `Read`
+`./.otto/verdicts.md` (the git-tracked human-verdict trail). If it is absent, skip
+this section. Otherwise append a short `## Cross-Run Quality Summary` block to the
+same report file (`.otto-tmp/verify-report.md`) with:
+
+- **Completions:** how many runs recorded a verdict, and the tally per verdict
+  (Accepted / Accepted with follow-ups / Rejected / Needs investigation).
+- **Common causes:** recurring reasons behind rejections or follow-ups (e.g.
+  "scope creep", "thin evidence"), most frequent first.
+- **Outstanding gaps & deferred work:** gaps and deferred items still open across
+  runs, so a maintainer can turn them into follow-up issues.
+
+Keep it to a few lines and cite the trail entries you counted. This is read-only —
+do not edit or commit the trail.
+
 Also print the Verdict + a one-line tally of done/gap/deferred to your final message. Do not commit.

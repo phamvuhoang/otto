@@ -117,13 +117,26 @@ describe("apply-review adopts the quality report contract", () => {
     try {
       const out = render(ws);
       // The report is the completion handoff: it lands with the NO MORE TASKS
-      // sentinel, summarizing the whole round — what was fixed vs deferred vs
-      // won't-fixed — not emitted per-iteration.
+      // sentinel, summarizing the whole round — not emitted per-iteration.
       expect(out).toContain("Otto quality report");
       expect(out).toContain("NO MORE TASKS");
-      expect(out).toMatch(/fixed/i);
-      expect(out).toMatch(/deferred/i);
-      expect(out).toMatch(/won't[- ]fix|wont[- ]fix/i);
+
+      // Pin the gating prose itself — the report is final-iteration-only, never
+      // per-iteration. Without these the guard could be deleted and the test
+      // (which only checks the report+sentinel co-occur) would still pass.
+      expect(out).toContain("Only on the final iteration");
+      expect(out).toContain("Do NOT emit it per-iteration");
+
+      // The fixed / deferred / won't-fix mapping must live in the COMPLETION
+      // REPORT section. Scope the assertions to that section — "deferred" and
+      // "fixed" also appear in the TRIAGE / RECONCILE prose, so an unscoped
+      // match would pass even if the mapping were absent.
+      const start = out.indexOf("# COMPLETION REPORT");
+      expect(start).toBeGreaterThanOrEqual(0);
+      const report = out.slice(start, out.indexOf("# FINAL RULES", start));
+      expect(report).toContain("CONFIRMED and fixed");
+      expect(report).toMatch(/DEFERRED/);
+      expect(report).toMatch(/won't[- ]fix|wont[- ]fix/i);
     } finally {
       rmSync(ws, { recursive: true, force: true });
     }

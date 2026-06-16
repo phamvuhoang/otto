@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   createLinearClient,
   parseLinearRef,
+  resolveDoneState,
   resolveLinearAuth,
   LinearApiError,
   type LinearClient,
@@ -45,7 +46,7 @@ export const defaultLinearCliDeps: LinearCliDeps = {
 };
 
 const USAGE =
-  "Usage: linear <list|dump|view <ref>|comment <ref> --body-file <path>> [--label <name>] [--team <key>] [--limit <n>]";
+  "Usage: linear <list|dump|view <ref>|comment <ref> --body-file <path>|done <ref>> [--label <name>] [--team <key>] [--limit <n>]";
 
 /** Pull `--name <value>` flags out of argv, returning the flags + positionals. */
 function parseFlags(argv: string[]): {
@@ -89,9 +90,9 @@ function listOptions(
  *   spilling into a prompt (parallel to `gh issue list --json …,body,comments`).
  * - `view`    — print one issue's full detail as JSON.
  * - `comment` — add a comment to an issue from `--body-file`.
- *
- * (`done` / move-to-completed lives with the completion-behaviour work, which
- * owns done-state resolution.)
+ * - `done`    — move an issue to a completed workflow state, resolved via
+ *   `OTTO_LINEAR_DONE_STATE` (by name) else the team's first `completed`-type
+ *   state; exits non-zero (no move) when the target state is ambiguous.
  */
 export async function runLinear(
   argv: string[],
@@ -115,7 +116,8 @@ export async function runLinear(
       break;
     }
     case "view":
-    case "comment": {
+    case "comment":
+    case "done": {
       if (positionals.length === 0) {
         deps.err(USAGE);
         return 2;
@@ -191,6 +193,26 @@ export async function runLinear(
         const issue = await client.viewIssue(ref!);
         await client.addComment(issue.id, body);
         deps.out(`Commented on ${issue.identifier}.`);
+        return 0;
+      }
+
+      case "done": {
+        const issue = await client.viewIssue(ref!);
+        const team = issue.identifier.split("-")[0];
+        const states = await client.listWorkflowStates(team);
+        const resolution = resolveDoneState(
+          states,
+          deps.env.OTTO_LINEAR_DONE_STATE
+        );
+        if (resolution.kind === "ambiguous") {
+          deps.err(
+            `Cannot move ${issue.identifier} to a done state: ${resolution.reason}. ` +
+              `Set OTTO_LINEAR_DONE_STATE or move it in Linear manually.`
+          );
+          return 3;
+        }
+        const moved = await client.moveToDone(issue.id, resolution.state.id);
+        deps.out(`Moved ${issue.identifier} to ${moved.state}.`);
         return 0;
       }
 

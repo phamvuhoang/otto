@@ -27,3 +27,5 @@ Work **only** on Linear issue {{ INPUTS }} (shown above). Do not list, triage, o
 If Linear issue {{ INPUTS }} is already complete (done, or there is no work left to do), output <promise>NO MORE TASKS</promise>.
 
 @include:ghprompt-workflow.md
+
+@include:linear-completion.md

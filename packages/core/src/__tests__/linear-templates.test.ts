@@ -82,6 +82,20 @@ describe("Linear AFK templates", () => {
     );
   });
 
+  it("encode the Linear completion behaviour (comment vs. otto-linear done) in the playbook", () => {
+    // Both Linear entry points reach the completion fragment exactly once:
+    // linearafk.md → linearprompt.md, and linearafk-issue.md directly.
+    for (const entry of ["linearprompt.md", "linearafk-issue.md"]) {
+      expect(readFileSync(tpl(entry), "utf8")).toContain(
+        "@include:linear-completion.md"
+      );
+    }
+    const completion = readFileSync(tpl("linear-completion.md"), "utf8");
+    expect(completion).toContain("otto-linear done");
+    expect(completion).toContain("otto-linear comment");
+    expect(completion).toContain("OTTO_LINEAR_DONE_STATE");
+  });
+
   it("surface the spilled issue file so the agent reads detail from a file", () => {
     const multi = render("linearafk.md", {});
     expect(multi).toContain("./.otto-tmp/spill/issues.json");

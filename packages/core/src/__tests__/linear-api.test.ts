@@ -6,7 +6,9 @@ import {
   linearConfigPath,
   parseLinearRef,
   parseLinearIssueArg,
+  resolveDoneState,
   resolveLinearAuth,
+  type LinearWorkflowState,
 } from "../linear-api.js";
 
 describe("parseLinearRef", () => {
@@ -404,6 +406,29 @@ describe("createLinearClient", () => {
     });
   });
 
+  it("listWorkflowStates filters by team key and maps id/name/type/position", async () => {
+    const { fn, calls } = fakeFetch({
+      data: {
+        workflowStates: {
+          nodes: [
+            { id: "s1", name: "Todo", type: "unstarted", position: 0 },
+            { id: "s2", name: "Done", type: "completed", position: 2 },
+          ],
+        },
+      },
+    });
+    const client = createLinearClient({ token: "k", fetch: fn });
+
+    const states = await client.listWorkflowStates("ENG");
+
+    expect(states).toEqual([
+      { id: "s1", name: "Todo", type: "unstarted", position: 0 },
+      { id: "s2", name: "Done", type: "completed", position: 2 },
+    ]);
+    expect(calls[0].body.query).toContain("workflowStates");
+    expect(calls[0].body.variables.team).toBe("ENG");
+  });
+
   it("classifies an HTTP 401 as an auth error", async () => {
     const { fn } = fakeFetch(
       { errors: [{ message: "Authentication required" }] },
@@ -447,5 +472,46 @@ describe("createLinearClient", () => {
     await expect(client.whoami()).rejects.toMatchObject({
       kind: "network",
     });
+  });
+});
+
+describe("resolveDoneState", () => {
+  const states: LinearWorkflowState[] = [
+    { id: "s-todo", name: "Todo", type: "unstarted", position: 0 },
+    { id: "s-prog", name: "In Progress", type: "started", position: 1 },
+    { id: "s-rel", name: "Released", type: "completed", position: 3 },
+    { id: "s-done", name: "Done", type: "completed", position: 2 },
+    { id: "s-cancel", name: "Canceled", type: "canceled", position: 4 },
+  ];
+
+  it("prefers a state named OTTO_LINEAR_DONE_STATE (case-insensitive)", () => {
+    expect(resolveDoneState(states, "released")).toEqual({
+      kind: "resolved",
+      state: { id: "s-rel", name: "Released", type: "completed", position: 3 },
+    });
+  });
+
+  it("is ambiguous when the named state does not exist", () => {
+    const res = resolveDoneState(states, "Shipped");
+    expect(res.kind).toBe("ambiguous");
+    if (res.kind === "ambiguous") expect(res.reason).toMatch(/Shipped/);
+  });
+
+  it("falls back to the first completed state by position", () => {
+    expect(resolveDoneState(states)).toEqual({
+      kind: "resolved",
+      state: { id: "s-done", name: "Done", type: "completed", position: 2 },
+    });
+  });
+
+  it("ignores a blank preferred name and falls back to a completed state", () => {
+    expect(resolveDoneState(states, "   ").kind).toBe("resolved");
+  });
+
+  it("is ambiguous when no completed state exists", () => {
+    const noneDone = states.filter((s) => s.type !== "completed");
+    const res = resolveDoneState(noneDone);
+    expect(res.kind).toBe("ambiguous");
+    if (res.kind === "ambiguous") expect(res.reason).toMatch(/completed/);
   });
 });

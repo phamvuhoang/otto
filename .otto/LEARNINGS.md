@@ -110,4 +110,16 @@
   surfaces the file (present → inlined, absent → `!?` fallback) plus pin the
   instruction strings. See `apply-review.test.ts` / `superpowers-include.test.ts`.
 
+- **Linear completion (move-to-done) is split: pure resolution in code, the
+  comment-vs-move decision in the playbook.** `otto-linear done <ref>` resolves
+  the target state via `resolveDoneState(states, OTTO_LINEAR_DONE_STATE)` (named
+  state case-insensitively, else the first `type==="completed"` state by
+  ascending `position`). When it can't resolve one it does **not** guess or move
+  — it exits non-zero with a hint; the helper never auto-composes a comment.
+  Which path to take (PR repo → comment + leave open; commit-to-branch → `done`)
+  lives in the provider-specific `linear-completion.md` fragment, `@include`d by
+  both `linearprompt.md` (multi-issue) and `linearafk-issue.md` (single-issue) —
+  the same per-mode-prose-not-in-`ghprompt-workflow.md` convention as issue
+  selection. Pin the fragment + its include with a render-contract assertion.
+
 ## Dead ends

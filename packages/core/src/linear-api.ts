@@ -174,6 +174,16 @@ export type LinearIssueDetail = LinearIssueSummary & {
   comments: LinearComment[];
 };
 
+/** A team's workflow state (column), with its category `type` and ordering. */
+export type LinearWorkflowState = {
+  id: string;
+  name: string;
+  /** Workflow category: "completed", "started", "unstarted", "canceled", … */
+  type: string;
+  /** Ordering within the team's workflow; lower = earlier. */
+  position: number;
+};
+
 export type LinearClientDeps = {
   token: string;
   /** Injectable for tests; defaults to the global `fetch` (Node 20+). */
@@ -192,6 +202,7 @@ export type LinearClient = {
   }): Promise<LinearIssueSummary[]>;
   viewIssue(ref: LinearRef): Promise<LinearIssueDetail>;
   addComment(issueId: string, body: string): Promise<{ id: string }>;
+  listWorkflowStates(team: string): Promise<LinearWorkflowState[]>;
   moveToDone(
     issueId: string,
     stateId: string
@@ -376,6 +387,25 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
       return { id: data.commentCreate.comment.id };
     },
 
+    async listWorkflowStates(team) {
+      const data = await request<{
+        workflowStates: { nodes: LinearWorkflowState[] };
+      }>(
+        `query WorkflowStates($team: String!) {
+           workflowStates(filter: { team: { key: { eq: $team } } }, first: 100) {
+             nodes { id name type position }
+           }
+         }`,
+        { team }
+      );
+      return data.workflowStates.nodes.map((n) => ({
+        id: n.id,
+        name: n.name,
+        type: n.type,
+        position: n.position,
+      }));
+    },
+
     async moveToDone(issueId, stateId) {
       const data = await request<{
         issueUpdate: { success: boolean; issue: RawIssue };
@@ -390,4 +420,48 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
       return { id: data.issueUpdate.issue.id, state: data.issueUpdate.issue.state.name };
     },
   };
+}
+
+/** Outcome of resolving the target "done" workflow state for an issue's team. */
+export type DoneStateResolution =
+  | { kind: "resolved"; state: LinearWorkflowState }
+  | { kind: "ambiguous"; reason: string };
+
+/**
+ * Resolve which workflow state a completed issue should move to, given a team's
+ * states and an optional preferred state name (`OTTO_LINEAR_DONE_STATE`):
+ *
+ *  1. If `preferredName` is set, the state whose name matches it
+ *     (case-insensitively) wins; if none matches the result is `ambiguous` — we
+ *     never silently pick a different state than the user named.
+ *  2. Otherwise the first `type: "completed"` state by ascending `position`.
+ *  3. If neither yields a state the result is `ambiguous`; callers should
+ *     comment on the issue and leave a human to move it rather than guess.
+ */
+export function resolveDoneState(
+  states: LinearWorkflowState[],
+  preferredName?: string
+): DoneStateResolution {
+  const wanted = preferredName?.trim();
+  if (wanted) {
+    const match = states.find(
+      (s) => s.name.toLowerCase() === wanted.toLowerCase()
+    );
+    if (match) return { kind: "resolved", state: match };
+    const names = states.map((s) => s.name).join(", ") || "none";
+    return {
+      kind: "ambiguous",
+      reason: `no workflow state named "${wanted}" (have: ${names})`,
+    };
+  }
+  const completed = states
+    .filter((s) => s.type === "completed")
+    .sort((a, b) => a.position - b.position);
+  if (completed.length === 0) {
+    return {
+      kind: "ambiguous",
+      reason: 'no workflow state of type "completed"',
+    };
+  }
+  return { kind: "resolved", state: completed[0] };
 }

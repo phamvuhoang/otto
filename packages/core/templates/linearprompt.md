@@ -35,3 +35,5 @@ TL;DR - build a tiny, end-to-end slice of the feature first, then expand it out.
 5. Refactors
 
 @include:ghprompt-workflow.md
+
+@include:linear-completion.md

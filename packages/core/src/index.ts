@@ -28,6 +28,7 @@ export {
   parseLinearRef,
   parseLinearIssueArg,
   resolveLinearAuth,
+  resolveDoneState,
   linearConfigPath,
   createLinearClient,
   LinearApiError,
@@ -40,6 +41,8 @@ export {
   type LinearIssueSummary,
   type LinearIssueDetail,
   type LinearComment,
+  type LinearWorkflowState,
+  type DoneStateResolution,
   type LinearErrorKind,
 } from "./linear-api.js";
 export {

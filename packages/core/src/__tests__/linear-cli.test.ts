@@ -32,6 +32,10 @@ function fakeClient(over: Partial<LinearClient> = {}): LinearClient {
     viewIssue: async () => DETAIL,
     addComment: async () => ({ id: "comment-1" }),
     moveToDone: async () => ({ id: "uuid-1", state: "Done" }),
+    listWorkflowStates: async () => [
+      { id: "s-todo", name: "Todo", type: "unstarted", position: 0 },
+      { id: "s-done", name: "Done", type: "completed", position: 1 },
+    ],
     ...over,
   };
 }
@@ -206,6 +210,78 @@ describe("runLinear comment", () => {
     );
     expect(code).toBe(2);
     expect(err.join("\n")).toMatch(/body-file|read/i);
+  });
+});
+
+describe("runLinear done", () => {
+  it("resolves the team's done state and moves the issue", async () => {
+    const moveToDone = vi.fn(async () => ({ id: "uuid-1", state: "Done" }));
+    const listWorkflowStates = vi.fn(async () => [
+      { id: "s-todo", name: "Todo", type: "unstarted", position: 0 },
+      { id: "s-done", name: "Done", type: "completed", position: 1 },
+    ]);
+    const { deps, out } = harness({
+      makeClient: () => fakeClient({ moveToDone, listWorkflowStates }),
+    });
+
+    const code = await runLinear(["done", "ENG-123"], deps);
+
+    expect(code).toBe(0);
+    expect(listWorkflowStates).toHaveBeenCalledWith("ENG");
+    expect(moveToDone).toHaveBeenCalledWith("uuid-1", "s-done");
+    expect(out.join("\n")).toMatch(/ENG-123.*Done/);
+  });
+
+  it("honors OTTO_LINEAR_DONE_STATE by name", async () => {
+    const moveToDone = vi.fn(async () => ({ id: "uuid-1", state: "Shipped" }));
+    const { deps } = harness({
+      env: { OTTO_LINEAR_API_KEY: "tok", OTTO_LINEAR_DONE_STATE: "Shipped" },
+      makeClient: () =>
+        fakeClient({
+          moveToDone,
+          listWorkflowStates: async () => [
+            { id: "s-done", name: "Done", type: "completed", position: 1 },
+            { id: "s-ship", name: "Shipped", type: "completed", position: 2 },
+          ],
+        }),
+    });
+
+    await runLinear(["done", "ENG-123"], deps);
+
+    expect(moveToDone).toHaveBeenCalledWith("uuid-1", "s-ship");
+  });
+
+  it("does not move and exits non-zero when the done state is ambiguous", async () => {
+    const moveToDone = vi.fn(async () => ({ id: "uuid-1", state: "Done" }));
+    const { deps, err } = harness({
+      makeClient: () =>
+        fakeClient({
+          moveToDone,
+          listWorkflowStates: async () => [
+            { id: "s-todo", name: "Todo", type: "unstarted", position: 0 },
+          ],
+        }),
+    });
+
+    const code = await runLinear(["done", "ENG-123"], deps);
+
+    expect(code).not.toBe(0);
+    expect(moveToDone).not.toHaveBeenCalled();
+    expect(err.join("\n")).toMatch(/OTTO_LINEAR_DONE_STATE|done state/i);
+  });
+
+  it("returns 2 on a missing ref", async () => {
+    const { deps, err } = harness();
+    const code = await runLinear(["done"], deps);
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/usage|issue/i);
+  });
+
+  it("returns 2 on a malformed ref", async () => {
+    const { deps, err } = harness();
+    const code = await runLinear(["done", "$(rm -rf ~)"], deps);
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/identifier|uuid|url/i);
   });
 });
 

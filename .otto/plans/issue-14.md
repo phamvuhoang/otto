@@ -40,7 +40,7 @@ incrementally on the `otto/14` branch; ships via PR (repo convention).
 - [x] **Watch mode.** Provider-specific Linear polling (count/identifier/title
       only, default 300s) with idle/auth/error classification, reusing the
       `ghafk` watch UX. Test poll classification with an injected poller.
-- [ ] **Completion behaviour + `linear done`.** PR repos → comment branch/PR
+- [x] **Completion behaviour + `linear done`.** PR repos → comment branch/PR
       info, leave open; commit-to-branch repos → move to done state
       (`OTTO_LINEAR_DONE_STATE` → first `type=completed` state; ambiguous →
       comment). Adds the `done` subcommand to the helper (done-state resolution)

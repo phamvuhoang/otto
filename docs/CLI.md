@@ -190,7 +190,7 @@ See [`--apply-review`](#--apply-review-doc) for the full triage rules.
 Drive a local plan/PRD to completion unattended. `--detach` forks the loop into the background; `--notify` raises an OS toast + bell when it finishes or fails; the wake-lock keeps the host awake; transient stage failures retry with backoff.
 
 ```bash
-otto-afk --detach --notify "./docs/plans/feature.md ./docs/prd/feature.md" 50
+OTTO_WORKSPACE=~/code/my-repo otto-afk --detach --notify "./docs/plans/feature.md ./docs/prd/feature.md" 50
 tail -f ~/code/my-repo/.otto-tmp/logs/detached-*.log   # follow from any shell
 ```
 

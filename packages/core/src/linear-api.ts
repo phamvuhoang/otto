@@ -16,9 +16,12 @@ const IDENTIFIER_RE = /^[A-Za-z][A-Za-z0-9]*-[1-9]\d*$/;
 // Issue UUID (RFC-4122 shape; we don't validate the version nibble).
 const UUID_RE =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-// `linear.app/<workspace>/issue/<IDENTIFIER>[/<slug>...]` — the identifier is
-// the path segment after `/issue/`.
-const URL_IDENTIFIER_RE = /\/issue\/([A-Za-z][A-Za-z0-9]*-[1-9]\d*)(?:[/?#]|$)/;
+// `https://linear.app/<workspace>/issue/<IDENTIFIER>[/<slug>...]` — the
+// identifier is the path segment after `/issue/`. Anchored to the linear.app
+// host so an arbitrary URL merely *containing* `/issue/ENG-1/` (e.g.
+// `https://evil.example/issue/ENG-1/`) does not silently resolve to a ref.
+const URL_IDENTIFIER_RE =
+  /^https?:\/\/linear\.app\/[^/]+\/issue\/([A-Za-z][A-Za-z0-9]*-[1-9]\d*)(?:[/?#]|$)/;
 
 /**
  * Normalize a user-supplied Linear issue reference to a {@link LinearRef}.
@@ -375,7 +378,7 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
 
     async addComment(issueId, body) {
       const data = await request<{
-        commentCreate: { success: boolean; comment: { id: string } };
+        commentCreate: { success: boolean; comment: { id: string } | null };
       }>(
         `mutation AddComment($issueId: String!, $body: String!) {
            commentCreate(input: { issueId: $issueId, body: $body }) {
@@ -384,6 +387,12 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
          }`,
         { issueId, body }
       );
+      if (!data.commentCreate.success || !data.commentCreate.comment) {
+        throw new LinearApiError(
+          `Linear refused to add comment on ${issueId} (success=${data.commentCreate.success})`,
+          "request"
+        );
+      }
       return { id: data.commentCreate.comment.id };
     },
 
@@ -408,7 +417,7 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
 
     async moveToDone(issueId, stateId) {
       const data = await request<{
-        issueUpdate: { success: boolean; issue: RawIssue };
+        issueUpdate: { success: boolean; issue: RawIssue | null };
       }>(
         `mutation MoveToDone($id: String!, $stateId: String!) {
            issueUpdate(id: $id, input: { stateId: $stateId }) {
@@ -417,6 +426,12 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
          }`,
         { id: issueId, stateId }
       );
+      if (!data.issueUpdate.success || !data.issueUpdate.issue) {
+        throw new LinearApiError(
+          `Linear refused to move ${issueId} (success=${data.issueUpdate.success})`,
+          "request"
+        );
+      }
       return { id: data.issueUpdate.issue.id, state: data.issueUpdate.issue.state.name };
     },
   };

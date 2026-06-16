@@ -50,3 +50,24 @@
   deferred (largely inherent): rubric axes are literals checked against
   author-written docs; no source-of-truth parse of the issue. Accept as a
   process-doc smoke test.
+
+## 2026-06-16 — issue #14 review (`.otto/reviews/issue-14-review.md`)
+
+- **#5 `linear-cli.ts:168` `dump` does an N+1 sequential fetch storm** (efficiency)
+  — deferred: a perf optimisation, not a correctness bug. Properly fixing it means
+  widening the `listIssues` GraphQL query to select `description` + a bounded
+  `comments { nodes }` and collapsing 1+N round trips to one request; a cheaper
+  `Promise.all` of the per-issue calls is possible but still re-fetches. Out of
+  scope for a single-finding fix; revisit if dump latency / rate-limits bite.
+- **#7 host deps duplicated across `linear-api.ts`/`linear-cli.ts`/`linear-auth.ts`**
+  (cleanup) — deferred: the identical `readFile`-returns-null + `home: homedir()`
+  defaults and `out`/`err` line-writers repeat across three modules. A shared
+  `readFileOrNull`/default-host helper is a cross-module refactor touching stable
+  code; safe to batch with the next provider rather than churn now.
+- **`runWatch` doesn't thread `mode` into `runLoop`** (`watch.ts:227`, low) —
+  deferred: Linear watch persists `state.json` under default `mode: "afk"` so
+  `matchesResume` won't resume across watch/non-watch runs. Pre-existing for ghafk
+  watch too; the Linear caller inherits it. Low impact, not a diff regression.
+- **`wasIdle` resets on every failed poll** (`watch.ts:214`, low) — deferred:
+  alternating poll-failure/empty-queue cycles re-announce the idle banner the
+  latch suppresses. Minor log noise, pre-existing.

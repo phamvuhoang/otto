@@ -76,6 +76,9 @@ describe("parseLinearRef", () => {
     "ENG-12;rm",
     "ENG 12",
     "not-a-uuid-0000-0000-000000000000",
+    "https://evil.example/issue/ENG-1/x",
+    "ftp://linear.app/acme/issue/ENG-1",
+    "https://linear.app.evil.example/acme/issue/ENG-1",
   ])("rejects %j", (bad) => {
     expect(() => parseLinearRef(bad)).toThrow();
   });
@@ -385,6 +388,17 @@ describe("createLinearClient", () => {
     });
   });
 
+  it("addComment throws a classified request error when the mutation fails", async () => {
+    const { fn } = fakeFetch({
+      data: { commentCreate: { success: false, comment: null } },
+    });
+    const client = createLinearClient({ token: "k", fetch: fn });
+
+    await expect(client.addComment("i1", "hello")).rejects.toMatchObject({
+      kind: "request",
+    });
+  });
+
   it("moveToDone updates the issue state and returns the new state name", async () => {
     const { fn, calls } = fakeFetch({
       data: {
@@ -403,6 +417,17 @@ describe("createLinearClient", () => {
     expect(calls[0].body.variables).toEqual({
       id: "i1",
       stateId: "state-done",
+    });
+  });
+
+  it("moveToDone throws a classified request error when the mutation fails", async () => {
+    const { fn } = fakeFetch({
+      data: { issueUpdate: { success: false, issue: null } },
+    });
+    const client = createLinearClient({ token: "k", fetch: fn });
+
+    await expect(client.moveToDone("i1", "state-done")).rejects.toMatchObject({
+      kind: "request",
     });
   });
 

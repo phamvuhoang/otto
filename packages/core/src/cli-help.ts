@@ -334,9 +334,9 @@ Flags:
   --review-panel      replace the single reviewer stage with correctness/security/tests lens reviewers + one synth commit (default: off)
   --branch <mode>     where Otto commits: current (default) | branch (new branch) | worktree (isolated checkout)
   --branch-prefix <p> branch name prefix for branch/worktree modes (default: otto/)
-  --watch             poll for labelled GitHub issues and run the loop whenever work is found (ghafk-only; default: off)
+  --watch             poll for labelled issues and run the loop whenever work is found (otto-ghafk + otto-linear-afk; default: off)
   --watch-interval <sec>  seconds between polls in watch mode (default: 300)
-  --issue <ref>       target a single GitHub issue (number, #N, owner/repo#N, or issue URL); loop exits when it is done (ghafk-only; default: off)
+  --issue <ref>       target a single issue (otto-ghafk: number, #N, owner/repo#N, or URL; otto-linear-afk: ENG-123, UUID, or Linear URL); loop exits when it is done (default: off)
   --max-wait <dur>    cap the wait when rate-limited before halting (e.g. 90m, 6h; default 6h)
   --fresh             ignore any saved resume state and start from iteration 1
   --verify            read-only: reconcile the plan against git, run the suites, write a report; make no commits (otto-afk)
@@ -373,6 +373,12 @@ export type PrintConfigOptions = {
   reviewLenses?: string[];
   watch?: boolean;
   watchIntervalSec?: number;
+  /**
+   * Label a --watch run would poll, pre-resolved by run-bin's per-mode
+   * resolveWatchLabel. Passed in (not re-derived here) so the reported label
+   * can't drift from the actual watch run. Defaults to the gh resolution.
+   */
+  watchLabel?: string;
   issue?: number | string;
   maxWaitMs?: number;
   mode?: string;
@@ -398,6 +404,7 @@ export function printConfig(
     reviewLenses = [],
     watch = false,
     watchIntervalSec,
+    watchLabel = process.env.OTTO_WATCH_LABEL?.trim() || "otto",
     issue,
     maxWaitMs,
     mode,
@@ -432,15 +439,6 @@ export function printConfig(
   const reviewStatus = reviewLenses.length
     ? `panel: ${reviewLenses.join(", ")}`
     : "single reviewer";
-  // Linear watch polls OTTO_LINEAR_LABEL (the label its implementer selects);
-  // every other mode polls OTTO_WATCH_LABEL. Mirror run-bin's resolution so the
-  // reported label matches what a --watch run would actually poll. Linear mode
-  // never falls back to OTTO_WATCH_LABEL: run-bin's resolveWatchLabel returns
-  // OTTO_LINEAR_LABEL || "otto", short-circuiting before OTTO_WATCH_LABEL.
-  const watchLabel =
-    mode === "linear"
-      ? process.env.OTTO_LINEAR_LABEL?.trim() || "otto"
-      : process.env.OTTO_WATCH_LABEL?.trim() || "otto";
   const watchStatus = watch
     ? `on (every ${watchIntervalSec ?? 300}s, label "${watchLabel}")`
     : "off";

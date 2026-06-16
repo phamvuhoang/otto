@@ -190,6 +190,10 @@ export async function runLinear(
           deps.err(`Could not read --body-file: ${flags["body-file"]}`);
           return 2;
         }
+        if (body.trim() === "") {
+          deps.err(`--body-file is empty: ${flags["body-file"]}`);
+          return 2;
+        }
         const issue = await client.viewIssue(ref!);
         await client.addComment(issue.id, body);
         deps.out(`Commented on ${issue.identifier}.`);

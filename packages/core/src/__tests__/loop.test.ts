@@ -567,6 +567,17 @@ describe("runLoop", () => {
         countDeferredFollowups("- finding one\n  - sub detail\n- finding two\n")
       ).toBe(2);
     });
+
+    it("excludes bullets marked FIXED/RESOLVED on a continuation line", () => {
+      expect(
+        countDeferredFollowups(
+          "- #1 still open (med) — deferred\n" +
+            "- #2 abort mislabel (low)\n  (medium-low) — FIXED: routed through summarize\n" +
+            "- #3 done (low) — RESOLVED in a later commit\n" +
+            "- #4 still open (low) — deferred\n"
+        )
+      ).toBe(2);
+    });
   });
 
   describe("nextActionFor", () => {

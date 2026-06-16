@@ -57,13 +57,33 @@ export function nextActionFor(reason: string): string {
   return NEXT_ACTION[reason] ?? "re-run to resume";
 }
 
-// Counts deferred findings recorded in `.otto/review-followups.md` by tallying
-// top-level Markdown bullets (lines starting with "- ", no leading indent).
-// Headings, prose, blank lines, the lazy placeholder, and nested detail bullets
-// are ignored. Pure + exported so it is unit-testable without a workspace.
+// Counts *open* deferred findings recorded in `.otto/review-followups.md` by
+// tallying top-level Markdown bullets (lines starting with "- ", no leading
+// indent). The file is append-only across review sessions and never prunes, so
+// a bullet whose block is marked FIXED/RESOLVED (on the bullet line or any of
+// its indented continuation lines) is excluded — otherwise the count measures
+// file age, not outstanding work. Headings, prose, blank lines, the lazy
+// placeholder, and nested detail bullets are ignored. Pure + exported so it is
+// unit-testable without a workspace.
 export function countDeferredFollowups(text: string): number {
+  const resolved = /\b(FIXED|RESOLVED)\b/;
   let n = 0;
-  for (const line of text.split("\n")) if (/^- /.test(line)) n++;
+  let open = false; // currently inside a top-level bullet not yet seen resolved
+  const flush = () => {
+    if (open) n++;
+    open = false;
+  };
+  for (const line of text.split("\n")) {
+    if (/^- /.test(line)) {
+      flush(); // close the previous bullet
+      open = !resolved.test(line);
+    } else if (/^\s/.test(line)) {
+      if (open && resolved.test(line)) open = false; // continuation marks it done
+    } else {
+      flush(); // heading/prose/blank at col 0 ends the current bullet
+    }
+  }
+  flush();
   return n;
 }
 

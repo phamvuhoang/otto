@@ -9,7 +9,15 @@ export {
   type RenderVars,
 } from "./render.js";
 export { runStage, type StageResult } from "./runner.js";
-export { runWatch, type RunWatchOptions } from "./watch.js";
+export {
+  runWatch,
+  pollOpenIssues,
+  pollLinearIssues,
+  type RunWatchOptions,
+  type PollResult,
+  type WatchProvider,
+  type LinearPollDeps,
+} from "./watch.js";
 export {
   runPreflight,
   whichBin,

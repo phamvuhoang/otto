@@ -24,6 +24,18 @@
   **injectable probes/deps** with host-wired defaults, so unit tests run without
   shelling out or hitting the real home dir. See `preflight.ts` (`runPreflight`
   probes) and `runner.ts`'s extracted argv builder.
+- **Watch mode is per-mode injectable, like `parseIssue`.** `RunBinConfig`
+  carries `supportsWatch`, `watchPoll` (poller, may be async), `watchProvider`
+  (`{name, authCmd}` for the poll/auth lines), and `resolveWatchLabel` (which env
+  var gates the run). Omitted → `runWatch`'s gh defaults (`pollOpenIssues`, `{gh,
+  gh auth login}`, `OTTO_WATCH_LABEL`). `runWatch` **awaits** the poller so async
+  pollers (Linear `fetch`) work; both pollers live in `watch.ts` and return the
+  same `PollResult` (`pollOpenIssues` / `pollLinearIssues`), auth-classified so
+  the daemon prints a re-login hint distinctly from a transient failure
+  (`LinearApiError.kind === "auth"`). **Linear watch polls `OTTO_LINEAR_LABEL`
+  (+`OTTO_LINEAR_TEAM`), not `OTTO_WATCH_LABEL`** — it must match the label its
+  implementer selects, else watch never triggers when a user overrides the label.
+  `printConfig`'s reported watch label mirrors this per-mode resolution.
 - Every terminal exit path in `loop.ts` funnels through one `summarize(reason,
   iterations)` helper that prints a single consistent stdout line (`● Otto
   <reason> · N iterations · $cost`). When adding a new exit reason, call

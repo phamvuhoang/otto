@@ -432,7 +432,13 @@ export function printConfig(
   const reviewStatus = reviewLenses.length
     ? `panel: ${reviewLenses.join(", ")}`
     : "single reviewer";
-  const watchLabel = process.env.OTTO_WATCH_LABEL?.trim() || "otto";
+  // Linear watch polls OTTO_LINEAR_LABEL (the label its implementer selects);
+  // every other mode polls OTTO_WATCH_LABEL. Mirror run-bin's resolution so the
+  // reported label matches what a --watch run would actually poll.
+  const watchLabel =
+    (mode === "linear" ? process.env.OTTO_LINEAR_LABEL?.trim() : "") ||
+    process.env.OTTO_WATCH_LABEL?.trim() ||
+    "otto";
   const watchStatus = watch
     ? `on (every ${watchIntervalSec ?? 300}s, label "${watchLabel}")`
     : "off";

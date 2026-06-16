@@ -37,7 +37,7 @@ incrementally on the `otto/14` branch; ships via PR (repo convention).
 - [x] **`runLinearAfk` + run-bin wiring.** Parallel to `runGhAfk`: `mode:
       "linear"`, `--issue` via `parseLinearRef`, `--print-config` Linear-auth
       line, mutual-exclusion guards. Bin `apps/cli/bin/otto-linear-afk.js`.
-- [ ] **Watch mode.** Provider-specific Linear polling (count/identifier/title
+- [x] **Watch mode.** Provider-specific Linear polling (count/identifier/title
       only, default 300s) with idle/auth/error classification, reusing the
       `ghafk` watch UX. Test poll classification with an injected poller.
 - [ ] **Completion behaviour + `linear done`.** PR repos → comment branch/PR

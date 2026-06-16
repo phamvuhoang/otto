@@ -145,7 +145,10 @@ describe("per-mode human acceptance prompts", () => {
   it("offers an acceptance prompt set for every run mode", () => {
     const out = renderPrompts();
     for (const mode of MODES) {
-      expect(out).toContain(mode);
+      // Anchor on the heading, not the bare mode name: "afk" is a substring of
+      // "ghafk"/"linear-afk", so toContain(mode) would pass even if the afk
+      // block were deleted. The "### <mode> —" heading is unique per mode.
+      expect(out).toContain(`### ${mode} —`);
     }
     // Mode-specific, not just the generic checklist: each set must pose
     // task-fulfillment questions a human can challenge.
@@ -158,7 +161,10 @@ describe("per-mode human acceptance prompts", () => {
     // include, proving every adopting mode inherits them.
     const out = renderFragment();
     for (const mode of MODES) {
-      expect(out).toContain(mode);
+      // Heading-anchored for the same reason as above: "afk" ⊂ "ghafk"/
+      // "linear-afk", so a bare substring check would not actually pin the
+      // afk block.
+      expect(out).toContain(`### ${mode} —`);
     }
   });
 });

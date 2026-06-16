@@ -434,11 +434,13 @@ export function printConfig(
     : "single reviewer";
   // Linear watch polls OTTO_LINEAR_LABEL (the label its implementer selects);
   // every other mode polls OTTO_WATCH_LABEL. Mirror run-bin's resolution so the
-  // reported label matches what a --watch run would actually poll.
+  // reported label matches what a --watch run would actually poll. Linear mode
+  // never falls back to OTTO_WATCH_LABEL: run-bin's resolveWatchLabel returns
+  // OTTO_LINEAR_LABEL || "otto", short-circuiting before OTTO_WATCH_LABEL.
   const watchLabel =
-    (mode === "linear" ? process.env.OTTO_LINEAR_LABEL?.trim() : "") ||
-    process.env.OTTO_WATCH_LABEL?.trim() ||
-    "otto";
+    mode === "linear"
+      ? process.env.OTTO_LINEAR_LABEL?.trim() || "otto"
+      : process.env.OTTO_WATCH_LABEL?.trim() || "otto";
   const watchStatus = watch
     ? `on (every ${watchIntervalSec ?? 300}s, label "${watchLabel}")`
     : "off";

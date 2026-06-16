@@ -102,10 +102,18 @@ export async function runLinear(
 
   // Validate args before touching credentials so usage errors stay exit 2.
   let ref: ReturnType<typeof parseLinearRef> | undefined;
+  let listOpts: { label: string; team?: string; limit: number } | undefined;
   switch (sub) {
     case "list":
-    case "dump":
+    case "dump": {
+      const opts = listOptions(flags, deps.env);
+      if ("error" in opts) {
+        deps.err(opts.error);
+        return 2;
+      }
+      listOpts = opts;
       break;
+    }
     case "view":
     case "comment": {
       if (positionals.length === 0) {
@@ -143,11 +151,7 @@ export async function runLinear(
   try {
     switch (sub) {
       case "list": {
-        const opts = listOptions(flags, deps.env);
-        if ("error" in opts) {
-          deps.err(opts.error);
-          return 2;
-        }
+        const opts = listOpts!;
         const issues = await client.listIssues(opts);
         if (issues.length === 0) {
           deps.out(`No open Linear issues with label "${opts.label}".`);
@@ -160,11 +164,7 @@ export async function runLinear(
       }
 
       case "dump": {
-        const opts = listOptions(flags, deps.env);
-        if ("error" in opts) {
-          deps.err(opts.error);
-          return 2;
-        }
+        const opts = listOpts!;
         const summaries = await client.listIssues(opts);
         const details = [];
         for (const s of summaries) {

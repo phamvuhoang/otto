@@ -385,6 +385,17 @@ describe("createLinearClient", () => {
     });
   });
 
+  it("addComment throws a classified request error when the mutation fails", async () => {
+    const { fn } = fakeFetch({
+      data: { commentCreate: { success: false, comment: null } },
+    });
+    const client = createLinearClient({ token: "k", fetch: fn });
+
+    await expect(client.addComment("i1", "hello")).rejects.toMatchObject({
+      kind: "request",
+    });
+  });
+
   it("moveToDone updates the issue state and returns the new state name", async () => {
     const { fn, calls } = fakeFetch({
       data: {
@@ -403,6 +414,17 @@ describe("createLinearClient", () => {
     expect(calls[0].body.variables).toEqual({
       id: "i1",
       stateId: "state-done",
+    });
+  });
+
+  it("moveToDone throws a classified request error when the mutation fails", async () => {
+    const { fn } = fakeFetch({
+      data: { issueUpdate: { success: false, issue: null } },
+    });
+    const client = createLinearClient({ token: "k", fetch: fn });
+
+    await expect(client.moveToDone("i1", "state-done")).rejects.toMatchObject({
+      kind: "request",
     });
   });
 

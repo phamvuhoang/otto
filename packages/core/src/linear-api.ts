@@ -375,7 +375,7 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
 
     async addComment(issueId, body) {
       const data = await request<{
-        commentCreate: { success: boolean; comment: { id: string } };
+        commentCreate: { success: boolean; comment: { id: string } | null };
       }>(
         `mutation AddComment($issueId: String!, $body: String!) {
            commentCreate(input: { issueId: $issueId, body: $body }) {
@@ -384,6 +384,12 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
          }`,
         { issueId, body }
       );
+      if (!data.commentCreate.success || !data.commentCreate.comment) {
+        throw new LinearApiError(
+          `Linear refused to add comment on ${issueId} (success=${data.commentCreate.success})`,
+          "request"
+        );
+      }
       return { id: data.commentCreate.comment.id };
     },
 
@@ -408,7 +414,7 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
 
     async moveToDone(issueId, stateId) {
       const data = await request<{
-        issueUpdate: { success: boolean; issue: RawIssue };
+        issueUpdate: { success: boolean; issue: RawIssue | null };
       }>(
         `mutation MoveToDone($id: String!, $stateId: String!) {
            issueUpdate(id: $id, input: { stateId: $stateId }) {
@@ -417,6 +423,12 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
          }`,
         { id: issueId, stateId }
       );
+      if (!data.issueUpdate.success || !data.issueUpdate.issue) {
+        throw new LinearApiError(
+          `Linear refused to move ${issueId} (success=${data.issueUpdate.success})`,
+          "request"
+        );
+      }
       return { id: data.issueUpdate.issue.id, state: data.issueUpdate.issue.state.name };
     },
   };

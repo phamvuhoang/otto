@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.4.0...otto-core-v0.4.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* **linear:** ship issue-14 review fixes + otto-linear-auth login UX ([#17](https://github.com/phamvuhoang/otto/issues/17)) ([fa9b272](https://github.com/phamvuhoang/otto/commit/fa9b272a6df263a8ae5e9ee126a5bb1d44ce7fa4))
+
 ## [0.4.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.3.0...otto-core-v0.4.0) (2026-06-16)
 
 

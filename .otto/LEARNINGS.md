@@ -13,6 +13,17 @@
   to **stdout** and must use the `*Out` color helpers (`greenOut`/`boldOut`/
   `dimOut`, gated by `USE_COLOR_STDOUT`), never the stderr-gated `red`/`bold`/
   `dim` — otherwise ANSI leaks into redirected stdout.
+- Otto-on-Otto changes ship as a **PR**, not loose commits. Each review round
+  commits `fix(review): …` onto the **same** `otto/<n>` feature branch (never a
+  side review branch — that strands the canonical branch and splits history);
+  the open PR just re-shows the updated diff for the next round. When
+  implementation + all review rounds are done: push `otto/<n>`, open/refresh the
+  PR into `main`. Merging it makes release-please open/refresh the
+  `release-please--branches--main` PR, which is merged **manually** to publish to
+  npm. Before opening, sanity-check the implied bump — pre-1.0 `feat`→minor,
+  `fix`→patch, and the `node-workspace` plugin patch-bumps the CLI (and rewrites
+  its dep range) whenever `otto-core` bumps. Never hand-edit versions;
+  release-please owns them — use a `Release-As:` footer to override.
 
 ## Gotchas
 

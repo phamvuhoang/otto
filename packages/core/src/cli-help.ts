@@ -334,9 +334,9 @@ Flags:
   --review-panel      replace the single reviewer stage with correctness/security/tests lens reviewers + one synth commit (default: off)
   --branch <mode>     where Otto commits: current (default) | branch (new branch) | worktree (isolated checkout)
   --branch-prefix <p> branch name prefix for branch/worktree modes (default: otto/)
-  --watch             poll for labelled GitHub issues and run the loop whenever work is found (ghafk-only; default: off)
+  --watch             poll for labelled issues and run the loop whenever work is found (otto-ghafk + otto-linear-afk; default: off)
   --watch-interval <sec>  seconds between polls in watch mode (default: 300)
-  --issue <ref>       target a single GitHub issue (number, #N, owner/repo#N, or issue URL); loop exits when it is done (ghafk-only; default: off)
+  --issue <ref>       target a single issue (otto-ghafk: number, #N, owner/repo#N, or URL; otto-linear-afk: ENG-123, UUID, or Linear URL); loop exits when it is done (default: off)
   --max-wait <dur>    cap the wait when rate-limited before halting (e.g. 90m, 6h; default 6h)
   --fresh             ignore any saved resume state and start from iteration 1
   --verify            read-only: reconcile the plan against git, run the suites, write a report; make no commits (otto-afk)

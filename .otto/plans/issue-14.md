@@ -29,10 +29,11 @@ incrementally on the `otto/14` branch; ships via PR (repo convention).
       to `gh`; used by templates + agent. Thin layer over `linear-api.ts`
       (`runLinear(argv, deps)` core + `otto-linear` bin). `done` deferred to the
       completion-behaviour task below, which owns done-state resolution.
-- [ ] **Stages + templates.** `STAGES.linearImplementer` (`linearafk.md`),
+- [x] **Stages + templates.** `STAGES.linearImplementer` (`linearafk.md`),
       `STAGES.linearIssueImplementer` (`linearafk-issue.md`), playbook
       `linearprompt.md`; reuse reviewer. Render-contract smoke test +
-      static-shell-tag invariant.
+      static-shell-tag invariant. `linearafk-issue.md` + `linearprompt.md` reuse
+      the provider-agnostic `ghprompt-workflow.md` fragment (no fork).
 - [ ] **`runLinearAfk` + run-bin wiring.** Parallel to `runGhAfk`: `mode:
       "linear"`, `--issue` via `parseLinearRef`, `--print-config` Linear-auth
       line, mutual-exclusion guards. Bin `apps/cli/bin/otto-linear-afk.js`.

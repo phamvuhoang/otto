@@ -2,6 +2,14 @@
 
 ## Conventions
 
+- `ghprompt-workflow.md` is **provider-agnostic** (RECONCILE → EXPLORATION →
+  FEEDBACK → COMMIT → FINISHING → LEARNINGS, plus `@include:superpowers.md`). New
+  provider-mode playbooks/templates (`linearprompt.md`, `linearafk-issue.md`,
+  and any future `*afk*` mode) `@include:ghprompt-workflow.md` rather than
+  forking the workflow — only the provider-specific issue-listing/selection prose
+  differs per mode. The render-contract tests pin the include + the
+  static-shell-tag invariant (no `{{ INPUTS }}` in a shell/@spill command body;
+  only the validated `$OTTO_ISSUE` env var may appear).
 - Pure functions that touch the host (binary lookup, fs, credentials) take
   **injectable probes/deps** with host-wired defaults, so unit tests run without
   shelling out or hitting the real home dir. See `preflight.ts` (`runPreflight`

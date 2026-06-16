@@ -2,6 +2,24 @@
 
 ## Conventions
 
+- **Human-verdict trail** (Feature 3) lives in the SAME single shared
+  `quality-report.md` fragment as the report shape — never a per-mode edit. It
+  has two halves, both in that one fragment: a `<verdict-trail>` block surfacing
+  `./.otto/verdicts.md` via `!?`cat …|||_No human verdicts recorded yet._`` (so
+  prior human verdicts inform this run's Verdict + next action), and a
+  **Maintainer:** instruction to append the human verdict (Accepted · Accepted
+  with follow-ups · Rejected · **Needs investigation** — note the HUMAN verdict
+  uses "Needs investigation", distinct from the report's own "Needs human
+  review") + why to the git-tracked trail, feeding the existing learning loop.
+  Because it's in the contract fragment it reaches every adopting mode through
+  the existing `@include:quality-report.md` — drift-proof, same philosophy as the
+  contract + acceptance-prompts. **Its heading is `###`, NOT `##`:** the samples
+  doc-contract (`quality-report-samples.test.mjs`) parses the contract's `## `
+  lines as THE six report sections via `deepEqual`, so any new `## ` heading in
+  `quality-report.md` breaks it — keep non-report subsections at `###`. Pinned by
+  `quality-report.test.ts` (surface-when-present / fallback / append-instruction),
+  mirroring the apply-review `review-followups.md` trail. The trail file is
+  git-tracked (`.otto/`, NOT `.otto-tmp/`) like `LEARNINGS.md`/`review-followups.md`.
 - **Sample/illustrative docs are anchored to their source-of-truth template, not
   hand-pinned.** `docs/quality-report-samples.md` ships filled-in example quality
   reports (one per mode); its doc-contract test `scripts/quality-report-samples.test.mjs`

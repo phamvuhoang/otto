@@ -70,11 +70,17 @@ incrementally on the `otto/19` branch; ships via PR (repo convention).
 
 ## Feature 3 — Close the feedback loop
 
-- [ ] **Human-verdict trail.** A lightweight `.otto/quality/` (or
-      `.otto/verdicts.md`) trail the playbooks surface + append (accepted /
-      accepted-with-follow-ups / rejected / needs-investigation + why), feeding
-      the existing learnings loop. Template-driven, render-contract tested like
-      the review-followups trail.
+- [x] **Human-verdict trail.** A lightweight `.otto/verdicts.md` trail the
+      quality-report contract surfaces + instructs the maintainer to append
+      (Accepted / Accepted with follow-ups / Rejected / Needs investigation +
+      why), feeding the existing learnings loop. Done: both halves live in the
+      ONE shared `quality-report.md` fragment (a `<verdict-trail>` `!?`cat`
+      surface + a maintainer-append instruction), so every mode inherits the
+      trail through the existing contract include — drift-proof, no per-template
+      edit. The trail section is a `###` (not `##`) so it doesn't pollute the
+      samples doc-contract's six-`##`-section parse. Render-contract tested in
+      `quality-report.test.ts` (surface-when-present, fallback, append
+      instruction), mirroring the apply-review follow-up trail.
 - [ ] **Cross-run quality summary.** A read-only command/section summarizing
       completion count, gaps, deferred items, rejected runs, common causes.
 - [ ] **Release-quality gate.** Require a human-readable quality report (not just

@@ -58,4 +58,23 @@ One of — **Accepted** · **Accepted with follow-ups** · **Needs human review*
 - Recommended next action: <what a maintainer should do next>
 ```
 
+### Human verdict trail
+
+Prior **human** verdicts on past Otto runs (most recent last) — consult them so a
+recurring reason ("scope creep", "thin evidence") informs *this* run's Verdict
+and *Recommended next action* before you commit to one:
+
+<verdict-trail>
+
+!?`cat ./.otto/verdicts.md|||_No human verdicts recorded yet._`
+
+</verdict-trail>
+
+**Maintainer:** after reviewing this report, append your verdict to
+`./.otto/verdicts.md` (create it lazily) — a dated `##` heading plus one line:
+the human verdict (**Accepted** · **Accepted with follow-ups** · **Rejected** ·
+**Needs investigation**) and *why* (what was accepted with caveats, or the
+concrete reason it was rejected). The file is git-tracked; it feeds the existing
+learning loop, so future runs see what was accepted or rejected and why.
+
 @include:acceptance-prompts.md

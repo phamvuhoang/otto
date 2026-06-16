@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -165,6 +171,67 @@ describe("per-mode human acceptance prompts", () => {
       // "linear-afk", so a bare substring check would not actually pin the
       // afk block.
       expect(out).toContain(`### ${mode} —`);
+    }
+  });
+});
+
+describe("human-verdict trail", () => {
+  // Feature 3: a lightweight, git-tracked trail of HUMAN verdicts on past Otto
+  // runs (accepted / accepted-with-follow-ups / rejected / needs-investigation +
+  // why). It lives in the ONE shared quality-report fragment — like the report
+  // shape itself — so every mode both (a) surfaces the existing trail (prior
+  // verdicts inform this run's verdict + next action) and (b) instructs the
+  // maintainer to append their verdict, feeding the existing learning loop.
+  // Template-driven, render-contract tested like the apply-review follow-up trail.
+
+  function renderIn(ws: string): string {
+    const wrap = join(ws, "wrap.md");
+    writeFileSync(wrap, `@include:${tpl("quality-report.md")}`, "utf8");
+    return renderTemplate(wrap, { INPUTS: "" }, { cwd: ws });
+  }
+
+  it("surfaces an existing verdicts trail so prior verdicts feed the next run", () => {
+    const ws = mkdtempSync(join(tmpdir(), "otto-vt-"));
+    try {
+      mkdirSync(join(ws, ".otto"), { recursive: true });
+      writeFileSync(
+        join(ws, ".otto", "verdicts.md"),
+        "## 2026-06-16 issue-7\n- Rejected — scope creep, touched unrelated files\n",
+        "utf8"
+      );
+      const out = renderIn(ws);
+      expect(out).toContain("scope creep, touched unrelated files");
+      expect(out).not.toContain("_No human verdicts recorded yet._");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back gracefully when no verdicts have been recorded yet", () => {
+    const ws = mkdtempSync(join(tmpdir(), "otto-vt-"));
+    try {
+      const out = renderIn(ws);
+      expect(out).toContain("_No human verdicts recorded yet._");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("instructs the maintainer to record their verdict in a git-tracked trail feeding the learning loop", () => {
+    const ws = mkdtempSync(join(tmpdir(), "otto-vt-"));
+    try {
+      const out = renderIn(ws);
+      // The trail file the maintainer appends to...
+      expect(out).toContain("./.otto/verdicts.md");
+      // ...the four human-verdict labels (note: the HUMAN verdict uses "Needs
+      // investigation", distinct from the report's "Needs human review")...
+      expect(out).toContain("Needs investigation");
+      // ...git-tracked and wired into the existing learning loop so future runs
+      // see what was accepted/rejected and why.
+      expect(out).toMatch(/git-tracked/);
+      expect(out).toMatch(/learning loop/);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
     }
   });
 });

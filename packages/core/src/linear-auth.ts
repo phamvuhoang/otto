@@ -1,9 +1,9 @@
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import {
-  chmodSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -62,10 +62,23 @@ export const defaultLinearAuthDeps: LinearAuthCliDeps = {
   },
   writeFile: (p, contents, mode) => {
     mkdirSync(dirname(p), { recursive: true, mode: 0o700 });
-    writeFileSync(p, contents, { mode });
-    // `mode` above only applies when the file is created, so re-tighten an
-    // existing credential file whose perms may have drifted looser.
-    chmodSync(p, mode);
+    // Write to a fresh temp sibling (so `mode` applies on creation) and rename
+    // it into place. Writing the secret straight to `p` would (a) leave a
+    // pre-existing, possibly looser-permissioned file briefly world-readable
+    // before a chmod could tighten it, and (b) risk truncating a valid prior
+    // token if the process crashed mid-write. rename() is atomic on the same fs.
+    const tmp = `${p}.${process.pid}.tmp`;
+    writeFileSync(tmp, contents, { mode });
+    try {
+      renameSync(tmp, p);
+    } catch (e) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // best-effort cleanup of the temp file
+      }
+      throw e;
+    }
   },
   removeFile: (p) => {
     try {

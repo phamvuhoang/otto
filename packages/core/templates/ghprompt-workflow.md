@@ -50,11 +50,14 @@ Make a single `git commit -am` with a short message:
 - Optional body (≤3 bullets): key decision, blocker for next iteration
 - No file lists (git tracks them), no `Co-Authored-By`
 
-# THE ISSUE
+# FINISHING THE RUN
 
-If the task is complete, close the original GitHub issue.
+Committing the code is NOT necessarily the end of the run. How work "ships" depends on THIS repo's conventions — consult `<learnings>` / `./.otto/LEARNINGS.md`:
 
-If the task is not complete, leave a comment on the GitHub issue with what was done.
+- **If the repo ships via pull request:** keep ALL work for this issue on the SAME feature branch — later review-fix rounds commit onto it too; never spin up a second branch per round. When the work is complete, `git push` that branch and open (or refresh) a single PR into the default branch. Do NOT close the issue yourself — it closes when the PR merges. If the task is not complete, leave a comment on the issue with what was done.
+- **Otherwise (the repo's convention is commit-to-branch, no PR):** if complete, close the original GitHub issue; if not, leave a comment with what was done.
+
+When unsure which applies, prefer leaving the issue OPEN and surfacing the branch — never close an issue whose work has not landed on the default branch.
 
 # LEARNINGS
 

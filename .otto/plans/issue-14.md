@@ -11,7 +11,7 @@ incrementally on the `otto/14` branch; ships via PR (repo convention).
       empty / malformed / shell-metachar input. Tests:
       `linear-api.test.ts` mirroring `parseIssueRef` cases. Export from
       `index.ts`.
-- [ ] **Auth resolution.** Pure `resolveLinearAuth({ env, readFile })` →
+- [x] **Auth resolution.** Pure `resolveLinearAuth({ env, readFile })` →
       `{ token, source } | null` with precedence `OTTO_LINEAR_API_KEY` →
       `LINEAR_API_KEY` → `~/.config/otto/linear.json`. Injectable env/fs. Tests
       cover each precedence rung + missing.

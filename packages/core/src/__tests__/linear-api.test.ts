@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { parseLinearRef } from "../linear-api.js";
+import {
+  linearConfigPath,
+  parseLinearRef,
+  resolveLinearAuth,
+} from "../linear-api.js";
 
 describe("parseLinearRef", () => {
   it("accepts a bare identifier", () => {
@@ -69,5 +73,99 @@ describe("parseLinearRef", () => {
     "not-a-uuid-0000-0000-000000000000",
   ])("rejects %j", (bad) => {
     expect(() => parseLinearRef(bad)).toThrow();
+  });
+});
+
+describe("linearConfigPath", () => {
+  it("resolves under ~/.config/otto/linear.json", () => {
+    expect(linearConfigPath("/home/u")).toBe(
+      "/home/u/.config/otto/linear.json"
+    );
+  });
+});
+
+describe("resolveLinearAuth", () => {
+  const noFile = () => null;
+  const filePath = "/home/u/.config/otto/linear.json";
+  const fileWith = (token: unknown) => (p: string) =>
+    p === filePath ? JSON.stringify({ type: "apiKey", token }) : null;
+
+  it("prefers OTTO_LINEAR_API_KEY over everything", () => {
+    expect(
+      resolveLinearAuth({
+        env: { OTTO_LINEAR_API_KEY: "otto-key", LINEAR_API_KEY: "linear-key" },
+        readFile: fileWith("file-key"),
+        home: "/home/u",
+      })
+    ).toEqual({ token: "otto-key", source: "OTTO_LINEAR_API_KEY" });
+  });
+
+  it("falls back to LINEAR_API_KEY when OTTO_LINEAR_API_KEY is unset", () => {
+    expect(
+      resolveLinearAuth({
+        env: { LINEAR_API_KEY: "linear-key" },
+        readFile: fileWith("file-key"),
+        home: "/home/u",
+      })
+    ).toEqual({ token: "linear-key", source: "LINEAR_API_KEY" });
+  });
+
+  it("falls back to the config file when no env var is set", () => {
+    expect(
+      resolveLinearAuth({
+        env: {},
+        readFile: fileWith("file-key"),
+        home: "/home/u",
+      })
+    ).toEqual({ token: "file-key", source: filePath });
+  });
+
+  it("returns null when no source has a credential", () => {
+    expect(
+      resolveLinearAuth({ env: {}, readFile: noFile, home: "/home/u" })
+    ).toBeNull();
+  });
+
+  it("ignores empty/whitespace env vars and continues the precedence chain", () => {
+    expect(
+      resolveLinearAuth({
+        env: { OTTO_LINEAR_API_KEY: "   ", LINEAR_API_KEY: "real" },
+        readFile: noFile,
+        home: "/home/u",
+      })
+    ).toEqual({ token: "real", source: "LINEAR_API_KEY" });
+  });
+
+  it("trims the resolved token", () => {
+    expect(
+      resolveLinearAuth({
+        env: { OTTO_LINEAR_API_KEY: "  key  " },
+        readFile: noFile,
+        home: "/home/u",
+      })
+    ).toEqual({ token: "key", source: "OTTO_LINEAR_API_KEY" });
+  });
+
+  it("returns null when the config file is malformed JSON", () => {
+    expect(
+      resolveLinearAuth({
+        env: {},
+        readFile: () => "{ not json",
+        home: "/home/u",
+      })
+    ).toBeNull();
+  });
+
+  it("returns null when the config file lacks a usable token", () => {
+    expect(
+      resolveLinearAuth({ env: {}, readFile: fileWith(""), home: "/home/u" })
+    ).toBeNull();
+    expect(
+      resolveLinearAuth({
+        env: {},
+        readFile: fileWith(undefined),
+        home: "/home/u",
+      })
+    ).toBeNull();
   });
 });

@@ -15,4 +15,11 @@ export {
   type PreflightResult,
   type PreflightProbes,
 } from "./preflight.js";
-export { parseLinearRef, type LinearRef } from "./linear-api.js";
+export {
+  parseLinearRef,
+  resolveLinearAuth,
+  linearConfigPath,
+  type LinearRef,
+  type LinearAuth,
+  type LinearAuthDeps,
+} from "./linear-api.js";

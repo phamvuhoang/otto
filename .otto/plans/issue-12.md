@@ -17,7 +17,7 @@ See `.otto/specs/issue-12-design.md` for problem/approach/assumptions.
       `package.json`, the rollback runbook + provenance (SBOM/cosign) sections are
       present, and the cut/publish flow names the real workflows. Catches release
       docs rotting when packaging changes.
-- [ ] **Security-doc contract test.** Pin `SECURITY.md`'s threat-model invariants:
+- [x] **Security-doc contract test.** Pin `SECURITY.md`'s threat-model invariants:
       the `bypassPermissions` run line, the sandbox-vs-`OTTO_RUNNER=host` blast
       radius, and the static-shell-tag invariant — asserted against the real
       defaults in `runner.ts` / `render.ts` so a default change forces a doc edit.

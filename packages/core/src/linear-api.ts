@@ -113,3 +113,263 @@ export function resolveLinearAuth(
 
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// GraphQL client
+// ---------------------------------------------------------------------------
+
+/** Linear's GraphQL endpoint. */
+const LINEAR_ENDPOINT = "https://api.linear.app/graphql";
+
+/**
+ * Why a Linear API call failed, so callers (notably watch-mode polling) can
+ * distinguish a bad/missing credential from a transient network blip or a
+ * malformed request. `auth` is surfaced specially by `--print-config`/`--watch`.
+ */
+export type LinearErrorKind = "auth" | "request" | "network";
+
+/** A typed Linear API failure carrying a {@link LinearErrorKind}. */
+export class LinearApiError extends Error {
+  readonly kind: LinearErrorKind;
+  readonly status?: number;
+  constructor(message: string, kind: LinearErrorKind, status?: number) {
+    super(message);
+    this.name = "LinearApiError";
+    this.kind = kind;
+    this.status = status;
+  }
+}
+
+/** Minimal viewer identity returned by {@link LinearClient.whoami}. */
+export type LinearViewer = { id: string; name: string; email: string };
+
+/** A labelled open issue as returned by {@link LinearClient.listIssues}. */
+export type LinearIssueSummary = {
+  id: string;
+  identifier: string;
+  title: string;
+  url: string;
+  /** Workflow state name (e.g. "Todo"). */
+  state: string;
+};
+
+/** One comment on an issue (author name flattened, never null). */
+export type LinearComment = { author: string; body: string; createdAt: string };
+
+/** Full issue detail returned by {@link LinearClient.viewIssue}. */
+export type LinearIssueDetail = LinearIssueSummary & {
+  description: string;
+  comments: LinearComment[];
+};
+
+export type LinearClientDeps = {
+  token: string;
+  /** Injectable for tests; defaults to the global `fetch` (Node 20+). */
+  fetch?: typeof fetch;
+  /** Overridable endpoint (tests/self-hosting); defaults to Linear's API. */
+  endpoint?: string;
+};
+
+/** Narrow set of Linear GraphQL operations Otto needs. */
+export type LinearClient = {
+  whoami(): Promise<LinearViewer>;
+  listIssues(opts: {
+    label: string;
+    team?: string;
+    limit: number;
+  }): Promise<LinearIssueSummary[]>;
+  viewIssue(ref: LinearRef): Promise<LinearIssueDetail>;
+  addComment(issueId: string, body: string): Promise<{ id: string }>;
+  moveToDone(
+    issueId: string,
+    stateId: string
+  ): Promise<{ id: string; state: string }>;
+};
+
+type GraphQLError = { message?: string; extensions?: { code?: string } };
+
+function isAuthError(status: number, errors: GraphQLError[]): boolean {
+  if (status === 401 || status === 403) return true;
+  return errors.some(
+    (e) =>
+      /authenticat/i.test(e?.message ?? "") ||
+      /^AUTHENTICATION/i.test(e?.extensions?.code ?? "")
+  );
+}
+
+const ISSUE_FIELDS = `id identifier title url description state { name type }`;
+const COMMENT_FIELDS = `comments { nodes { body createdAt user { name } } }`;
+
+type RawComment = { body: string; createdAt: string; user: { name: string } | null };
+type RawIssue = {
+  id: string;
+  identifier: string;
+  title: string;
+  url: string;
+  description?: string | null;
+  state: { name: string; type: string };
+  comments?: { nodes: RawComment[] };
+};
+
+function mapDetail(raw: RawIssue): LinearIssueDetail {
+  return {
+    id: raw.id,
+    identifier: raw.identifier,
+    title: raw.title,
+    url: raw.url,
+    description: raw.description ?? "",
+    state: raw.state.name,
+    comments: (raw.comments?.nodes ?? []).map((c) => ({
+      author: c.user?.name ?? "unknown",
+      body: c.body,
+      createdAt: c.createdAt,
+    })),
+  };
+}
+
+/**
+ * Build a Linear GraphQL client bound to one API key. Each method issues a
+ * single GraphQL request over injectable `fetch`, authenticating with the
+ * personal-API-key scheme (`Authorization: <key>`, no `Bearer`). Failures throw
+ * a {@link LinearApiError} classified as `auth`/`request`/`network`.
+ *
+ * Ref→id resolution beyond {@link viewIssue} (e.g. resolving a done-state id)
+ * is intentionally left to higher layers; these ops stay thin and 1:1 with the
+ * underlying GraphQL operations so they are trivial to mock and reason about.
+ */
+export function createLinearClient(deps: LinearClientDeps): LinearClient {
+  const fetchImpl = deps.fetch ?? fetch;
+  const endpoint = deps.endpoint ?? LINEAR_ENDPOINT;
+  const token = deps.token;
+
+  async function request<T>(
+    query: string,
+    variables: Record<string, unknown>
+  ): Promise<T> {
+    let res: Response;
+    try {
+      res = await fetchImpl(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: token,
+        },
+        body: JSON.stringify({ query, variables }),
+      });
+    } catch (e) {
+      throw new LinearApiError(
+        `Linear request failed: ${(e as Error).message}`,
+        "network"
+      );
+    }
+
+    let json: { data?: T; errors?: GraphQLError[] } | undefined;
+    try {
+      json = (await res.json()) as typeof json;
+    } catch {
+      json = undefined;
+    }
+
+    const errors = json?.errors ?? [];
+    if (!res.ok || errors.length > 0) {
+      const kind = isAuthError(res.status, errors) ? "auth" : "request";
+      const msg = errors[0]?.message ?? `HTTP ${res.status}`;
+      throw new LinearApiError(`Linear GraphQL error: ${msg}`, kind, res.status);
+    }
+    return json!.data as T;
+  }
+
+  return {
+    async whoami() {
+      const data = await request<{ viewer: LinearViewer }>(
+        `query { viewer { id name email } }`,
+        {}
+      );
+      return data.viewer;
+    },
+
+    async listIssues({ label, team, limit }) {
+      const filter: Record<string, unknown> = {
+        labels: { some: { name: { eq: label } } },
+        state: { type: { nin: ["completed", "canceled"] } },
+      };
+      if (team) filter.team = { key: { eq: team } };
+      const data = await request<{
+        issues: { nodes: RawIssue[] };
+      }>(
+        `query ListIssues($filter: IssueFilter!, $first: Int!) {
+           issues(filter: $filter, first: $first) {
+             nodes { id identifier title url state { name type } }
+           }
+         }`,
+        { filter, first: limit }
+      );
+      return data.issues.nodes.map((n) => ({
+        id: n.id,
+        identifier: n.identifier,
+        title: n.title,
+        url: n.url,
+        state: n.state.name,
+      }));
+    },
+
+    async viewIssue(ref) {
+      if (ref.kind === "uuid") {
+        const data = await request<{ issue: RawIssue }>(
+          `query ViewIssue($id: String!) {
+             issue(id: $id) { ${ISSUE_FIELDS} ${COMMENT_FIELDS} }
+           }`,
+          { id: ref.uuid }
+        );
+        return mapDetail(data.issue);
+      }
+      const [, team, num] = ref.identifier.match(
+        /^([A-Za-z][A-Za-z0-9]*)-([1-9]\d*)$/
+      )!;
+      const data = await request<{ issues: { nodes: RawIssue[] } }>(
+        `query FindIssue($team: String!, $number: Float!) {
+           issues(filter: { team: { key: { eq: $team } }, number: { eq: $number } }, first: 1) {
+             nodes { ${ISSUE_FIELDS} ${COMMENT_FIELDS} }
+           }
+         }`,
+        { team, number: Number(num) }
+      );
+      const node = data.issues.nodes[0];
+      if (!node) {
+        throw new LinearApiError(
+          `Linear issue not found: ${ref.identifier}`,
+          "request"
+        );
+      }
+      return mapDetail(node);
+    },
+
+    async addComment(issueId, body) {
+      const data = await request<{
+        commentCreate: { success: boolean; comment: { id: string } };
+      }>(
+        `mutation AddComment($issueId: String!, $body: String!) {
+           commentCreate(input: { issueId: $issueId, body: $body }) {
+             success comment { id }
+           }
+         }`,
+        { issueId, body }
+      );
+      return { id: data.commentCreate.comment.id };
+    },
+
+    async moveToDone(issueId, stateId) {
+      const data = await request<{
+        issueUpdate: { success: boolean; issue: RawIssue };
+      }>(
+        `mutation MoveToDone($id: String!, $stateId: String!) {
+           issueUpdate(id: $id, input: { stateId: $stateId }) {
+             success issue { id state { name type } }
+           }
+         }`,
+        { id: issueId, stateId }
+      );
+      return { id: data.issueUpdate.issue.id, state: data.issueUpdate.issue.state.name };
+    },
+  };
+}

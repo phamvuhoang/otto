@@ -35,6 +35,11 @@
 
 ## Gotchas
 
+- Linear's GraphQL API authenticates a **personal API key** with a bare
+  `Authorization: <key>` header — **no `Bearer` prefix** (that prefix is for
+  OAuth access tokens only). `createLinearClient` in `linear-api.ts` sets the
+  header verbatim; getting this wrong yields a 401 that `LinearApiError`
+  classifies as `kind: "auth"`. Endpoint is `https://api.linear.app/graphql`.
 - Root contract tests (`scripts/*.test.mjs`, run by `pnpm test` → CI's "Root
   contract tests" step) are wired via a **glob**, not an explicit file list. An
   earlier explicit list silently dropped new contract tests

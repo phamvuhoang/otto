@@ -15,10 +15,12 @@ incrementally on the `otto/14` branch; ships via PR (repo convention).
       `{ token, source } | null` with precedence `OTTO_LINEAR_API_KEY` →
       `LINEAR_API_KEY` → `~/.config/otto/linear.json`. Injectable env/fs. Tests
       cover each precedence rung + missing.
-- [ ] **GraphQL client.** `linear-api.ts` narrow ops over injectable `fetch`:
+- [x] **GraphQL client.** `linear-api.ts` narrow ops over injectable `fetch`:
       `listIssues`/`viewIssue`/`addComment`/`moveToDone`/`whoami`. Assert
       request shape (endpoint, `Authorization` header, query/vars) + response
-      parsing against a mocked `fetch`.
+      parsing against a mocked `fetch`. `createLinearClient({token,fetch})`
+      returns single-request 1:1 ops; `LinearApiError` classifies failures
+      `auth`/`request`/`network` (feeds watch-mode auth classification, task 8).
 - [ ] **`otto-linear-auth` bin + `runLinearAuth`.** `login`/`status`
       (`--verify-live`)/`logout`; writes `~/.config/otto/linear.json` `0600`
       outside the repo. Core `runLinearAuth(argv, deps)` pure-ish with injected

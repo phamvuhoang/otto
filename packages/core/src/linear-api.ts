@@ -315,12 +315,18 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
 
     async viewIssue(ref) {
       if (ref.kind === "uuid") {
-        const data = await request<{ issue: RawIssue }>(
+        const data = await request<{ issue: RawIssue | null }>(
           `query ViewIssue($id: String!) {
              issue(id: $id) { ${ISSUE_FIELDS} ${COMMENT_FIELDS} }
            }`,
           { id: ref.uuid }
         );
+        if (!data.issue) {
+          throw new LinearApiError(
+            `Linear issue not found: ${ref.uuid}`,
+            "request"
+          );
+        }
         return mapDetail(data.issue);
       }
       const [, team, num] = ref.identifier.match(

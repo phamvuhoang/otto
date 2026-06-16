@@ -32,3 +32,8 @@ export {
   type LinearComment,
   type LinearErrorKind,
 } from "./linear-api.js";
+export {
+  runLinearAuth,
+  defaultLinearAuthDeps,
+  type LinearAuthCliDeps,
+} from "./linear-auth.js";

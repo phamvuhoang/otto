@@ -21,7 +21,7 @@ incrementally on the `otto/14` branch; ships via PR (repo convention).
       parsing against a mocked `fetch`. `createLinearClient({token,fetch})`
       returns single-request 1:1 ops; `LinearApiError` classifies failures
       `auth`/`request`/`network` (feeds watch-mode auth classification, task 8).
-- [ ] **`otto-linear-auth` bin + `runLinearAuth`.** `login`/`status`
+- [x] **`otto-linear-auth` bin + `runLinearAuth`.** `login`/`status`
       (`--verify-live`)/`logout`; writes `~/.config/otto/linear.json` `0600`
       outside the repo. Core `runLinearAuth(argv, deps)` pure-ish with injected
       fs/stdin; CLI bin is a thin wrapper. Tests on the core fn.

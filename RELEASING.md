@@ -198,3 +198,17 @@ releases:
 | ------------ | ------------------- | ----------------- |
 | `otto-core` | `otto-core-vX.Y.Z` | `otto-core-v*`   |
 | `otto`      | `otto-vX.Y.Z`      | `otto-v*`        |
+
+## 9. Package contents
+
+Each tarball ships only the paths in its `package.json` `files:` array (plus the
+npm-implicit `package.json` and `LICENSE`). Keep this list in sync when packaging
+changes — `scripts/releasing-contract.test.mjs` fails if it drifts from
+`package.json`:
+
+- **`@phamvuhoang/otto-core`** (`packages/core`) ships: `dist`, `templates`, `README.md`.
+- **`@phamvuhoang/otto`** (`apps/cli`) ships: `bin`, `scripts`, `README.md`.
+
+`otto-core` builds `dist/` (and ships `templates/`) via `prepublishOnly`; `otto`
+is hand-written JS with no build step. The `node scripts/smoke-pack-install.mjs`
+check (§2) packs both tarballs and installs them to prove the published shape.

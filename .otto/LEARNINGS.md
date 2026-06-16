@@ -35,6 +35,11 @@
 
 ## Gotchas
 
+- Root contract tests (`scripts/*.test.mjs`, run by `pnpm test` → CI's "Root
+  contract tests" step) are wired via a **glob**, not an explicit file list. An
+  earlier explicit list silently dropped new contract tests
+  (`contributing-extension-points`, `cli-docs-recipes`) so they never ran in CI
+  despite passing locally. Keep the glob; a new `scripts/<x>.test.mjs` auto-runs.
 - The release smoke (`scripts/smoke-pack-install.mjs`) must pass `--cache <dir>`
   to its `npm install`: the default shared `~/.npm/_cacache` is outside the
   sandbox write-allowlist (only `~/.npm/_logs` is writable) and is also commonly

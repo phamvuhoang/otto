@@ -12,7 +12,7 @@ See `.otto/specs/issue-12-design.md` for problem/approach/assumptions.
       and that every stage name it references is a real `STAGES` name parsed from
       `stages.ts`. Success signal: a contributor can add a stage/template/mode
       using docs alone, and the docs can't silently drift from the code.
-- [ ] **Release-readiness contract test.** Pin `RELEASING.md` against reality:
+- [x] **Release-readiness contract test.** Pin `RELEASING.md` against reality:
       the documented package contents (`files:` arrays) match each
       `package.json`, the rollback runbook + provenance (SBOM/cosign) sections are
       present, and the cut/publish flow names the real workflows. Catches release

@@ -164,7 +164,7 @@ To target a single issue instead of the whole backlog, swap in `--issue <n>` (se
 Feed Otto a code-review document and have it fix the actionable findings one per iteration, each as its own `fix(review):` commit. Deferred findings are appended to the git-tracked `.otto/review-followups.md` and committed with the related fix.
 
 ```bash
-/security-review > review.md                   # or any reviewer that emits a findings doc
+your-reviewer > review.md                      # any tool/command that emits a findings doc
 otto-afk --apply-review ./review.md --budget 8 25
 ```
 

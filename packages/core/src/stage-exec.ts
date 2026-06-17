@@ -1,10 +1,15 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
-import type { AgentRuntimeId } from "./agent-runtime.js";
+import { DEFAULT_AGENT, type AgentRuntimeId } from "./agent-runtime.js";
 import { applyPromptReduction } from "./prompt-reduction.js";
 import { renderTemplate } from "./render.js";
 import { DEFAULT_BACKOFF_MS, backoffFor, withRetries } from "./retry.js";
-import { runStage, stageLogPath, type StageResult } from "./runner.js";
+import {
+  getAgentRuntime,
+  runStage,
+  stageLogPath,
+  type StageResult,
+} from "./runner.js";
 import { USE_COLOR, dim } from "./stream-render.js";
 import type { Stage } from "./stages.js";
 import type { TokenMode } from "./tokens.js";
@@ -44,6 +49,7 @@ export async function executeStage(
   const spillRefPath = posix.join(".otto-tmp", spillRel);
   const stageLog = stageLogPath(workspaceDir, iteration, label, opts.agentId);
   mkdirSync(dirname(stageLog), { recursive: true });
+  const runtime = getAgentRuntime(opts.agentId ?? DEFAULT_AGENT);
 
   return withRetries(
     () => {
@@ -67,7 +73,7 @@ export async function executeStage(
         iteration,
         spillHostDir,
         stageLog,
-        { signal }
+        { signal, runtime }
       );
     },
     {

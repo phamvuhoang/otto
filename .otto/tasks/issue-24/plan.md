@@ -18,10 +18,14 @@ task. Implement the first unchecked task per run.
 
 ## P0 — adapter boundary
 
-- [ ] **Extract an `AgentRuntime` contract; make the Claude adapter the default.**
-      Move `buildClaudeArgs`/`streamClaude`/result-parse/rate-limit-detect behind
-      an `AgentRuntime` object; `StageResult` carries the producing runtime id.
-      Claude behavior byte-for-byte unchanged; tests pin runtime selection.
+- [x] **Extract an `AgentRuntime` contract; make the Claude adapter the default.**
+      `AgentRuntime` type + `claudeRuntime` adapter + `getAgentRuntime(id)` selector
+      in `runner.ts`; `streamClaude`→`streamRuntime(runtime)` routes through
+      `runtime.buildArgs`/`parseResultEvent`/`command`/`supportsSandboxSettings`;
+      `StageResult.runtimeId` stamps the producing runtime; `stage-exec` selects
+      the adapter from `agentId`. Claude behavior byte-for-byte unchanged; tests
+      pin selection + adapter output. (Rate-limit detect left in `rate-limit.ts`
+      for now — generic, Codex's shape is unknown until the P2 spike; not moved.)
 
 ## P2 — Codex spike
 

@@ -10,7 +10,7 @@ import {
 import { createInterface } from "node:readline";
 import { join, posix } from "node:path";
 
-import type { AgentRuntimeId } from "./agent-runtime.js";
+import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
 import type { Stage } from "./stages.js";
 import {
   dim,
@@ -27,6 +27,8 @@ import { emptyTokenUsage, parseTokenUsage, type TokenUsage } from "./tokens.js";
 
 export type RunStageOptions = {
   signal?: AbortSignal;
+  /** Agent runtime to drive the stage with; defaults to the Claude adapter. */
+  runtime?: AgentRuntime;
 };
 
 export type StageResult = {
@@ -35,10 +37,19 @@ export type StageResult = {
   isError: boolean;
   apiErrorStatus: string | null;
   usage: TokenUsage;
+  /** The agent runtime that produced this result (Claude's stream-json shape today). */
+  runtimeId: AgentRuntimeId;
 };
 
-/** Pure extraction of the fields Otto tracks from a stream-json `result` event. */
-export function resultFromEvent(ev: unknown): StageResult {
+/**
+ * Pure extraction of the fields Otto tracks from a stream-json `result` event.
+ * `runtimeId` stamps which runtime produced it (defaults to claude — the only
+ * runtime whose output is this stream-json shape today).
+ */
+export function resultFromEvent(
+  ev: unknown,
+  runtimeId: AgentRuntimeId = "claude"
+): StageResult {
   const e = (ev ?? {}) as Record<string, unknown>;
   return {
     result: typeof e.result === "string" ? e.result : "",
@@ -47,6 +58,7 @@ export function resultFromEvent(ev: unknown): StageResult {
     apiErrorStatus:
       typeof e.api_error_status === "string" ? e.api_error_status : null,
     usage: parseTokenUsage(e),
+    runtimeId,
   };
 }
 
@@ -126,8 +138,8 @@ export function buildSandboxSettings(
   return { sandbox };
 }
 
-function abortError(): Error {
-  const err = new Error("claude command aborted");
+function abortError(command: string): Error {
+  const err = new Error(`${command} command aborted`);
   err.name = "AbortError";
   return err;
 }
@@ -187,6 +199,61 @@ export function buildClaudeArgs(
   return args;
 }
 
+/**
+ * Provider-neutral boundary between the loop and the agent CLI it drives
+ * (issue #24 P0). Everything above this contract — stages, templates, retries,
+ * logs, budget — is runtime-agnostic; everything Claude-specific (argv flags,
+ * result-event shape) lives behind an adapter. Claude is the only implemented
+ * runtime today; Codex's adapter lands in a later slice.
+ */
+export type AgentRuntime = {
+  id: AgentRuntimeId;
+  displayName: string;
+  /** The CLI binary spawned (argv[0]); also used in log/error prefixes. */
+  command: string;
+  /** Whether the runtime accepts Otto's native-sandbox `--settings` file. */
+  supportsSandboxSettings: boolean;
+  /** Build the spawn argv for a stage (see {@link buildClaudeArgs}). */
+  buildArgs(
+    stage: Stage,
+    promptRelPath: string,
+    modelArgs: string[],
+    settingsPath?: string
+  ): string[];
+  /** Map one final result event into a provider-neutral {@link StageResult}. */
+  parseResultEvent(ev: unknown): StageResult;
+};
+
+/** The Claude Code adapter — Otto's default and historically-hardcoded runtime. */
+export const claudeRuntime: AgentRuntime = {
+  id: "claude",
+  displayName: AGENT_DISPLAY_NAMES.claude,
+  command: "claude",
+  supportsSandboxSettings: true,
+  buildArgs: buildClaudeArgs,
+  parseResultEvent: (ev) => resultFromEvent(ev, "claude"),
+};
+
+const AGENT_RUNTIMES: Partial<Record<AgentRuntimeId, AgentRuntime>> = {
+  claude: claudeRuntime,
+};
+
+/**
+ * Select the adapter for a resolved runtime id. Only `claude` is implemented;
+ * `codex` throws a clean "not implemented" error (real codex runs are already
+ * blocked upstream in run-bin, so this is a defensive backstop with a
+ * consistent message).
+ */
+export function getAgentRuntime(id: AgentRuntimeId): AgentRuntime {
+  const runtime = AGENT_RUNTIMES[id];
+  if (!runtime) {
+    throw new Error(
+      `the ${AGENT_DISPLAY_NAMES[id]} runtime is not implemented yet; only Claude Code is currently runnable (see issue #24).`
+    );
+  }
+  return runtime;
+}
+
 export async function runStage(
   stage: Stage,
   renderedPrompt: string,
@@ -209,8 +276,13 @@ export async function runStage(
   const promptRelPath = posix.join(".otto-tmp", promptName);
   writeFileSync(promptHostPath, renderedPrompt, "utf8");
 
+  const runtime = options.runtime ?? claudeRuntime;
+
   let settingsHostPath: string | undefined;
-  if (resolveRunner(process.env.OTTO_RUNNER) === "sandbox") {
+  if (
+    runtime.supportsSandboxSettings &&
+    resolveRunner(process.env.OTTO_RUNNER) === "sandbox"
+  ) {
     const settings = buildSandboxSettings(
       workspaceDir,
       resolveSandboxNet(process.env.OTTO_SANDBOX_NET)
@@ -225,13 +297,13 @@ export async function runStage(
   process.stderr.write(`${dim("log → " + logPath)}\n`);
 
   try {
-    const argv = buildClaudeArgs(
+    const argv = runtime.buildArgs(
       stage,
       promptRelPath,
       resolveModelArgs(process.env.OTTO_MODEL),
       settingsHostPath
     );
-    return await streamClaude(argv, workspaceDir, logPath, options);
+    return await streamRuntime(argv, workspaceDir, logPath, runtime, options);
   } finally {
     rmSync(promptHostPath, { force: true });
     if (settingsHostPath) rmSync(settingsHostPath, { force: true });
@@ -239,14 +311,15 @@ export async function runStage(
   }
 }
 
-function streamClaude(
+function streamRuntime(
   argv: string[],
   cwd: string,
   logPath: string,
+  runtime: AgentRuntime,
   options: RunStageOptions = {}
 ): Promise<StageResult> {
   if (options.signal?.aborted) {
-    return Promise.reject(abortError());
+    return Promise.reject(abortError(runtime.command));
   }
 
   return new Promise((resolve, reject) => {
@@ -266,6 +339,7 @@ function streamClaude(
       isError: false,
       apiErrorStatus: null,
       usage: emptyTokenUsage(),
+      runtimeId: runtime.id,
     };
     let lastResetsAt: number | null = null;
     const stderrTail: string[] = [];
@@ -311,7 +385,7 @@ function streamClaude(
       } catch {
         // Already dead; close handling below will settle if needed.
       }
-      rejectOnce(abortError());
+      rejectOnce(abortError(runtime.command));
     };
 
     rl = createInterface({ input: child.stdout });
@@ -333,7 +407,7 @@ function streamClaude(
         if (r != null) lastResetsAt = r;
       }
       if (parsed.type === "result") {
-        final = resultFromEvent(parsed);
+        final = runtime.parseResultEvent(parsed);
         // Arm one-shot post-result grace timer to recover from claude-CLI
         // self-deadlocks where the child emits its final NDJSON but never
         // exits. See docs/prd/result-grace-timer.md.
@@ -341,7 +415,7 @@ function streamClaude(
           graceTimer = setTimeout(() => {
             if (settled) return;
             process.stderr.write(
-              `${dim(`grace timer fired after ${graceMs}ms post-result — killing claude child`)}\n`
+              `${dim(`grace timer fired after ${graceMs}ms post-result — killing ${runtime.command} child`)}\n`
             );
             try {
               child.kill();
@@ -366,7 +440,7 @@ function streamClaude(
       if (settled) return;
       stderrTail.push(line);
       if (stderrTail.length > STDERR_TAIL_LINES) stderrTail.shift();
-      process.stderr.write(`${dim("claude  " + line)}\n`);
+      process.stderr.write(`${dim(runtime.command + "  " + line)}\n`);
     });
 
     if (options.signal?.aborted) {
@@ -387,7 +461,9 @@ function streamClaude(
       }
       if (code !== 0) {
         rejectOnce(
-          new Error(`claude exited with ${code}\n${stderrTail.join("\n")}`)
+          new Error(
+            `${runtime.command} exited with ${code}\n${stderrTail.join("\n")}`
+          )
         );
         return;
       }

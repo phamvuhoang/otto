@@ -8,10 +8,11 @@ import {
 import { emptyTokenUsage } from "../tokens.js";
 
 const stageResult = (
-  overrides: Omit<Parameters<typeof isLimitResult>[0], "usage">
+  overrides: Omit<Parameters<typeof isLimitResult>[0], "usage" | "runtimeId">
 ) => ({
   ...overrides,
   usage: emptyTokenUsage(),
+  runtimeId: "claude" as const,
 });
 
 describe("RateLimitError", () => {

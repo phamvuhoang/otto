@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../runner.js", () => ({
   runStage: mocks.runStage,
+  getAgentRuntime: (id: string) => ({ id }),
   stageLogPath: (
     workspaceDir: string,
     iteration: number,
@@ -32,6 +33,7 @@ const ok = {
   isError: false,
   apiErrorStatus: null,
   usage: emptyTokenUsage(),
+  runtimeId: "claude" as const,
 };
 
 describe("executeStage token mode", () => {

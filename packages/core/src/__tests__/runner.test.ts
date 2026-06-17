@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildClaudeArgs,
   buildSandboxSettings,
+  claudeRuntime,
+  getAgentRuntime,
   parseGraceMs,
   resolveModelArgs,
   resolveRunner,
@@ -168,6 +170,7 @@ describe("resultFromEvent", () => {
         cacheCreationInputTokens: 3,
         cacheReadInputTokens: 4,
       },
+      runtimeId: "claude",
     });
   });
   it("defaults missing fields safely", () => {
@@ -182,6 +185,7 @@ describe("resultFromEvent", () => {
         cacheCreationInputTokens: 0,
         cacheReadInputTokens: 0,
       },
+      runtimeId: "claude",
     });
   });
   it("captures an error status string", () => {
@@ -191,6 +195,48 @@ describe("resultFromEvent", () => {
       isError: true,
       apiErrorStatus: "429",
     });
+  });
+  it("stamps the producing runtime id (defaults to claude)", () => {
+    expect(resultFromEvent({}).runtimeId).toBe("claude");
+    expect(resultFromEvent({}, "codex").runtimeId).toBe("codex");
+  });
+});
+
+describe("getAgentRuntime", () => {
+  it("returns the claude adapter for the claude id", () => {
+    const rt = getAgentRuntime("claude");
+    expect(rt).toBe(claudeRuntime);
+    expect(rt.id).toBe("claude");
+    expect(rt.displayName).toBe("Claude Code");
+    expect(rt.command).toBe("claude");
+    expect(rt.supportsSandboxSettings).toBe(true);
+  });
+
+  it("throws a clean 'not implemented' error for codex (no adapter yet)", () => {
+    expect(() => getAgentRuntime("codex")).toThrow(/not implemented/i);
+  });
+});
+
+describe("claudeRuntime adapter", () => {
+  const stage = { name: "test", template: "test.md" };
+  const promptPath = ".otto-tmp/prompt.md";
+
+  it("buildArgs matches buildClaudeArgs (claude invocation, byte-for-byte)", () => {
+    expect(claudeRuntime.buildArgs(stage, promptPath, [], "/ws/s.json")).toEqual(
+      buildClaudeArgs(stage, promptPath, [], "/ws/s.json")
+    );
+  });
+
+  it("parseResultEvent stamps runtimeId claude alongside the parsed fields", () => {
+    const r = claudeRuntime.parseResultEvent({
+      type: "result",
+      result: "done",
+      total_cost_usd: 0.2,
+      is_error: false,
+    });
+    expect(r.runtimeId).toBe("claude");
+    expect(r.result).toBe("done");
+    expect(r.costUsd).toBe(0.2);
   });
 });
 

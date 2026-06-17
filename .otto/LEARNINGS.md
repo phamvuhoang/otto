@@ -2,6 +2,34 @@
 
 ## Conventions
 
+- **`AgentRuntime` adapter boundary (issue #24 P0 step 3)** — the runner no
+  longer hardcodes `claude`; everything Claude-specific lives behind an
+  `AgentRuntime` object in `runner.ts`: `{ id, displayName, command,
+  supportsSandboxSettings, buildArgs(stage,promptRel,modelArgs,settings?),
+  parseResultEvent(ev) }`. `claudeRuntime` is the sole adapter (delegates
+  `buildArgs`→`buildClaudeArgs`, `parseResultEvent`→`resultFromEvent(ev,"claude")`);
+  `getAgentRuntime(id)` selects it from a `Partial<Record<AgentRuntimeId,…>>`
+  registry and **throws a clean "not implemented" for `codex`** (defensive
+  backstop — real codex runs are already blocked upstream in run-bin, so this is
+  belt-and-suspenders, NOT the primary guard). `streamClaude`→`streamRuntime`
+  gained a `runtime` param and routes the final result through
+  `runtime.parseResultEvent`, stamping the new **`StageResult.runtimeId`** (the
+  contract's "StageResult identifies the runtime that produced it"); all
+  `claude`-literal log/error strings now use `runtime.command` so claude output
+  is byte-for-byte identical. `runStage` takes the adapter via a new optional
+  `RunStageOptions.runtime` (defaults `claudeRuntime`, so old callers/test mocks
+  are unchanged); `stage-exec` selects it with `getAgentRuntime(opts.agentId ??
+  DEFAULT_AGENT)`. **Test gotcha:** any test that `vi.mock("../runner.js")` must
+  now also stub `getAgentRuntime` (loop.test.ts + stage-exec.test.ts both mock
+  the module) or `executeStage` throws on the undefined import; a `(id)=>({id})`
+  stub suffices since the mocked `runStage` ignores it. **Scope call:** rate-limit
+  detection (`isLimitResult`/`resetsAtFromEvent` in `rate-limit.ts`) was NOT moved
+  behind the adapter — it stays generic until the P2 Codex spike reveals Codex's
+  signal shape (YAGNI; the plan bullet listed it but P0 acceptance doesn't).
+  `supportsSandboxSettings` gates writing the `--settings` file (claude=true →
+  unchanged). Pinned by `runner.test.ts` (`getAgentRuntime` selection + throw,
+  `claudeRuntime` adapter output, `resultFromEvent` runtimeId stamp). The next
+  P0/P2 task is the throwaway Codex spike.
 - **Runtime visibility threading (issue #24 P1 step 2)** — the resolved
   `{id,displayName}` reaches `runLoop` via two new `LoopOptions`
   (`agentId`/`agentDisplayName`, default `claude`/`Claude Code`) wired from

@@ -550,6 +550,9 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       scopes,
       agentId: agent.id,
       agentDisplayName: agent.displayName,
+      fallbackAgentId: fallback.agent?.id,
+      fallbackAgentDisplayName: fallback.agent?.displayName,
+      autoSwitchOnLimit: fallback.autoSwitch,
     });
     return;
   }
@@ -574,5 +577,8 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     fresh: flags.fresh,
     agentId: agent.id,
     agentDisplayName: agent.displayName,
+    fallbackAgentId: fallback.agent?.id,
+    fallbackAgentDisplayName: fallback.agent?.displayName,
+    autoSwitchOnLimit: fallback.autoSwitch,
   });
 }

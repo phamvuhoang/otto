@@ -2,6 +2,35 @@
 
 ## Conventions
 
+- **Switch-on-limit is loop-orchestration, not a runner change (issue #24 P4).**
+  `runLoop` gained `fallbackAgentId`/`fallbackAgentDisplayName`/`autoSwitchOnLimit`
+  (from run-bin's resolved `fallback.*`, threaded through `runWatch` too). The
+  active runtime is a **mutable** `activeAgentId`/`activeAgentDisplayName` (starts
+  at the primary `agentId`); EVERY downstream seam that used `agentId`/
+  `agentDisplayName` now reads the `active*` vars (stage banner, executeStage +
+  panel `agentId`, failure `stageLogPath`, summary) so they track the live runtime
+  after a switch. The switch happens **inside the existing rate-limit catch** in
+  `loop.ts`, AFTER the accounting rollback to `accountingSnapshot` (so budget/token
+  totals survive) and BEFORE the wait/halt path: `if (autoSwitchOnLimit &&
+  fallbackAgentId && activeAgentId !== fallbackAgentId)` → reassign `activeAgentId`
+  to the fallback, set `switched=true`, print `↪ auto-switch on rate limit: <from>
+  → <to> for iteration N <stage>`, `persist(i,"running")`, `continue` the `for(;;)`
+  retry loop (runOnce closes over the mutable `activeAgentId`, so the retry runs on
+  the fallback). **Only ONE switch** — once `activeAgentId === fallbackAgentId` the
+  guard is false, so a fallback that ALSO limits falls through to the normal
+  wait/halt (no ping-pong, matches the "switched once" summary). `RunState.agent`
+  (new optional field, `state.ts`) persists the active runtime each `persist()`;
+  on resume, `if (resuming && prior.agent && prior.agent !== agentId)` restores it
+  (`switched=true`, display from `AGENT_DISPLAY_NAMES`) so a resumed run keeps the
+  fallback — `--fresh` clears state → back to primary. Summary shows `runtime:
+  <primary> -> <active> (switched once: rate limit)` when switched, else `<active>`.
+  Pinned by `loop.test.ts` "auto-switch on limit" (claude→codex, codex→claude,
+  off→wait, fallback-also-limits→wait, resume-keeps-fallback); the test reads the
+  retry's runtime via `runStage.mock.calls[n][6].runtime.id` (the mocked
+  `getAgentRuntime` returns `{id}`). **End-to-end cross-provider switching is still
+  gated on the BLOCKED Codex adapter** — a real switch to codex hits
+  `getAgentRuntime`'s "not implemented" throw; the orchestration is provider-neutral
+  and fully unit-tested with mocks, and becomes runnable when the codex adapter lands.
 - **Fallback-on-limit config is parsed + reported but inert (issue #24 P4,
   config slice).** `agent-runtime.ts` adds `resolveFallback({flagAgent, envAgent,
   configAgent, flagAutoSwitch, envAutoSwitch, configAutoSwitch})` →
@@ -21,9 +50,10 @@
   agentError guard. `--print-config` shows one `fallback` line:
   `<id> (<name>, <source>) · auto-switch on|off` when an agent is set, else
   `auto-switch on · no fallback agent set` (misconfig warning) when only switch is
-  on, else `off`, else `invalid (<err>)`. **This slice resolves config only — the
-  actual switch-on-limit at the retry/stage boundary is the next P4 task**, so
-  default-off keeps Claude behavior unchanged. Pinned by `agent-runtime.test.ts`
+  on, else `off`, else `invalid (<err>)`. This slice resolved config only; the
+  actual switch-on-limit at the retry/stage boundary now lives in `loop.ts` (see
+  the switch-on-limit bullet above). Default-off keeps Claude behavior unchanged.
+  Pinned by `agent-runtime.test.ts`
   (resolveFallback precedence/truthy/no-default/throw + readFallbackConfig),
   `cli-help.test.ts` (`--fallback-agent`/`--auto-switch-on-limit` parse +
   print-config fallback line incl. the no-agent warning), `run-bin.test.ts`

@@ -828,6 +828,153 @@ describe("runLoop", () => {
     expect(mocks.runStage).toHaveBeenCalledTimes(2);
   });
 
+  describe("auto-switch on limit", () => {
+    const runtimeOf = (call: number) =>
+      (
+        mocks.runStage.mock.calls[call][6] as { runtime: { id: string } }
+      ).runtime.id;
+
+    it("switches to the fallback runtime on a rate limit instead of waiting", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const { RateLimitError } = await import("../rate-limit.js");
+      const future = Math.floor(Date.now() / 1000) + 600;
+      mocks.runStage
+        .mockRejectedValueOnce(new RateLimitError("session limit", future))
+        .mockResolvedValueOnce(ok(sentinel));
+
+      await runLoop(
+        loopOptions(dirs, {
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "claude",
+          agentDisplayName: "Claude Code",
+          fallbackAgentId: "codex",
+          fallbackAgentDisplayName: "Codex CLI",
+          autoSwitchOnLimit: true,
+        })
+      );
+
+      expect(mocks.runStage).toHaveBeenCalledTimes(2);
+      expect(runtimeOf(0)).toBe("claude");
+      expect(runtimeOf(1)).toBe("codex"); // retried on the fallback
+      expect(mocks.sleep).not.toHaveBeenCalled(); // switched, did not wait
+      expect(stderrText()).toContain("auto-switch");
+      expect(stdoutText()).toContain("runtime: claude -> codex");
+    });
+
+    it("switches codex -> claude (reverse direction)", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const { RateLimitError } = await import("../rate-limit.js");
+      const future = Math.floor(Date.now() / 1000) + 600;
+      mocks.runStage
+        .mockRejectedValueOnce(new RateLimitError("session limit", future))
+        .mockResolvedValueOnce(ok(sentinel));
+
+      await runLoop(
+        loopOptions(dirs, {
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "codex",
+          agentDisplayName: "Codex CLI",
+          fallbackAgentId: "claude",
+          fallbackAgentDisplayName: "Claude Code",
+          autoSwitchOnLimit: true,
+        })
+      );
+
+      expect(runtimeOf(1)).toBe("claude");
+      expect(stdoutText()).toContain("runtime: codex -> claude");
+    });
+
+    it("waits instead of switching when auto-switch is off", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const { RateLimitError } = await import("../rate-limit.js");
+      const future = Math.floor(Date.now() / 1000) + 600;
+      mocks.runStage
+        .mockRejectedValueOnce(new RateLimitError("session limit", future))
+        .mockResolvedValueOnce(ok(sentinel));
+
+      await runLoop(
+        loopOptions(dirs, {
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "claude",
+          fallbackAgentId: "codex",
+          fallbackAgentDisplayName: "Codex CLI",
+          autoSwitchOnLimit: false,
+        })
+      );
+
+      expect(mocks.sleep).toHaveBeenCalled();
+      expect(runtimeOf(1)).toBe("claude"); // stayed on the primary
+      expect(stderrText()).not.toContain("auto-switch");
+    });
+
+    it("waits for reset when the fallback runtime also hits a limit", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const { RateLimitError } = await import("../rate-limit.js");
+      const future = Math.floor(Date.now() / 1000) + 600;
+      mocks.runStage
+        .mockRejectedValueOnce(new RateLimitError("session limit", future)) // claude → switch
+        .mockRejectedValueOnce(new RateLimitError("session limit", future)) // codex also limits
+        .mockResolvedValueOnce(ok(sentinel));
+
+      await runLoop(
+        loopOptions(dirs, {
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "claude",
+          fallbackAgentId: "codex",
+          fallbackAgentDisplayName: "Codex CLI",
+          autoSwitchOnLimit: true,
+        })
+      );
+
+      expect(mocks.runStage).toHaveBeenCalledTimes(3);
+      expect(mocks.sleep).toHaveBeenCalled(); // waited after the fallback limit
+      expect(runtimeOf(2)).toBe("codex"); // did not switch back
+      const switchCount = stderrText().split("auto-switch").length - 1;
+      expect(switchCount).toBe(1); // only one switch announced
+    });
+
+    it("resumes onto the persisted fallback runtime", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const { writeState } = await import("../state.js");
+      writeState(dirs.workspaceDir, {
+        bin: "otto-afk",
+        mode: "afk",
+        inputs: "plan",
+        iteration: 1,
+        of: 1,
+        status: "running",
+        agent: "codex",
+        startedAt: "x",
+        updatedAt: "x",
+      });
+      mocks.runStage.mockResolvedValue(ok(sentinel));
+
+      await runLoop(
+        loopOptions(dirs, {
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "claude",
+          agentDisplayName: "Claude Code",
+          fallbackAgentId: "codex",
+          fallbackAgentDisplayName: "Codex CLI",
+          autoSwitchOnLimit: true,
+        })
+      );
+
+      expect(runtimeOf(0)).toBe("codex"); // resumed on the fallback
+      expect(stdoutText()).toContain("runtime: claude -> codex");
+    });
+  });
+
   it("halts cleanly when the reset is beyond maxWaitMs", async () => {
     const dirs = makeDirs();
     roots.push(dirs.root);

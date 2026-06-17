@@ -1,7 +1,7 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { AgentRuntimeId } from "./agent-runtime.js";
+import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
 import { readCoreVersion } from "./cli-help.js";
 import { acquire, type Releaser } from "./keepalive.js";
 import { notifyComplete, notifyError } from "./notify.js";
@@ -155,6 +155,14 @@ export type LoopOptions = {
   agentId?: AgentRuntimeId;
   /** Active runtime display name (e.g. "Claude Code"). Default "Claude Code". Shown in the run + stage banners. */
   agentDisplayName?: string;
+  /** Fallback runtime to switch to when the active runtime hits a usage/rate
+   *  limit. Undefined = no fallback configured (switching is off). */
+  fallbackAgentId?: AgentRuntimeId;
+  /** Display name for the fallback runtime; defaults from AGENT_DISPLAY_NAMES. */
+  fallbackAgentDisplayName?: string;
+  /** Switch to the fallback runtime on a limit instead of waiting for the reset.
+   *  Default false — switching providers changes model behavior, so it is opt-in. */
+  autoSwitchOnLimit?: boolean;
 };
 
 export type LoopOutcome = {
@@ -185,7 +193,24 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     fresh = false,
     agentId = "claude",
     agentDisplayName = "Claude Code",
+    fallbackAgentId,
+    fallbackAgentDisplayName,
+    autoSwitchOnLimit = false,
   } = opts;
+
+  // The runtime in effect right now. Starts at the resolved primary and is
+  // reassigned in place when auto-switch fires on a limit, so every downstream
+  // seam (stage banner, executeStage/panel agentId, log path, state, summary)
+  // tracks the live runtime rather than the initially-selected one.
+  let activeAgentId: AgentRuntimeId = agentId;
+  let activeAgentDisplayName = agentDisplayName;
+  const fallbackDisplayName =
+    fallbackAgentDisplayName ??
+    (fallbackAgentId ? AGENT_DISPLAY_NAMES[fallbackAgentId] : undefined);
+  // True once we have switched off the primary; `switchFromId` is the primary we
+  // came from, so the summary can report `primary -> fallback`.
+  let switched = false;
+  const switchFromId: AgentRuntimeId = agentId;
 
   const versionLine = `${bin} ${cliVersion} (core ${readCoreVersion()}) · runtime: ${agentDisplayName}`;
   process.stderr.write(
@@ -283,9 +308,12 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     const iters = `${iterations} iteration${iterations === 1 ? "" : "s"}`;
     const tokens =
       tokenMode === "off" ? "" : ` · tokens ${formatTokenUsage(runTokenUsage)}`;
+    const runtimeLabel = switched
+      ? `${switchFromId} -> ${activeAgentId} (switched once: rate limit)`
+      : activeAgentId;
     let line =
       `${greenOut(SYM_OUT.bullet)} ${boldOut(`Otto ${reason}`)}` +
-      `${dimOut(` · ${iters} · $${runCostUsd.toFixed(2)}${tokens} · runtime: ${agentId}`)}\n` +
+      `${dimOut(` · ${iters} · $${runCostUsd.toFixed(2)}${tokens} · runtime: ${runtimeLabel}`)}\n` +
       `${dimOut(`  → next: ${nextActionFor(reason)}`)}\n`;
     const deferred = deferredFollowupCount(workspaceDir);
     if (deferred > 0) {
@@ -321,9 +349,19 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       of: total,
       status,
       resetsAt: resetsAt ?? null,
+      agent: activeAgentId,
       startedAt: prior?.startedAt ?? nowIso(),
       updatedAt: nowIso(),
     });
+
+  // Resume keeps the fallback: if the prior run had switched runtimes, restore
+  // it so the resumed run continues on the fallback. `--fresh` clears state, so
+  // a fresh run always starts on the primary.
+  if (resuming && prior!.agent && prior!.agent !== agentId) {
+    activeAgentId = prior!.agent;
+    activeAgentDisplayName = AGENT_DISPLAY_NAMES[prior!.agent];
+    switched = true;
+  }
 
   if (resuming && prior!.status === "waiting-rate-limit") {
     const waitMs = computeWaitMs(
@@ -353,8 +391,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         }
 
         const banner = USE_COLOR
-          ? `${dim("━━━")} ${bold(`iteration ${i}/${total}`)} ${dim("·")} ${bold(stage.name)} ${dim(`(stage ${s + 1}/${stages.length})`)} ${dim("·")} ${bold(agentDisplayName)} ${dim("━━━")}`
-          : `== iteration ${i}/${total} · ${stage.name} (stage ${s + 1}/${stages.length}) · ${agentDisplayName} ==`;
+          ? `${dim("━━━")} ${bold(`iteration ${i}/${total}`)} ${dim("·")} ${bold(stage.name)} ${dim(`(stage ${s + 1}/${stages.length})`)} ${dim("·")} ${bold(activeAgentDisplayName)} ${dim("━━━")}`
+          : `== iteration ${i}/${total} · ${stage.name} (stage ${s + 1}/${stages.length}) · ${activeAgentDisplayName} ==`;
         process.stderr.write(`\n${banner}\n`);
 
         const usePanel =
@@ -373,7 +411,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               cooldownMs,
               tokenMode,
               signal: activeSignal,
-              agentId,
+              agentId: activeAgentId,
               onStage: accountStage,
             });
           }
@@ -386,7 +424,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             maxRetries,
             tokenMode,
             signal: activeSignal,
-            agentId,
+            agentId: activeAgentId,
           });
           accountStage(r);
           return r;
@@ -419,6 +457,30 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               runTokenUsage = accountingSnapshot.tokenUsage;
               cooldownFactor = accountingSnapshot.cooldownFactor;
               const resetsAt = (err as RateLimitError).resetsAt;
+
+              // Auto-switch on limit: when a fallback runtime is configured and
+              // we are not already on it, switch at this stage boundary and
+              // re-run the stage on the fallback instead of waiting for reset.
+              // Budget/token totals were just rolled back to the snapshot, so
+              // accounting survives the switch. Only one switch happens (once
+              // active === fallback the condition is false), so a fallback that
+              // also limits falls through to the normal wait/halt path.
+              if (
+                autoSwitchOnLimit &&
+                fallbackAgentId &&
+                activeAgentId !== fallbackAgentId
+              ) {
+                const fromName = activeAgentDisplayName;
+                activeAgentId = fallbackAgentId;
+                activeAgentDisplayName = fallbackDisplayName ?? fallbackAgentId;
+                switched = true;
+                process.stderr.write(
+                  `${dim(`↪ auto-switch on rate limit: ${fromName} → ${activeAgentDisplayName} for iteration ${i} ${stage.name}`)}\n`
+                );
+                persist(i, "running");
+                continue;
+              }
+
               const waitMs = computeWaitMs(
                 resetsAt,
                 Date.now(),
@@ -447,7 +509,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             summarize("aborted", i - 1);
             return outcome();
           }
-          const stageLog = stageLogPath(workspaceDir, i, stage.name, agentId);
+          const stageLog = stageLogPath(workspaceDir, i, stage.name, activeAgentId);
           const failureMarker = `[failure] iteration ${i} stage ${stage.name} failed after ${maxRetries} retries: ${(err as Error).message}`;
           try {
             appendFileSync(stageLog, failureMarker + "\n");

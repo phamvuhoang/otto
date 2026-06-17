@@ -181,6 +181,12 @@ export type RunWatchOptions = {
   agentId?: AgentRuntimeId;
   /** Active runtime display name, shown in the per-run banner. Default "Claude Code". */
   agentDisplayName?: string;
+  /** Fallback runtime for auto-switch-on-limit, threaded into each loop. */
+  fallbackAgentId?: AgentRuntimeId;
+  /** Display name for the fallback runtime. */
+  fallbackAgentDisplayName?: string;
+  /** Switch to the fallback runtime on a limit instead of waiting. Default false. */
+  autoSwitchOnLimit?: boolean;
   /**
    * Multi-target watch: several GitHub scopes the daemon rotates through. When
    * set, each cycle polls every scope, runs one loop for the first scope with
@@ -334,6 +340,9 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
             cliVersion: opts.cliVersion,
             agentId: opts.agentId,
             agentDisplayName: opts.agentDisplayName,
+            fallbackAgentId: opts.fallbackAgentId,
+            fallbackAgentDisplayName: opts.fallbackAgentDisplayName,
+            autoSwitchOnLimit: opts.autoSwitchOnLimit,
           });
           cumulativeCost += outcome.costUsd;
           process.stderr.write(

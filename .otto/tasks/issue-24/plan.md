@@ -84,9 +84,24 @@ task. Implement the first unchecked task per run.
       `--print-config` (exit 0) and fatal on a real run (mirrors the agent
       handling). Config-only slice — the actual switch is the next task. Pinned by
       `agent-runtime.test.ts` + `cli-help.test.ts` + `run-bin.test.ts`.
-- [ ] **Switch-on-limit at retry/stage boundary**, recorded in state + visible in
+- [x] **Switch-on-limit at retry/stage boundary**, recorded in state + visible in
       stderr/summary; budget survives the switch; resume keeps the fallback unless
-      `--fresh`.
+      `--fresh`. `runLoop` now carries `fallbackAgentId`/`fallbackAgentDisplayName`/
+      `autoSwitchOnLimit`; an active runtime is tracked mutably (`activeAgentId`)
+      and reassigned in the rate-limit catch when a fallback is configured and not
+      already active — re-running the stage on the fallback instead of waiting
+      (accounting already rolled back to the snapshot, so budget survives). Only
+      one switch (active===fallback ⇒ wait/halt), so a fallback that also limits
+      still halts cleanly. `RunState.agent` persists the active runtime so a resume
+      restores the fallback (`--fresh` clears state → primary). Summary shows
+      `runtime: <primary> -> <fallback> (switched once: rate limit)`; stderr prints
+      the switch line. Wired from run-bin's `fallback.*` into both the direct
+      `runLoop` and `runWatch`. Pinned by `loop.test.ts` (switch claude↔codex,
+      off→wait, fallback-also-limits→wait, resume-keeps-fallback).
+      **End-to-end cross-provider switching stays gated on the Codex adapter
+      (above, BLOCKED): a real switch to codex hits getAgentRuntime's "not
+      implemented" throw. The orchestration is provider-neutral + fully unit-tested
+      with mocked runtimes; it becomes runnable when the codex adapter lands.**
 
 ## P5 — docs + smoke
 

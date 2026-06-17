@@ -1,6 +1,8 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import type { AgentRuntimeId } from "./agent-runtime.js";
+
 export type RunStatus =
   | "running"
   | "waiting-rate-limit"
@@ -15,6 +17,9 @@ export type RunState = {
   of: number;
   status: RunStatus;
   resetsAt?: number | null;
+  /** Active runtime at persist time. Records an auto-switch so a resumed run
+   *  keeps the fallback (unless --fresh clears state). Absent on pre-switch runs. */
+  agent?: AgentRuntimeId;
   startedAt: string;
   updatedAt: string;
 };

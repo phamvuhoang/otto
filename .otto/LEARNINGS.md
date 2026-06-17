@@ -28,6 +28,26 @@
   `cli-help.test.ts` (parseFlags + print-config). Design-ordering call: this
   shipped before the still-unchecked "remaining artifacts" P2 item because that
   item is design-blocked (followups) and this one is not.
+- **Task-local follow-ups (`.otto/tasks/<task-key>/followups.md`, issue #21 P2)** —
+  the apply-review follow-up trail moved from the flat global
+  `.otto/review-followups.md` to the task-grouped layout, beside spec/plan.
+  Template-driven (`apply-review.md`), no otto code. The "no task-key source for
+  apply-review" blocker that deferred this 3× is resolved by **deriving the key from
+  the current git branch's final path segment** (`git branch --show-current` →
+  part after the last `/`): apply-review always runs on the task branch
+  `<convention>/<slug>`, so the branch IS the task-key source — resolved by the
+  agent in prose (NO shell tag, so Windows-safe; mirrors how `superpowers.md`
+  resolves its key). "Globally summarizable" (the issue's other requirement) is met
+  by the globbable `.otto/tasks/*/followups.md` path, not by re-aggregating into one
+  file. WRITE new task-local; the legacy global is still READ-as-fallback for one
+  release (new writes never go there). **Scope call: only follow-ups moved**, because
+  it is the ONLY one of the four named "remaining artifacts" actually persisted as a
+  flat `.otto/` file today — `reviews/` go to a temp `FINDINGS_DIR` (panel), the
+  quality-report is emitted to the PR/issue-comment by the contract (not a file), and
+  `metadata.json` has no producer/consumer (speculative → YAGNI, dropped). Pinned by
+  `apply-review.test.ts` ("records follow-ups under the task dir": branch-derived key,
+  task-local write path, the `*` glob, legacy-read fallback). The remaining P2 items
+  on the plan are now closed by this slice; only P4 (docs/migration) is left open.
 - **Task-grouped artifact layout (`.otto/tasks/<task-key>/`, issue #21 P2)** is
   template-driven, NOT code: no otto src writes spec/plan — the `superpowers.md`
   workflow prose tells the agent where to put them, so the layout change is a

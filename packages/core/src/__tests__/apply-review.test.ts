@@ -80,6 +80,56 @@ describe("apply-review follow-up trail", () => {
   });
 });
 
+describe("apply-review records follow-ups under the task dir", () => {
+  // P2 (issue #21): the remaining persisted artifact — follow-ups — moves from
+  // the flat global .otto/review-followups.md to the task-grouped layout
+  // .otto/tasks/<task-key>/followups.md, beside the task's spec/plan. The
+  // task-key blocker is resolved by deriving it from the current git branch
+  // (apply-review always runs on the task branch <convention>/<slug>), so the
+  // branch's final segment IS the key — resolved by the agent in prose, no shell.
+  it("resolves the task key from the current git branch", () => {
+    const ws = mkdtempSync(join(tmpdir(), "otto-ar-"));
+    try {
+      const out = render(ws);
+      expect(out).toContain("git branch --show-current");
+      expect(out).toContain("final path segment");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("writes deferred findings to the task-local followups file", () => {
+    const ws = mkdtempSync(join(tmpdir(), "otto-ar-"));
+    try {
+      const out = render(ws);
+      expect(out).toContain(".otto/tasks/<task-key>/followups.md");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps follow-ups globally summarizable via the task glob", () => {
+    const ws = mkdtempSync(join(tmpdir(), "otto-ar-"));
+    try {
+      const out = render(ws);
+      expect(out).toContain(".otto/tasks/*/followups.md");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("still reads the legacy global trail as a fallback for one release", () => {
+    const ws = mkdtempSync(join(tmpdir(), "otto-ar-"));
+    try {
+      const out = render(ws);
+      expect(out).toContain("./.otto/review-followups.md");
+      expect(out).toContain("fallback");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+});
+
 // The six contract sections, in order — must match quality-report.test.ts.
 const CONTRACT_SECTIONS = [
   "## Verdict",

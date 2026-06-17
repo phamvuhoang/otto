@@ -43,11 +43,21 @@ This run implements **only the first unchecked task**.
       layout, so a move would break it — the legacy-read fallback handles
       migration on the next release instead. → verify: `pnpm -r typecheck && pnpm
       -r test && pnpm test`
-- [ ] Adopt `.otto/tasks/<task-key>/` for the remaining artifacts
-      (reviews/followups/quality-report/metadata). Needs the followups
-      design call (the issue wants per-item task-local source but still globally
-      summarizable) + a task-key source for `apply-review.md`, so it is its own
-      task rather than folded into the spec/plan slice above.
+- [x] Adopt `.otto/tasks/<task-key>/` for **follow-ups** (the only one of the
+      four named artifacts actually persisted as a flat `.otto/` file today).
+      `apply-review.md` now resolves a task key from the current git branch's
+      final segment (it always runs on the task branch `<convention>/<slug>`,
+      resolving the "no task-key source" blocker) and WRITES deferred findings to
+      `.otto/tasks/<task-key>/followups.md`, beside the task's spec/plan — globally
+      summarizable via the `.otto/tasks/*/followups.md` glob. The legacy global
+      `.otto/review-followups.md` is still READ as a fallback for one release; new
+      writes never go there. Template-driven (no otto code writes followups); pinned
+      by `apply-review.test.ts`. **Deferred (not file-persisted today, so out of
+      scope for this slice):** `reviews/` (panel writes verdicts to a temp
+      `FINDINGS_DIR`, never `.otto/`), `quality-report` (emitted to the PR
+      description / issue comment by the contract, not a file), and `metadata.json`
+      (speculative — no producer/consumer exists; YAGNI). → verify: `pnpm -r
+      typecheck && pnpm -r test && pnpm test`
 - [x] `--branch-convention` / `OTTO_BRANCH_CONVENTION` / `.otto/config.json`:
       validated + trailing-slash-normalized branch namespace routed through
       `resolveBranch` (`normalizeBranchConvention`). The canonical, git-ref-safe
@@ -59,9 +69,12 @@ This run implements **only the first unchecked task**.
       `deriveTaskKey`) stays with the deferred legacy-read task below — this item
       delivered the **convention namespace + validation** only. → verify:
       `pnpm -r typecheck && pnpm -r test && pnpm test`
-- [ ] Read legacy flat paths for the **remaining** artifacts
-      (`.otto/review-followups.md`, `.otto/reviews/…`) as fallback for one
-      release. (Spec/plan legacy-read already shipped with the first item.)
+- [x] Read legacy flat paths for the **remaining** artifacts as fallback for one
+      release. `.otto/review-followups.md` is now READ-as-fallback by
+      `apply-review.md` (shipped with the follow-ups slice above); new writes go
+      task-local. `.otto/reviews/…` has no legacy reader to preserve — reviews were
+      never persisted under `.otto/` (panel → temp `FINDINGS_DIR`), so there is
+      nothing to fall back to. Spec/plan legacy-read shipped with the first P2 item.
 
 ## P3 — Multi-target watch filters
 

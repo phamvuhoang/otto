@@ -30,6 +30,16 @@
 
 When every actionable finding has been addressed (fixed, or already fixed in git, or recorded as a follow-up), produce the completion report (see COMPLETION REPORT below), then output `<promise>NO MORE TASKS</promise>`.
 
+# TASK KEY
+
+Per-task artifacts (spec, plan, follow-ups) live together under
+`.otto/tasks/<task-key>/`, so everything Otto knows about a task is in one place.
+Resolve the task key for THIS run from the current git branch: run
+`git branch --show-current` and take the **final path segment** (the part after the
+last `/`) — e.g. `otto/issue-21` → `issue-21`, `feat/gh-acme-web-14` →
+`gh-acme-web-14`. If the branch name has no `/`, use it whole. Use this key in the
+follow-ups path below.
+
 # TRIAGE
 
 Classify each finding (judge from the review's own language — severity labels, "follow-up", "operational", "cosmetic", "low risk"):
@@ -56,7 +66,9 @@ Pick the highest-value actionable finding not yet addressed. Implement the fix. 
 
 # RECORD FOLLOW-UPS
 
-For each Deferred / follow-up finding, append a terse entry to `./.otto/review-followups.md` (create it lazily). Use a dated `##` heading for this review, then one bullet per finding with its severity and why it is deferred. This file is git-tracked — commit it WITH the related fix (do not make a separate commit just for it).
+For each Deferred / follow-up finding, append a terse entry to the **task-local** follow-ups file `./.otto/tasks/<task-key>/followups.md` (create it and its parent dir lazily), using the task key resolved above. Use a dated `##` heading for this review, then one bullet per finding with its severity and why it is deferred. Keeping follow-ups beside the task's spec/plan means everything Otto knows about a task is in one place, while staying globally summarizable by globbing `.otto/tasks/*/followups.md`.
+
+Read the task-local file first (it may already hold this task's prior deferrals). The legacy global `./.otto/review-followups.md` is still READ as a fallback for older runs (see `<existing-followups>`) for one release, but do NOT append new entries there. This file is git-tracked — commit it WITH the related fix (do not make a separate commit just for it).
 
 # COMMIT
 
@@ -76,8 +88,9 @@ contract below onto this round:
 - **What Changed / Evidence:** the findings you CONFIRMED and fixed, each with
   its `fix(review):` commit SHA and the review section it came from; the
   feedback loops you ran (tests / typecheck) and their result.
-- **Gaps And Follow-Ups:** findings you DEFERRED to `./.otto/review-followups.md`
-  (with why), and any REJECTED / won't-fix findings with their reason. Verdict
+- **Gaps And Follow-Ups:** findings you DEFERRED to
+  `./.otto/tasks/<task-key>/followups.md` (with why), and any REJECTED / won't-fix
+  findings with their reason. Verdict
   defaults to **Needs human review** when any actionable finding was left
   unfixed.
 

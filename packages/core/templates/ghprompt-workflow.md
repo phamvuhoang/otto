@@ -59,6 +59,15 @@ Committing the code is NOT necessarily the end of the run. How work "ships" depe
 
 When unsure which applies, prefer leaving the issue OPEN and surfacing the branch — never close an issue whose work has not landed on the default branch.
 
+## Quality report (completion handoff)
+
+Whatever the completion surface, hand the maintainer **one readable Otto quality report** so they can accept, reject, or request follow-up without replaying the run log — green tests alone are not the handoff. Emit it into the completion surface and cite concrete links/SHAs:
+
+- **PR-based repo:** put the report in the **PR description** (create or refresh it there) and reference it from any issue comment. Cite the PR URL, the issue link, and the commit SHAs on this branch.
+- **Commit-to-branch repo:** put the report in the **issue comment**, citing the branch and the commit SHAs.
+
+@include:quality-report.md
+
 # LEARNINGS
 
 The repo's accumulated learnings are in the `<learnings>` block — durable, reusable knowledge from prior iterations (conventions, gotchas, decisions and their why, dead ends). Consult it during EXPLORATION and IMPLEMENTATION so you don't relearn what's known or repeat a dead end.

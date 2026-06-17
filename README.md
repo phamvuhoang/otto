@@ -161,6 +161,7 @@ Requires **Node 20+**, an authenticated **Claude Code** (`claude /login`), and �
 | **[docs/CLI.md](./docs/CLI.md)**                   | Every command, flag, and mode — start at [Choosing a mode](./docs/CLI.md#choosing-a-mode) (afk vs ghafk vs verify vs apply-review). |
 | **[docs/CONFIG.md](./docs/CONFIG.md)**             | Environment variables, runner/sandbox, branch strategy, setup.                                                                      |
 | **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** | Runtime internals and data flow for library extenders.                                                                              |
+| **[docs/quality-report-samples.md](./docs/quality-report-samples.md)** | Filled-in sample quality reports — what good verification output looks like per run mode.                       |
 | **[SECURITY.md](./SECURITY.md)**                   | Threat model and the `bypassPermissions` blast-radius story.                                                                        |
 | **[CONTRIBUTING.md](./CONTRIBUTING.md)**           | Dev loop, tests, adding a stage, release pipeline.                                                                                  |
 | **[RELEASING.md](./RELEASING.md)**                 | release-please flow, version policy, secrets, rollback.                                                                             |

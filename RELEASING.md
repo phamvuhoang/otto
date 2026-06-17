@@ -83,6 +83,26 @@ Release PR appears.
 > available, merge still creates the tag but you must start the publish manually
 > (`workflow_dispatch` on `publish-npm.yml` with the tag name).
 
+### Release-quality gate
+
+Machine-green is necessary but **not sufficient**. Before merging the Release PR
+for a major change (a new run mode, a breaking change, or any `feat:` that shifts
+user-visible behavior), require **both**:
+
+1. **Machine verification** — `pnpm -r typecheck && pnpm -r test && pnpm test` all
+   green, plus the published-shape smoke (`node scripts/smoke-pack-install.mjs`,
+   §2 step 3).
+2. **A human-readable quality report** — run the read-only verify gate
+   (`otto-afk --verify …`) so it emits the
+   [Otto quality report](packages/core/templates/quality-report.md) (verdict +
+   evidence + gaps), then read it. The gate clears only when a human accepts the
+   report — verdict **Accepted** or **Accepted with follow-ups**. A *Needs human
+   review* or *Rejected* verdict does **not** clear it, even with a fully green
+   pipeline: tests passing is evidence, not the verdict.
+
+Record the accepted verdict (and any follow-ups) in the Release PR description so
+the release carries a human-readable verification trail, not just CI checkmarks.
+
 ## 3. Conventional Commit guide
 
 The commit type drives both the version bump and the CHANGELOG section. Convention

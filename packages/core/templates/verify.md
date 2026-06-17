@@ -45,30 +45,26 @@ Put every task in exactly one bucket:
 
 # REPORT
 
-Write your report to `.otto-tmp/verify-report.md` using the `Write` tool (this path is gitignored scratch — it is the one write you may make). Structure it:
+Write your report to `.otto-tmp/verify-report.md` using the `Write` tool (this path is gitignored scratch — it is the one write you may make). Use the Otto quality report contract below: fold the RECONCILE/CLASSIFY results into it — DONE tasks (with their `file:line`/SHA evidence) into **What Changed** + **Evidence**, the suite pass/fail counts into the Test/typecheck evidence line, and GAP/DEFERRED tasks into **Gaps And Follow-Ups**.
 
-```
-# Verify report
+@include:quality-report.md
 
-## Verdict
+# CROSS-RUN QUALITY SUMMARY (READ-ONLY)
 
-<one-line: all done / N gaps / N deferred>
+Beyond *this* run, give the maintainer a quality rollup **across** runs so they can
+spot recurring output-quality failures without reading every NDJSON log. `Read`
+`./.otto/verdicts.md` (the git-tracked human-verdict trail). If it is absent, skip
+this section. Otherwise append a short `## Cross-Run Quality Summary` block to the
+same report file (`.otto-tmp/verify-report.md`) with:
 
-## Done
+- **Completions:** how many runs recorded a verdict, and the tally per verdict
+  (Accepted / Accepted with follow-ups / Rejected / Needs investigation).
+- **Common causes:** recurring reasons behind rejections or follow-ups (e.g.
+  "scope creep", "thin evidence"), most frequent first.
+- **Outstanding gaps & deferred work:** gaps and deferred items still open across
+  runs, so a maintainer can turn them into follow-up issues.
 
-- <task> — <evidence: file:line or commit>
+Keep it to a few lines and cite the trail entries you counted. This is read-only —
+do not edit or commit the trail.
 
-## Gaps
-
-- <task> — <what is missing>
-
-## Deferred
-
-- <task> — <why>
-
-## Suites
-
-- <command> — <pass/fail counts>
-```
-
-Also print the Verdict + section counts to your final message. Do not commit.
+Also print the Verdict + a one-line tally of done/gap/deferred to your final message. Do not commit.

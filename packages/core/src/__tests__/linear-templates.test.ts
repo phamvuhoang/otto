@@ -96,6 +96,37 @@ describe("Linear AFK templates", () => {
     expect(completion).toContain("OTTO_LINEAR_DONE_STATE");
   });
 
+  it("lands the same quality report in the Linear comment, overriding placement not shape", () => {
+    // Issue-19 parity: the Linear completion comment must carry the SAME
+    // human-readable Otto quality report GitHub gets. The report SHAPE reaches
+    // every *afk* mode exactly once through the shared ghprompt-workflow.md
+    // FINISHING include, so linear-completion.md must NOT re-include the fragment
+    // (that double-renders the contract). It only overrides WHERE the report
+    // lands — the otto-linear comment body — citing branch/PR + human next step.
+    const completion = readFileSync(tpl("linear-completion.md"), "utf8");
+    expect(completion).not.toContain("@include:quality-report.md");
+    expect(completion).toContain("Otto quality report");
+    // The comment body IS the report's placement; PR-based repos leave it OPEN.
+    expect(completion).toMatch(/quality report[\s\S]*comment|comment[\s\S]*quality report/i);
+  });
+
+  it("surfaces the contract sections end-to-end through the Linear single-issue chain", () => {
+    // linearafk-issue.md -> ghprompt-workflow.md -> quality-report.md: the Linear
+    // mode resolves the SAME six contract sections GitHub does (provider parity).
+    const CONTRACT_SECTIONS = [
+      "## Verdict",
+      "## Task Source",
+      "## What Changed",
+      "## Evidence",
+      "## Human Acceptance Checklist",
+      "## Gaps And Follow-Ups",
+    ];
+    const out = render("linearafk-issue.md", {});
+    for (const section of CONTRACT_SECTIONS) {
+      expect(out).toContain(section);
+    }
+  });
+
   it("surface the spilled issue file so the agent reads detail from a file", () => {
     const multi = render("linearafk.md", {});
     expect(multi).toContain("./.otto-tmp/spill/issues.json");

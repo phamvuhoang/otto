@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,6 +74,69 @@ describe("apply-review follow-up trail", () => {
       // trail is reviewable alongside the change in git.
       expect(out).toContain("commit it WITH the related fix");
       expect(out).toContain("do not make a separate commit");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+});
+
+// The six contract sections, in order — must match quality-report.test.ts.
+const CONTRACT_SECTIONS = [
+  "## Verdict",
+  "## Task Source",
+  "## What Changed",
+  "## Evidence",
+  "## Human Acceptance Checklist",
+  "## Gaps And Follow-Ups",
+];
+
+describe("apply-review adopts the quality report contract", () => {
+  // apply-review is a standalone gate template (it does NOT @include
+  // ghprompt-workflow.md), so for parity it pulls in the SAME shared
+  // quality-report fragment directly — like verify.md — rather than
+  // re-describing the report shape (the repo's drift-proofing convention).
+  it("includes the shared fragment rather than re-describing the shape", () => {
+    const body = readFileSync(applyReviewTpl, "utf8");
+    expect(body).toContain("@include:quality-report.md");
+  });
+
+  it("surfaces the contract sections end-to-end when rendered", () => {
+    const ws = mkdtempSync(join(tmpdir(), "otto-ar-"));
+    try {
+      const out = render(ws);
+      for (const section of CONTRACT_SECTIONS) {
+        expect(out).toContain(section);
+      }
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("emits the report only at completion, summarizing the review-fix round", () => {
+    const ws = mkdtempSync(join(tmpdir(), "otto-ar-"));
+    try {
+      const out = render(ws);
+      // The report is the completion handoff: it lands with the NO MORE TASKS
+      // sentinel, summarizing the whole round — not emitted per-iteration.
+      expect(out).toContain("Otto quality report");
+      expect(out).toContain("NO MORE TASKS");
+
+      // Pin the gating prose itself — the report is final-iteration-only, never
+      // per-iteration. Without these the guard could be deleted and the test
+      // (which only checks the report+sentinel co-occur) would still pass.
+      expect(out).toContain("Only on the final iteration");
+      expect(out).toContain("Do NOT emit it per-iteration");
+
+      // The fixed / deferred / won't-fix mapping must live in the COMPLETION
+      // REPORT section. Scope the assertions to that section — "deferred" and
+      // "fixed" also appear in the TRIAGE / RECONCILE prose, so an unscoped
+      // match would pass even if the mapping were absent.
+      const start = out.indexOf("# COMPLETION REPORT");
+      expect(start).toBeGreaterThanOrEqual(0);
+      const report = out.slice(start, out.indexOf("# FINAL RULES", start));
+      expect(report).toContain("CONFIRMED and fixed");
+      expect(report).toMatch(/DEFERRED/);
+      expect(report).toMatch(/won't[- ]fix|wont[- ]fix/i);
     } finally {
       rmSync(ws, { recursive: true, force: true });
     }

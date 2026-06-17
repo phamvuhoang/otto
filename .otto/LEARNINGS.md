@@ -2,6 +2,96 @@
 
 ## Conventions
 
+- **Cross-run quality summary vs. per-run report — keep them apart.** A rollup
+  *across* runs (per-verdict tally, common rejection/follow-up causes, still-open
+  gaps/deferred) is NOT a per-run artifact, so it does **not** belong in the
+  shared `quality-report.md` contract (and a new `## ` there would break the
+  six-section samples parse anyway — see the verdict-trail note). It lives as a
+  `# CROSS-RUN QUALITY SUMMARY (READ-ONLY)` section in `verify.md` — the only
+  read-only inspection gate — and derives from the git-tracked `.otto/verdicts.md`
+  trail (the cross-run record; the agent `Read`s it, skips if absent) rather than
+  the NDJSON logs, appending a `## Cross-Run Quality Summary` block to the
+  read-only verify report. Pinned by `quality-report.test.ts`
+  ("cross-run quality summary (verify.md)").
+- **Human-verdict trail** (Feature 3) lives in the SAME single shared
+  `quality-report.md` fragment as the report shape — never a per-mode edit. It
+  has two halves, both in that one fragment: a `<verdict-trail>` block surfacing
+  `./.otto/verdicts.md` via `!?`cat …|||_No human verdicts recorded yet._`` (so
+  prior human verdicts inform this run's Verdict + next action), and a
+  **Maintainer:** instruction to append the human verdict (Accepted · Accepted
+  with follow-ups · Rejected · **Needs investigation** — note the HUMAN verdict
+  uses "Needs investigation", distinct from the report's own "Needs human
+  review") + why to the git-tracked trail, feeding the existing learning loop.
+  Because it's in the contract fragment it reaches every adopting mode through
+  the existing `@include:quality-report.md` — drift-proof, same philosophy as the
+  contract + acceptance-prompts. **Its heading is `###`, NOT `##`:** the samples
+  doc-contract (`quality-report-samples.test.mjs`) parses the contract's `## `
+  lines as THE six report sections via `deepEqual`, so any new `## ` heading in
+  `quality-report.md` breaks it — keep non-report subsections at `###`. Pinned by
+  `quality-report.test.ts` (surface-when-present / fallback / append-instruction),
+  mirroring the apply-review `review-followups.md` trail. The trail file is
+  git-tracked (`.otto/`, NOT `.otto-tmp/`) like `LEARNINGS.md`/`review-followups.md`.
+- **Sample/illustrative docs are anchored to their source-of-truth template, not
+  hand-pinned.** `docs/quality-report-samples.md` ships filled-in example quality
+  reports (one per mode); its doc-contract test `scripts/quality-report-samples.test.mjs`
+  does NOT hardcode the expected section list — it PARSES the real contract
+  (`templates/quality-report.md`): the six `## ` section headings, the bolded
+  verdict vocabulary off the "One of — **…**" line, and the run modes off the
+  `Mode: <a | b | …>` placeholder, then asserts every sample carries all six
+  sections + a real verdict + a real mode. So a contract change forces the samples
+  (and a one-line `deepEqual` sanity guard) to update instead of going stale —
+  same drift-proofing philosophy as `security-doc-contract.test.mjs` parsing
+  `stages.ts`/`runner.ts`. Splitting the doc into individual reports keys off the
+  `# Otto quality report` H1 the contract emits. When adding a new mode/verdict to
+  the contract, add a sample, don't just edit the test.
+- **Review lenses are parametric + opt-in.** The panel renders any lens name from
+  `OTTO_REVIEW_LENSES` into `review-lens.md` via `{{ LENS }}` — adding a lens is
+  NOT a code change. Add one **definition bullet** to `review-lens.md`'s
+  lens-description list (the reviewer reasons from it) and leave `DEFAULT_LENSES`
+  in `run-bin.ts` (`correctness,security,tests`) untouched, so the new lens stays
+  opt-in (`OTTO_REVIEW_LENSES=task-fit,…`) and augments rather than replaces the
+  baseline. The `task-fit` lens ("did Otto solve the *right* problem / scope /
+  reviewer-usefulness", distinct from correctness/security/tests) was added this
+  way. Pinned by `review-lens.test.ts` (render-contract: definition present,
+  baseline three still present, header wiring). NOTE: rendering `review-lens.md`
+  in a test needs `spillHostDir`/`spillRefPath` opts (it uses `@spill?:head.diff`),
+  unlike `apply-review.md`/`quality-report.md` which have no `@spill`.
+- **Per-mode human-acceptance prompts** (Feature 2) live in a sibling fragment
+  `templates/acceptance-prompts.md`, `@include`d ONCE at the tail of
+  `quality-report.md`. Because every mode already includes the contract (directly
+  for `verify.md`/`apply-review.md`, transitively via `ghprompt-workflow.md`
+  FINISHING for the *afk* modes), the per-mode set reaches all of them through
+  that single existing include — do NOT add a second include per template, and
+  do NOT inline the prompts (same drift-proofing as the contract itself). The
+  fragment has one `### <mode> — <name>` block per Mode (`afk` / `ghafk` /
+  `linear-afk` / `apply-review` / `verify`) of task-fulfillment checkboxes that
+  augment (not replace) the generic Human Acceptance Checklist. Pinned by
+  `quality-report.test.ts`.
+- The **Otto quality report contract** lives in one includable fragment
+  `templates/quality-report.md` (Verdict / Task Source / What Changed / Evidence
+  / Human Acceptance Checklist / Gaps And Follow-Ups; verdict = Accepted ·
+  Accepted with follow-ups · Needs human review · Rejected, defaulting to *Needs
+  human review* when unsure; tests are evidence, not the verdict). Any mode that
+  emits a verification/completion summary (`verify.md` today; `ghafk`/`linear`
+  completion + `apply-review` per the issue-19 roadmap) must
+  `@include:quality-report.md` — never re-describe the shape inline, or the
+  provider workflows drift (the same drift-proofing as `ghprompt-workflow.md` /
+  `linear-completion.md`). Pinned by `quality-report.test.ts` render-contract.
+  The single `@include:quality-report.md` for the completion handoff lives in the
+  **shared `ghprompt-workflow.md` FINISHING section**, so the report *shape*
+  reaches every `*afk*` mode (gh + linear) through one include — provider-mode
+  fragments must NOT re-include it (that double-renders the contract). They only
+  override **placement** (WHERE the report lands): `linear-completion.md` points
+  it at the `otto-linear comment` body, GitHub uses the PR description / issue
+  comment. Placement varies per provider; shape is included once upstream.
+  **Two include classes, don't conflate them:** *afk* modes inherit the fragment
+  transitively via the shared `ghprompt-workflow.md` FINISHING include (and must
+  NOT re-include — double-render). **Standalone gate templates that do NOT
+  `@include:ghprompt-workflow.md` — `verify.md` and `apply-review.md` — own their
+  report and `@include:quality-report.md` *directly*.** apply-review emits it once
+  in a `# COMPLETION REPORT` section gated to the final iteration (alongside the
+  NO MORE TASKS sentinel, never per-iteration), mapping CONFIRMED-fixed→Evidence
+  and deferred/won't-fix→Gaps. Pinned by `apply-review.test.ts`.
 - `ghprompt-workflow.md` is **provider-agnostic** (RECONCILE → EXPLORATION →
   FEEDBACK → COMMIT → FINISHING → LEARNINGS, plus `@include:superpowers.md`). New
   provider-mode playbooks/templates (`linearprompt.md`, `linearafk-issue.md`,
@@ -62,6 +152,20 @@
     Otto runs against a *different* repo, the definition of done follows **that
     repo's** `.otto/LEARNINGS.md` / conventions — don't assume a PR is wanted
     there; do what that repo's learnings say (commit-only, PR, etc.).
+- **Release-quality gate is a RELEASING.md doc gate, not src.** The "both machine
+  verification AND a human-readable quality report before publishing major changes"
+  requirement (issue-19 Feature 3) is a `### Release-quality gate` subsection in
+  RELEASING.md §2 — no otto code behind it (same agent/docs-driven shape as the
+  quality-report contract itself). It names BOTH halves (machine:
+  typecheck/tests/smoke; human: a `--verify` Otto quality report) and clears only
+  on a human-accepted verdict (Accepted / Accepted with follow-ups), never *Needs
+  human review* / *Rejected* — green CI is evidence, not the verdict. It links the
+  REAL `packages/core/templates/quality-report.md` contract (drift-proof). Pinned
+  by a block in `scripts/releasing-contract.test.mjs` that extracts the section and
+  asserts heading + both halves + the contract link exists on disk + the
+  gate-clearing verdicts. **Test gotcha:** RELEASING.md line-wraps prose, so a
+  verdict phrase like "Needs human review" can split across a newline — normalize
+  whitespace (`section.replace(/\s+/g, " ")`) before matching multi-word phrases.
 
 ## Gotchas
 

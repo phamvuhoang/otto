@@ -27,6 +27,7 @@ You review the most recent commit (HEAD) through ONE lens only: **{{ LENS }}**.
 - `correctness` — bugs, regressions, broken logic, unhandled edge cases.
 - `security` — input validation, secrets, injection, auth bypass.
 - `tests` — coverage gaps for the changed code; missing/weak assertions.
+- `task-fit` — did the change solve the **right problem**? Does it map back to the source plan/issue, stay in scope (no unrequested extras, no missed sub-task), and leave a reviewer-useful trail (clear commit, evidence, surfaced gaps)? Flag scope drift, unaddressed acceptance criteria, and work that is mechanically correct but doesn't fulfil the task.
 
 If `<head>` shows `(no commits)`, output `<lens>SKIP</lens>` and stop.
 

@@ -69,6 +69,46 @@ test("rollback runbook + provenance (SBOM/cosign) sections are present", () => {
   }
 });
 
+test("release-quality gate requires both machine verification and a human-readable quality report", () => {
+  // Issue #19 Feature 3: a release-quality gate requiring BOTH machine
+  // verification AND a human-readable quality report before merging/publishing
+  // major changes. Pinned here so the gate can't silently drop out of the runbook.
+  const heading = /###?\s*Release-quality gate/i;
+  assert.ok(
+    heading.test(releasing),
+    "RELEASING.md is missing a `Release-quality gate` section"
+  );
+  // The gate's prose lives between its heading and the next heading.
+  const start = releasing.search(heading);
+  const rest = releasing.slice(start + 1);
+  const next = rest.search(/\n#{2,3}\s/);
+  const section = next === -1 ? rest : rest.slice(0, next);
+
+  // Both halves of the gate must be named: machine verification AND the human report.
+  assert.ok(
+    /typecheck/.test(section) && /test/.test(section),
+    "Release-quality gate must require machine verification (typecheck/tests)"
+  );
+  // The human-readable half must point at the real quality-report contract
+  // fragment (drift-proof link — assert the file exists, like the workflow check).
+  const contract = "packages/core/templates/quality-report.md";
+  assert.ok(
+    section.includes(contract),
+    `Release-quality gate must link the quality report contract (${contract})`
+  );
+  assert.ok(
+    existsSync(join(root, contract)),
+    `Release-quality gate links \`${contract}\` but the file does not exist`
+  );
+  // The gate clears only on a human-accepted verdict — tests green is not enough.
+  // Normalize whitespace so line-wrapping a verdict phrase doesn't break the pin.
+  const flat = section.replace(/\s+/g, " ");
+  assert.ok(
+    /Accepted/.test(flat) && /Needs human review/.test(flat),
+    "Release-quality gate must state which quality-report verdicts clear it (Accepted vs Needs human review)"
+  );
+});
+
 test("every workflow file named in RELEASING.md exists in .github/workflows", () => {
   const named = new Set(
     [...releasing.matchAll(/[\w-]+\.yml/g)].map((m) => m[0])

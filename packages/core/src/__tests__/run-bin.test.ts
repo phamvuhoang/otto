@@ -80,6 +80,24 @@ describe("runBin agent runtime", () => {
     expect(text).toContain("OTTO_AGENT must be one of claude|codex");
   });
 
+  it("fails a real run when OTTO_AGENT is invalid (no silent claude fallback)", async () => {
+    process.env.OTTO_AGENT = "gpt";
+    captureStdout();
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: any[]) => {
+      errs.push(a.join(" "));
+    });
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(((): never => {
+        throw new Error("exit");
+      }) as any);
+
+    await expect(runBin(["plan", "1"], cfg)).rejects.toThrow("exit");
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errs.join("")).toContain("OTTO_AGENT must be one of claude|codex");
+  });
+
   it("fails a real run when the selected runtime is not yet implemented", async () => {
     delete process.env.OTTO_AGENT;
     captureStdout();

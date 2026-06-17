@@ -37,6 +37,14 @@ export type CliFlags = {
    * validation path also covers the `OTTO_GITHUB_REPO` env fallback.
    */
   repo?: string;
+  /**
+   * Raw `--project "Name"` value (otto-linear-afk watch scope). Free text that
+   * only ever reaches Linear's GraphQL filter — never a host shell — so unlike
+   * --repo it needs no charset validation. Resolved into a linear WorkScope by
+   * run-bin; kept raw here so the same path also covers the OTTO_LINEAR_PROJECT
+   * env fallback.
+   */
+  project?: string;
   rest: string[];
 };
 
@@ -132,6 +140,8 @@ export function parseFlags(
   let expectingBranchPrefix = false;
   let repo: string | undefined;
   let expectingRepo = false;
+  let project: string | undefined;
+  let expectingProject = false;
   const rest: string[] = [];
   for (const a of argv) {
     if (expectingMaxRetries) {
@@ -215,6 +225,11 @@ export function parseFlags(
       expectingRepo = false;
       continue;
     }
+    if (expectingProject) {
+      project = a;
+      expectingProject = false;
+      continue;
+    }
     if (a === "-h" || a === "--help") help = true;
     else if (a === "-V" || a === "--version") version = true;
     else if (a === "--print-config") printConfig = true;
@@ -236,6 +251,7 @@ export function parseFlags(
     else if (a === "--branch") expectingBranch = true;
     else if (a === "--branch-prefix") expectingBranchPrefix = true;
     else if (a === "--repo") expectingRepo = true;
+    else if (a === "--project") expectingProject = true;
     else rest.push(a);
   }
   if (expectingMaxRetries) {
@@ -271,6 +287,9 @@ export function parseFlags(
   if (expectingRepo) {
     throw new Error("--repo requires a value");
   }
+  if (expectingProject) {
+    throw new Error("--project requires a value");
+  }
   if (log !== undefined && !detach) {
     throw new Error("--log is only meaningful with --detach");
   }
@@ -296,6 +315,7 @@ export function parseFlags(
     branch,
     branchPrefix,
     repo,
+    project,
     rest,
   };
 }
@@ -355,6 +375,7 @@ Flags:
   --watch             poll for labelled issues and run the loop whenever work is found (otto-ghafk + otto-linear-afk; default: off)
   --watch-interval <sec>  seconds between polls in watch mode (default: 300)
   --repo <owner/name> scope otto-ghafk to a single GitHub repo: poll + list + view only that repo's issues (or OTTO_GITHUB_REPO; default: the workspace's repo)
+  --project <name>    scope otto-linear-afk to a single Linear project (narrows team/label further; or OTTO_LINEAR_PROJECT; default: no project filter)
   --issue <ref>       target a single issue (otto-ghafk: number, #N, owner/repo#N, or URL; otto-linear-afk: ENG-123, UUID, or Linear URL); loop exits when it is done (default: off)
   --max-wait <dur>    cap the wait when rate-limited before halting (e.g. 90m, 6h; default 6h)
   --fresh             ignore any saved resume state and start from iteration 1
@@ -374,6 +395,7 @@ Environment variables:
   OTTO_REVIEW_LENSES   comma-separated lens list for --review-panel (default: correctness,security,tests).
   OTTO_WATCH_LABEL     issue label to poll for in watch mode (default: "otto").
   OTTO_GITHUB_REPO     scope otto-ghafk to a single GitHub repo ("owner/name"); same as --repo.
+  OTTO_LINEAR_PROJECT  scope otto-linear-afk to a single Linear project (name); same as --project.
   OTTO_MAX_WAIT        default rate-limit wait cap (seconds or 90m/6h; default 6h).
   OTTO_BRANCH          default branch strategy (current|branch|worktree) when --branch is absent.
   OTTO_BRANCH_PREFIX   default branch-name prefix (default: "otto/").

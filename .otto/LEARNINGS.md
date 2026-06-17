@@ -14,11 +14,23 @@
   unique across teams (issue risk note), so a project filter is meant to be paired
   with `OTTO_LINEAR_TEAM`; we still match on name to keep CLI input friendly.
   Pinned by `linear-api.test.ts` (filter present/absent), `linear-cli.test.ts`
-  (flag + env defaulting), `watch.test.ts` (poll forwards project). **Still TODO
-  (next P1 item):** the `otto-linear-afk --project` flag + `--print-config` scope
-  display — that's the run-bin/`supportsProjectScope` half (mirrors
-  `supportsRepoScope`), which DOES need to set `process.env.OTTO_LINEAR_PROJECT`
-  and build a linear `WorkScope` for `runWatch`/`describeScope`.
+  (flag + env defaulting), `watch.test.ts` (poll forwards project). The
+  `otto-linear-afk --project` flag + `--print-config` scope display is the
+  run-bin/`supportsProjectScope` half (mirrors `supportsRepoScope`, set on
+  linear-main only): `parseFlags` captures raw `flags.project` (free text — NO
+  charset validation / no `scopeError` path, unlike `--repo`, because it only
+  reaches Linear's GraphQL filter, never a host shell); run-bin resolves
+  `flags.project ?? OTTO_LINEAR_PROJECT` **plus** `OTTO_LINEAR_TEAM` into a linear
+  `WorkScope`, **re-exports `process.env.OTTO_LINEAR_PROJECT`** so the flag (not
+  just the env var) reaches the `otto-linear list/dump` templates and the watch
+  poller, and threads `scope` into `runWatch`/`describeScope`. Build the scope
+  when **team OR project** is set (a team-only scope is still reported), so
+  `--print-config` shows `linear team:ENG project:Roadmap Q3`. `--project` on a
+  non-linear bin errors. The unified run-bin `scope` var (was `githubScope`)
+  carries either provider's scope. Pinned by `cli-help.test.ts` (`parseFlags
+  --project`); the scope wiring mirrors the (integration-untested, parts-tested)
+  `--repo` path. Like the `--repo` commit, comprehensive README/CLI.md docs are
+  deferred to P4 — only `cli-help.ts` help text + print-config were touched.
 - **GitHub watch scope (`--repo`/`OTTO_GITHUB_REPO`, issue #21 P1)** threads a
   validated repo end-to-end without breaking the host-shell RCE invariant. The
   raw `--repo` value is captured untyped in `parseFlags` (`flags.repo`); run-bin

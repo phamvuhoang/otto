@@ -20,6 +20,7 @@ export async function runLinearAfk(
     parseIssue: parseLinearIssueArg,
     mode: "linear",
     supportsWatch: true,
+    supportsProjectScope: true,
     // Poll the same labelled set the implementer selects (OTTO_LINEAR_LABEL),
     // narrowed by OTTO_LINEAR_TEAM and (single-target watch scope)
     // OTTO_LINEAR_PROJECT. The `label` arg is the resolved watch label.

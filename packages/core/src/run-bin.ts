@@ -60,6 +60,11 @@ export type RunBinConfig = {
    * the run to a single GitHub repo. Only otto-ghafk sets this.
    */
   supportsRepoScope?: boolean;
+  /**
+   * Whether this bin accepts `--project "Name"` / `OTTO_LINEAR_PROJECT` to
+   * narrow the run to a single Linear project. Only otto-linear-afk sets this.
+   */
+  supportsProjectScope?: boolean;
   /** Alternate gate stage used when --issue is set. Only otto-ghafk sets this. */
   issueStage?: Stage;
   /** Single read-only gate stage used when --verify is set. Only otto-afk sets this. */
@@ -178,7 +183,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   // ghafk templates confine their `gh` commands (list/view) to it, and passed
   // to runWatch so the poller never sees another repo's issues. parseGithubRepo
   // admits only shell-safe chars, keeping OTTO_GITHUB_REPO safe to interpolate.
-  let githubScope: WorkScope | undefined;
+  let scope: WorkScope | undefined;
   let scopeError: string | undefined;
   if (cfg.supportsRepoScope) {
     const rawRepo =
@@ -186,17 +191,31 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     if (rawRepo) {
       try {
         const { owner, repo } = parseGithubRepo(rawRepo);
-        githubScope = { provider: "github", owner, repo };
+        scope = { provider: "github", owner, repo };
         process.env.OTTO_GITHUB_REPO = `${owner}/${repo}`;
       } catch (err) {
         scopeError = (err as Error).message;
       }
     }
   }
+  // Resolve the Linear single-target scope (--project / OTTO_LINEAR_PROJECT)
+  // alongside the team filter (OTTO_LINEAR_TEAM). Unlike --repo, a project name
+  // is free text that only reaches Linear's GraphQL filter (never a host shell),
+  // so it needs no charset validation. The resolved project is re-exported as
+  // OTTO_LINEAR_PROJECT so the `otto-linear list/dump` template commands and the
+  // watch poller (which read it from the inherited env, like team) honor the
+  // flag, not just the env var. Scope is reported even with only a team set.
+  if (cfg.supportsProjectScope) {
+    const team = process.env.OTTO_LINEAR_TEAM?.trim() || undefined;
+    const project =
+      flags.project ?? (process.env.OTTO_LINEAR_PROJECT?.trim() || undefined);
+    if (project) process.env.OTTO_LINEAR_PROJECT = project;
+    if (team || project) scope = { provider: "linear", team, project };
+  }
   const watchScope = scopeError
     ? `invalid (${scopeError})`
-    : githubScope
-      ? describeScope(githubScope)
+    : scope
+      ? describeScope(scope)
       : undefined;
 
   if (flags.printConfig) {
@@ -230,6 +249,10 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
 
   if (flags.repo != null && !cfg.supportsRepoScope) {
     console.error("--repo is only supported by otto-ghafk");
+    process.exit(1);
+  }
+  if (flags.project != null && !cfg.supportsProjectScope) {
+    console.error("--project is only supported by otto-linear-afk");
     process.exit(1);
   }
   // A malformed --repo / OTTO_GITHUB_REPO is fatal for a real run (it would
@@ -368,7 +391,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       cliVersion: cfg.cliVersion,
       pollIssues: cfg.watchPoll,
       provider: cfg.watchProvider,
-      scope: githubScope,
+      scope,
     });
     return;
   }

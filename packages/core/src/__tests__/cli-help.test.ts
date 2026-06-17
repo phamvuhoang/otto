@@ -148,6 +148,22 @@ describe("parseFlags --repo", () => {
   });
 });
 
+describe("parseFlags --project", () => {
+  it("captures the raw --project value", () => {
+    const f = parseFlags(["--watch", "--project", "Roadmap Q3", "5"]);
+    expect(f.project).toBe("Roadmap Q3");
+    expect(f.rest).toEqual(["5"]);
+  });
+  it("leaves project undefined when absent", () => {
+    expect(parseFlags(["5"]).project).toBeUndefined();
+  });
+  it("errors when --project has no value", () => {
+    expect(() => parseFlags(["--project"])).toThrow(
+      /--project requires a value/
+    );
+  });
+});
+
 describe("printConfig scope", () => {
   it("shows the resolved watch scope when provided", () => {
     const out = configOutput({ watchScope: "github acme/web" });

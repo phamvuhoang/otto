@@ -23,8 +23,13 @@ This run implements **only the first unchecked task**.
       from `--project`/`OTTO_LINEAR_PROJECT`; `pollLinearIssues` + the linear-afk
       `watchPoll` thread it (env inherited by the templates, like team). The
       `otto-linear-afk --project` flag + print-config scope display is the next item.
-- [ ] `--print-config` shows resolved scope (label + repo/project/team) via
-      `describeScope`; watch poll lines name the exact scope.
+- [x] `otto-linear-afk --project` flag + `--print-config` shows resolved scope
+      (label + repo/project/team) via `describeScope`; watch poll lines name the
+      exact scope. `parseFlags` captures raw `--project`; run-bin's
+      `supportsProjectScope` (linear-only) builds a linear `WorkScope`
+      (team+project), re-exports `OTTO_LINEAR_PROJECT` so the flag reaches the
+      templates/poller, and threads `scope` into `runWatch`. `--project` on
+      another bin errors. → verify: `pnpm -r typecheck && pnpm -r test && pnpm test`
 
 ## P2 — Artifact + branch naming restructure
 

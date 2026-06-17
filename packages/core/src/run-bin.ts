@@ -4,8 +4,11 @@ import { fileURLToPath } from "node:url";
 
 import {
   readAgentConfig,
+  readFallbackConfig,
   resolveAgentRuntime,
+  resolveFallback,
   type ResolvedAgentRuntime,
+  type ResolvedFallback,
 } from "./agent-runtime.js";
 import { dirtyTreeWarning, ensureTmpIgnored, resolveBranch } from "./branch.js";
 import {
@@ -159,6 +162,28 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     });
   } catch (err) {
     agentError = (err as Error).message;
+  }
+
+  // Resolve fallback-on-limit config (--fallback-agent / OTTO_FALLBACK_AGENT /
+  // config "fallbackAgent" + --auto-switch-on-limit / OTTO_AUTO_SWITCH_ON_LIMIT /
+  // config "autoSwitchOnLimit"). Default OFF — switching providers is opt-in.
+  // This slice resolves + reports config only; the actual switch lands in a
+  // later issue-24 slice. An invalid value is reported by --print-config and
+  // fatal on a real run, mirroring the agent handling.
+  let fallback: ResolvedFallback = { autoSwitch: false };
+  let fallbackError: string | undefined;
+  try {
+    const fbCfg = readFallbackConfig(workspaceDir);
+    fallback = resolveFallback({
+      flagAgent: flags.fallbackAgent,
+      envAgent: process.env.OTTO_FALLBACK_AGENT,
+      configAgent: fbCfg.agent,
+      flagAutoSwitch: flags.autoSwitchOnLimit,
+      envAutoSwitch: process.env.OTTO_AUTO_SWITCH_ON_LIMIT,
+      configAutoSwitch: fbCfg.autoSwitch,
+    });
+  } catch (err) {
+    fallbackError = (err as Error).message;
   }
 
   const envBranch = process.env.OTTO_BRANCH?.trim();
@@ -320,6 +345,11 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       agentDisplayName: agent.displayName,
       agentSource: agent.source,
       agentError,
+      fallbackAgentId: fallback.agent?.id,
+      fallbackAgentDisplayName: fallback.agent?.displayName,
+      fallbackSource: fallback.agent?.source,
+      autoSwitchOnLimit: fallback.autoSwitch,
+      fallbackError,
       reviewLenses: reviewLenses ?? [],
       watch: flags.watch,
       watchIntervalSec: flags.watchIntervalSec,
@@ -343,6 +373,13 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   // otherwise silently fall back to claude); --print-config only reported it.
   if (agentError) {
     console.error(agentError);
+    process.exit(1);
+  }
+  // An invalid OTTO_FALLBACK_AGENT / config value is likewise fatal on a real
+  // run (it would otherwise silently disable the fallback); --print-config only
+  // reported it.
+  if (fallbackError) {
+    console.error(fallbackError);
     process.exit(1);
   }
   // Only Claude is runnable end-to-end today; selecting another runtime for a

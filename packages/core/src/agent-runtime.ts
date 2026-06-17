@@ -70,6 +70,93 @@ export function resolveAgentRuntime(opts: {
   return mk(DEFAULT_AGENT, "default");
 }
 
+/** Fallback-on-limit selection: the runtime to switch to + whether to do so. */
+export type ResolvedFallback = {
+  /**
+   * The fallback runtime + where it was selected from, or undefined when no
+   * fallback agent is configured (the default — fallback is OFF).
+   */
+  agent?: ResolvedAgentRuntime;
+  /** Whether auto-switch-on-limit is enabled (default false). */
+  autoSwitch: boolean;
+};
+
+/** Env strings counted as "on" for a boolean toggle; anything else is off. */
+function isTruthyEnv(raw: string): boolean {
+  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+}
+
+/**
+ * Resolve fallback-on-limit config. The fallback runtime follows the same
+ * flag → env → config precedence as the primary agent but has NO default (unset
+ * = no fallback); auto-switch is a boolean with flag → env → config → false
+ * precedence. Both default OFF — switching providers changes model behavior and
+ * must be explicit. Blank env/config is skipped, not an error; an invalid
+ * fallback-agent env/config value throws so the caller can report it (mirrors
+ * resolveAgentRuntime). This run resolves config only; the actual switch lands
+ * in a later issue-24 slice.
+ */
+export function resolveFallback(opts: {
+  flagAgent?: AgentRuntimeId;
+  envAgent?: string;
+  configAgent?: string;
+  flagAutoSwitch?: boolean;
+  envAutoSwitch?: string;
+  configAutoSwitch?: boolean;
+}): ResolvedFallback {
+  const mk = (
+    id: AgentRuntimeId,
+    source: AgentSelectionSource
+  ): ResolvedAgentRuntime => ({
+    id,
+    displayName: AGENT_DISPLAY_NAMES[id],
+    source,
+  });
+
+  let agent: ResolvedAgentRuntime | undefined;
+  if (opts.flagAgent) {
+    agent = mk(opts.flagAgent, "flag");
+  } else {
+    const envRaw = opts.envAgent?.trim();
+    const cfgRaw = opts.configAgent?.trim();
+    if (envRaw) agent = mk(parseAgentId(envRaw, "OTTO_FALLBACK_AGENT"), "env");
+    else if (cfgRaw)
+      agent = mk(parseAgentId(cfgRaw, '.otto/config.json "fallbackAgent"'), "config");
+  }
+
+  let autoSwitch = false;
+  const envSwitch = opts.envAutoSwitch?.trim();
+  if (opts.flagAutoSwitch) autoSwitch = true;
+  else if (envSwitch) autoSwitch = isTruthyEnv(envSwitch);
+  else if (opts.configAutoSwitch != null) autoSwitch = opts.configAutoSwitch;
+
+  return agent ? { agent, autoSwitch } : { autoSwitch };
+}
+
+/**
+ * Read the fallback-on-limit fields from `.otto/config.json`: `fallbackAgent`
+ * (string, validated later in resolveFallback) and `autoSwitchOnLimit` (boolean).
+ * Wrong-typed or absent values are dropped; never throws. Kept separate from
+ * readAgentConfig/readBranchConfig, matching the one-reader-per-concern pattern.
+ */
+export function readFallbackConfig(workspaceDir: string): {
+  agent?: string;
+  autoSwitch?: boolean;
+} {
+  try {
+    const raw = JSON.parse(
+      readFileSync(join(workspaceDir, CONFIG_REL), "utf8")
+    ) as Record<string, unknown>;
+    const out: { agent?: string; autoSwitch?: boolean } = {};
+    if (typeof raw.fallbackAgent === "string") out.agent = raw.fallbackAgent;
+    if (typeof raw.autoSwitchOnLimit === "boolean")
+      out.autoSwitch = raw.autoSwitchOnLimit;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Read the raw `agent` field from `.otto/config.json`. Returns the string as-is
  * (validation happens in resolveAgentRuntime); absent, malformed, or non-string

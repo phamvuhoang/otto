@@ -2,6 +2,32 @@
 
 ## Conventions
 
+- **Fallback-on-limit config is parsed + reported but inert (issue #24 P4,
+  config slice).** `agent-runtime.ts` adds `resolveFallback({flagAgent, envAgent,
+  configAgent, flagAutoSwitch, envAutoSwitch, configAutoSwitch})` →
+  `{agent?: ResolvedAgentRuntime, autoSwitch}` and `readFallbackConfig(workspaceDir)`
+  → `{agent?, autoSwitch?}` (reads `.otto/config.json` `fallbackAgent` string +
+  `autoSwitchOnLimit` boolean; wrong-typed dropped). **Two deliberate asymmetries
+  vs. `resolveAgentRuntime`:** (1) the fallback agent has **NO default** — unset =
+  no fallback (returns `{autoSwitch}` with no `agent`), because switching
+  providers must be explicit; (2) auto-switch is a boolean with precedence
+  flag(true)→env-truthy→config→false, where env-truthy = `1|true|yes|on`
+  (case-insensitive, via `isTruthyEnv`) and an explicit falsy env (`0`/`false`)
+  WINS over a `true` config (blank env falls through). The fallback agent reuses
+  `parseAgentId` so an invalid `OTTO_FALLBACK_AGENT`/config `fallbackAgent` throws
+  (named for `--print-config` reporting). Wiring **mirrors the `agent` block in
+  run-bin exactly**: resolved into `fallback`/`fallbackError`, reported by
+  `--print-config` (exit 0), **fatal (exit 1) on a real run** right after the
+  agentError guard. `--print-config` shows one `fallback` line:
+  `<id> (<name>, <source>) · auto-switch on|off` when an agent is set, else
+  `auto-switch on · no fallback agent set` (misconfig warning) when only switch is
+  on, else `off`, else `invalid (<err>)`. **This slice resolves config only — the
+  actual switch-on-limit at the retry/stage boundary is the next P4 task**, so
+  default-off keeps Claude behavior unchanged. Pinned by `agent-runtime.test.ts`
+  (resolveFallback precedence/truthy/no-default/throw + readFallbackConfig),
+  `cli-help.test.ts` (`--fallback-agent`/`--auto-switch-on-limit` parse +
+  print-config fallback line incl. the no-agent warning), `run-bin.test.ts`
+  (env selection + invalid-reported + invalid-fatal).
 - **Provider-specific model env is runtime-aware via `resolveModelSelection`
   (issue #24 P3).** `runner.ts`'s `resolveModelSelection(runtimeId, env)` picks
   `OTTO_<RUNTIME>_MODEL` (e.g. `OTTO_CLAUDE_MODEL` / `OTTO_CODEX_MODEL`) over the

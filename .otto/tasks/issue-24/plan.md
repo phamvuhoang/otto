@@ -73,8 +73,17 @@ task. Implement the first unchecked task per run.
 
 ## P4 — auto-switch on limits
 
-- [ ] **Fallback config** (`--fallback-agent`, `OTTO_FALLBACK_AGENT`,
+- [x] **Fallback config** (`--fallback-agent`, `OTTO_FALLBACK_AGENT`,
       `--auto-switch-on-limit` / `OTTO_AUTO_SWITCH_ON_LIMIT`; default off).
+      Pure `resolveFallback`/`readFallbackConfig` in `agent-runtime.ts` (fallback
+      agent has NO default → unset = off; auto-switch flag→env-truthy→config→false);
+      `--fallback-agent`/`--auto-switch-on-limit` flags; run-bin resolves +
+      reports a `fallback` line in `--print-config` (`<id> (<name>, <source>) ·
+      auto-switch on|off`, or `off`, or `auto-switch on · no fallback agent set`,
+      or `invalid (…)`); an invalid env/config value is reported by
+      `--print-config` (exit 0) and fatal on a real run (mirrors the agent
+      handling). Config-only slice — the actual switch is the next task. Pinned by
+      `agent-runtime.test.ts` + `cli-help.test.ts` + `run-bin.test.ts`.
 - [ ] **Switch-on-limit at retry/stage boundary**, recorded in state + visible in
       stderr/summary; budget survives the switch; resume keeps the fallback unless
       `--fresh`.

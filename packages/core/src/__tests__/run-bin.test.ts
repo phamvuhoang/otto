@@ -118,3 +118,63 @@ describe("runBin agent runtime", () => {
     expect(errs.join("")).toContain("Codex CLI");
   });
 });
+
+describe("runBin fallback runtime", () => {
+  const oldFallback = process.env.OTTO_FALLBACK_AGENT;
+  const oldSwitch = process.env.OTTO_AUTO_SWITCH_ON_LIMIT;
+  const oldAgent = process.env.OTTO_AGENT;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    const restore = (k: string, v: string | undefined) =>
+      v === undefined ? delete process.env[k] : (process.env[k] = v);
+    restore("OTTO_FALLBACK_AGENT", oldFallback);
+    restore("OTTO_AUTO_SWITCH_ON_LIMIT", oldSwitch);
+    restore("OTTO_AGENT", oldAgent);
+  });
+
+  it("shows OTTO_FALLBACK_AGENT + auto-switch in --print-config", async () => {
+    process.env.OTTO_FALLBACK_AGENT = "codex";
+    process.env.OTTO_AUTO_SWITCH_ON_LIMIT = "1";
+    const stdout = captureStdout();
+    await expect(runBin(["--print-config"], cfg)).resolves.toBeUndefined();
+    const text = stdout.join("");
+    expect(text).toContain("fallback              codex (Codex CLI, env) · auto-switch on");
+  });
+
+  it("defaults fallback to off in --print-config", async () => {
+    delete process.env.OTTO_FALLBACK_AGENT;
+    delete process.env.OTTO_AUTO_SWITCH_ON_LIMIT;
+    const stdout = captureStdout();
+    await expect(runBin(["--print-config"], cfg)).resolves.toBeUndefined();
+    expect(stdout.join("")).toContain("fallback              off");
+  });
+
+  it("reports invalid OTTO_FALLBACK_AGENT in --print-config without throwing", async () => {
+    process.env.OTTO_FALLBACK_AGENT = "gpt";
+    const stdout = captureStdout();
+    await expect(runBin(["--print-config"], cfg)).resolves.toBeUndefined();
+    const text = stdout.join("");
+    expect(text).toContain("fallback              invalid (");
+    expect(text).toContain("OTTO_FALLBACK_AGENT must be one of claude|codex");
+  });
+
+  it("fails a real run when OTTO_FALLBACK_AGENT is invalid", async () => {
+    delete process.env.OTTO_AGENT;
+    process.env.OTTO_FALLBACK_AGENT = "gpt";
+    captureStdout();
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: any[]) => {
+      errs.push(a.join(" "));
+    });
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(((): never => {
+        throw new Error("exit");
+      }) as any);
+
+    await expect(runBin(["plan", "1"], cfg)).rejects.toThrow("exit");
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errs.join("")).toContain("OTTO_FALLBACK_AGENT must be one of claude|codex");
+  });
+});

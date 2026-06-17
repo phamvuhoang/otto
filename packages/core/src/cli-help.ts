@@ -30,6 +30,15 @@ export type CliFlags = {
    * the `claude` default. Validated here so an invalid flag fails fast.
    */
   agent?: AgentRuntimeId;
+  /**
+   * Validated `--fallback-agent` value: the runtime Otto switches to when the
+   * active runtime hits a usage/rate limit. Undefined when the flag is absent
+   * (run-bin then falls back to OTTO_FALLBACK_AGENT / config / no fallback).
+   * Default behavior is unchanged — fallback is opt-in (issue #24 P4).
+   */
+  fallbackAgent?: AgentRuntimeId;
+  /** `--auto-switch-on-limit` toggle (default false; opt-in, issue #24 P4). */
+  autoSwitchOnLimit: boolean;
   reviewPanel: boolean;
   watch: boolean;
   watchIntervalSec?: number;
@@ -161,6 +170,9 @@ export function parseFlags(
   let expectingTokenMode = false;
   let agent: AgentRuntimeId | undefined;
   let expectingAgent = false;
+  let fallbackAgent: AgentRuntimeId | undefined;
+  let expectingFallbackAgent = false;
+  let autoSwitchOnLimit = false;
   let reviewPanel = false;
   let watch = false;
   let watchIntervalSec: number | undefined;
@@ -231,6 +243,11 @@ export function parseFlags(
       expectingAgent = false;
       continue;
     }
+    if (expectingFallbackAgent) {
+      fallbackAgent = parseAgentId(a, "--fallback-agent");
+      expectingFallbackAgent = false;
+      continue;
+    }
     if (expectingWatchInterval) {
       if (!/^\d+$/.test(a) || Number.parseInt(a, 10) <= 0) {
         throw new Error(
@@ -298,6 +315,8 @@ export function parseFlags(
     else if (a === "--cooldown") expectingCooldown = true;
     else if (a === "--token-mode") expectingTokenMode = true;
     else if (a === "--agent") expectingAgent = true;
+    else if (a === "--fallback-agent") expectingFallbackAgent = true;
+    else if (a === "--auto-switch-on-limit") autoSwitchOnLimit = true;
     else if (a === "--review-panel") reviewPanel = true;
     else if (a === "--watch") watch = true;
     else if (a === "--watch-interval") expectingWatchInterval = true;
@@ -330,6 +349,9 @@ export function parseFlags(
   }
   if (expectingAgent) {
     throw new Error("--agent requires a value");
+  }
+  if (expectingFallbackAgent) {
+    throw new Error("--fallback-agent requires a value");
   }
   if (expectingWatchInterval) {
     throw new Error("--watch-interval requires a value");
@@ -374,6 +396,8 @@ export function parseFlags(
     cooldownMs,
     tokenMode,
     agent,
+    fallbackAgent,
+    autoSwitchOnLimit,
     reviewPanel,
     watch,
     watchIntervalSec,
@@ -444,6 +468,8 @@ Flags:
   --cooldown <ms>     wait this many milliseconds between iterations; adaptive backoff doubles on throttle (default: 0)
   --token-mode <mode> token accounting mode: off | measure | reduce (default: off)
   --agent <runtime>   agent CLI runtime: claude | codex (or OTTO_AGENT / .otto/config.json "agent"; default: claude)
+  --fallback-agent <runtime>  runtime to switch to on a usage/rate limit: claude | codex (or OTTO_FALLBACK_AGENT / config "fallbackAgent"; default: none)
+  --auto-switch-on-limit  switch to the fallback runtime when the active one hits a limit (or OTTO_AUTO_SWITCH_ON_LIMIT=1 / config "autoSwitchOnLimit"; default: off)
   --review-panel      replace the single reviewer stage with correctness/security/tests lens reviewers + one synth commit (default: off)
   --branch <mode>     where Otto commits: current (default) | branch (new branch) | worktree (isolated checkout)
   --branch-prefix <p> branch name prefix for branch/worktree modes (default: otto/)
@@ -473,6 +499,8 @@ Environment variables:
   OTTO_RESULT_GRACE_MS  post-result grace timer ms (default 30000; 0 disables).
   OTTO_TOKEN_MODE   default token accounting mode: off | measure | reduce.
   OTTO_AGENT        default agent CLI runtime: claude | codex; same as --agent (default: claude).
+  OTTO_FALLBACK_AGENT  runtime to switch to on a usage/rate limit: claude | codex; same as --fallback-agent (default: none).
+  OTTO_AUTO_SWITCH_ON_LIMIT  switch to the fallback runtime on a limit when truthy (1/true/yes/on); same as --auto-switch-on-limit (default: off).
   OTTO_REVIEW_LENSES   comma-separated lens list for --review-panel (default: correctness,security,tests).
   OTTO_WATCH_LABEL     issue label to poll for in watch mode (default: "otto").
   OTTO_GITHUB_REPO     scope otto-ghafk to a single GitHub repo ("owner/name"); same as --repo.
@@ -505,6 +533,16 @@ export type PrintConfigOptions = {
   agentSource?: AgentSelectionSource;
   /** Set when OTTO_AGENT / config "agent" was invalid; reported, not thrown. */
   agentError?: string;
+  /** Resolved fallback runtime id (issue #24 P4); omitted → no fallback. */
+  fallbackAgentId?: AgentRuntimeId;
+  /** Display name for the fallback runtime (e.g. "Codex CLI"). */
+  fallbackAgentDisplayName?: string;
+  /** Where the fallback selection came from (flag | env | config). */
+  fallbackSource?: AgentSelectionSource;
+  /** auto-switch-on-limit enabled (default false). */
+  autoSwitchOnLimit?: boolean;
+  /** Set when OTTO_FALLBACK_AGENT / config was invalid; reported, not thrown. */
+  fallbackError?: string;
   /** Resolved review lenses (empty array = single reviewer). */
   reviewLenses?: string[];
   watch?: boolean;
@@ -550,6 +588,11 @@ export function printConfig(
     agentDisplayName = "Claude Code",
     agentSource = "default",
     agentError,
+    fallbackAgentId,
+    fallbackAgentDisplayName,
+    fallbackSource,
+    autoSwitchOnLimit = false,
+    fallbackError,
     reviewLenses = [],
     watch = false,
     watchIntervalSec,
@@ -588,6 +631,15 @@ export function printConfig(
     ? `invalid (${agentError})`
     : `${agentId} (${agentDisplayName})`;
   const runtimeSourceStatus = agentError ? "—" : agentSource;
+  // Fallback-on-limit (issue #24 P4): off unless a fallback agent is configured;
+  // auto-switch is shown alongside (and flagged when on with no agent to use).
+  const fallbackStatus = fallbackError
+    ? `invalid (${fallbackError})`
+    : fallbackAgentId
+      ? `${fallbackAgentId} (${fallbackAgentDisplayName}, ${fallbackSource}) · auto-switch ${autoSwitchOnLimit ? "on" : "off"}`
+      : autoSwitchOnLimit
+        ? "auto-switch on · no fallback agent set"
+        : "off";
   const budgetStatus = budget != null ? `$${budget.toFixed(2)}` : "off";
   const cooldownStatus = cooldownMs ? `${cooldownMs}ms` : "off";
   const tokenModeStatus = tokenModeError
@@ -617,6 +669,7 @@ export function printConfig(
   packageDir            ${packageDir}
   runtime               ${runtimeStatus}
   runtime source        ${runtimeSourceStatus}
+  fallback              ${fallbackStatus}
   OTTO_RUNNER          ${runner}${process.env.OTTO_RUNNER ? "" : "  (default)"}
   sandbox network       ${netStatus}
   model                 ${modelStatus}

@@ -155,6 +155,66 @@ describe("parseFlags --agent", () => {
   });
 });
 
+describe("parseFlags --fallback-agent / --auto-switch-on-limit", () => {
+  it.each(["claude", "codex"] as const)("parses --fallback-agent %s", (id) => {
+    const f = parseFlags(["--fallback-agent", id, "5"]);
+    expect(f.fallbackAgent).toBe(id);
+    expect(f.rest).toEqual(["5"]);
+  });
+
+  it("errors when --fallback-agent has no value", () => {
+    expect(() => parseFlags(["--fallback-agent"])).toThrow(
+      /--fallback-agent requires a value/
+    );
+  });
+
+  it("errors on an invalid --fallback-agent value", () => {
+    expect(() => parseFlags(["--fallback-agent", "gpt"])).toThrow(
+      /--fallback-agent must be one of claude\|codex/
+    );
+  });
+
+  it("parses --auto-switch-on-limit as a boolean toggle", () => {
+    expect(parseFlags(["--auto-switch-on-limit", "5"]).autoSwitchOnLimit).toBe(
+      true
+    );
+    expect(parseFlags(["5"]).autoSwitchOnLimit).toBe(false);
+  });
+
+  it("defaults fallbackAgent to undefined when absent", () => {
+    expect(parseFlags(["5"]).fallbackAgent).toBeUndefined();
+  });
+});
+
+describe("printConfig fallback", () => {
+  it("shows off when no fallback is configured", () => {
+    const out = configOutput({});
+    expect(out).toMatch(/fallback\s+off/);
+  });
+
+  it("shows the fallback runtime, source, and auto-switch state", () => {
+    const out = configOutput({
+      fallbackAgentId: "codex",
+      fallbackAgentDisplayName: "Codex CLI",
+      fallbackSource: "flag",
+      autoSwitchOnLimit: true,
+    });
+    expect(out).toMatch(/fallback\s+codex \(Codex CLI, flag\) · auto-switch on/);
+  });
+
+  it("warns when auto-switch is on but no fallback agent is set", () => {
+    const out = configOutput({ autoSwitchOnLimit: true });
+    expect(out).toMatch(/fallback\s+auto-switch on · no fallback agent set/);
+  });
+
+  it("reports an invalid fallback selection without throwing", () => {
+    const out = configOutput({
+      fallbackError: 'OTTO_FALLBACK_AGENT must be one of claude|codex, got: "gpt"',
+    });
+    expect(out).toMatch(/fallback\s+invalid/);
+  });
+});
+
 describe("printConfig runtime", () => {
   it("shows the active runtime, display name, and selection source", () => {
     const out = configOutput({

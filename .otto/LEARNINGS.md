@@ -2,6 +2,23 @@
 
 ## Conventions
 
+- **Linear project scope (`OTTO_LINEAR_PROJECT` / `otto-linear --project`, issue
+  #21 P1)** mirrors the team filter, NOT the GitHub `--repo` shape: a project name
+  is human-friendly free text (`"Roadmap Q3"`) that only ever reaches Linear's
+  GraphQL `IssueFilter` (`project: { name: { eq } }` in `listIssues`), never a host
+  shell — so it needs **no `parseGithubRepo`-style charset validation and no
+  template interpolation**. Like team, the linear templates DON'T pass `--project`
+  in the command body; `otto-linear list/dump` read `OTTO_LINEAR_PROJECT` from the
+  inherited env inside `listOptions`, and `runLinearAfk`'s `watchPoll` reads the
+  same env into `pollLinearIssues` (`LinearPollDeps.project`). Project names aren't
+  unique across teams (issue risk note), so a project filter is meant to be paired
+  with `OTTO_LINEAR_TEAM`; we still match on name to keep CLI input friendly.
+  Pinned by `linear-api.test.ts` (filter present/absent), `linear-cli.test.ts`
+  (flag + env defaulting), `watch.test.ts` (poll forwards project). **Still TODO
+  (next P1 item):** the `otto-linear-afk --project` flag + `--print-config` scope
+  display — that's the run-bin/`supportsProjectScope` half (mirrors
+  `supportsRepoScope`), which DOES need to set `process.env.OTTO_LINEAR_PROJECT`
+  and build a linear `WorkScope` for `runWatch`/`describeScope`.
 - **GitHub watch scope (`--repo`/`OTTO_GITHUB_REPO`, issue #21 P1)** threads a
   validated repo end-to-end without breaking the host-shell RCE invariant. The
   raw `--repo` value is captured untyped in `parseFlags` (`flags.repo`); run-bin

@@ -18,9 +18,11 @@ This run implements **only the first unchecked task**.
       prose, and `--print-config`/watch poll lines via `describeScope`. Gated to
       otto-ghafk; invalid scope is fatal for a real run, reported (exit 0) under
       `--print-config`. → verify: `pnpm -r typecheck && pnpm -r test && pnpm test`
-- [ ] Linear `--project "Name"` / `OTTO_LINEAR_PROJECT`: extend
-      `listIssues`/`dump`/`view` filtering by project, thread into
-      `pollLinearIssues` and the linear templates.
+- [x] Linear `OTTO_LINEAR_PROJECT` / `otto-linear --project`: `listIssues` adds a
+      `project: { name: { eq } }` filter; `otto-linear list`/`dump` resolve project
+      from `--project`/`OTTO_LINEAR_PROJECT`; `pollLinearIssues` + the linear-afk
+      `watchPoll` thread it (env inherited by the templates, like team). The
+      `otto-linear-afk --project` flag + print-config scope display is the next item.
 - [ ] `--print-config` shows resolved scope (label + repo/project/team) via
       `describeScope`; watch poll lines name the exact scope.
 

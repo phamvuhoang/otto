@@ -105,6 +105,31 @@ describe("runLinear list", () => {
     expect(listIssues).toHaveBeenCalledWith({ label: "triage", team: "OPS", limit: 50 });
   });
 
+  it("passes --project through to listIssues", async () => {
+    const listIssues = vi.fn(async () => []);
+    const { deps } = harness({ makeClient: () => fakeClient({ listIssues }) });
+
+    await runLinear(["list", "--project", "Roadmap Q3"], deps);
+
+    expect(listIssues).toHaveBeenCalledWith({
+      label: "otto",
+      project: "Roadmap Q3",
+      limit: 50,
+    });
+  });
+
+  it("defaults the project from OTTO_LINEAR_PROJECT", async () => {
+    const listIssues = vi.fn(async () => []);
+    const { deps } = harness({
+      env: { OTTO_LINEAR_API_KEY: "tok", OTTO_LINEAR_PROJECT: "Bugs" },
+      makeClient: () => fakeClient({ listIssues }),
+    });
+
+    await runLinear(["list"], deps);
+
+    expect(listIssues).toHaveBeenCalledWith({ label: "otto", project: "Bugs", limit: 50 });
+  });
+
   it("reports cleanly when there are no matching issues", async () => {
     const { deps, out } = harness({
       makeClient: () => fakeClient({ listIssues: async () => [] }),

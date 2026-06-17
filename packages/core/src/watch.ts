@@ -89,6 +89,7 @@ export function pollOpenIssues(
 export type LinearPollDeps = {
   label: string;
   team?: string;
+  project?: string;
   limit?: number;
   /** Resolve the Linear credential; defaults to env/file precedence. */
   resolveAuth?: () => LinearAuth | null;
@@ -117,6 +118,7 @@ export async function pollLinearIssues(deps: LinearPollDeps): Promise<PollResult
     const issues = await client.listIssues({
       label: deps.label,
       team: deps.team,
+      project: deps.project,
       limit: deps.limit ?? 50,
     });
     return { ok: true, count: issues.length };

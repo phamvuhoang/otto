@@ -178,6 +178,23 @@ describe("pollLinearIssues", () => {
     });
     expect(seen).toMatchObject({ label: "ops", team: "ENG" });
   });
+
+  it("forwards project to listIssues so watch never sees other projects", async () => {
+    let seen: unknown;
+    await pollLinearIssues({
+      label: "ops",
+      team: "ENG",
+      project: "Roadmap Q3",
+      resolveAuth: () => auth,
+      makeClient: () => ({
+        listIssues: async (o: unknown) => {
+          seen = o;
+          return [];
+        },
+      }),
+    });
+    expect(seen).toMatchObject({ label: "ops", team: "ENG", project: "Roadmap Q3" });
+  });
 });
 
 describe("runWatch", () => {

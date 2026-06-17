@@ -46,7 +46,7 @@ export const defaultLinearCliDeps: LinearCliDeps = {
 };
 
 const USAGE =
-  "Usage: linear <list|dump|view <ref>|comment <ref> --body-file <path>|done <ref>> [--label <name>] [--team <key>] [--limit <n>]";
+  "Usage: linear <list|dump|view <ref>|comment <ref> --body-file <path>|done <ref>> [--label <name>] [--team <key>] [--project <name>] [--limit <n>]";
 
 /** Pull `--name <value>` flags out of argv, returning the flags + positionals. */
 function parseFlags(argv: string[]): {
@@ -66,18 +66,28 @@ function parseFlags(argv: string[]): {
   return { flags, positionals };
 }
 
-/** Resolve label/team/limit from flags, falling back to env then defaults. */
+/** Resolve label/team/project/limit from flags, falling back to env then defaults. */
 function listOptions(
   flags: Record<string, string>,
   env: NodeJS.ProcessEnv
-): { label: string; team?: string; limit: number } | { error: string } {
+):
+  | { label: string; team?: string; project?: string; limit: number }
+  | { error: string } {
   const label = flags.label?.trim() || env.OTTO_LINEAR_LABEL?.trim() || "otto";
   const team = flags.team?.trim() || env.OTTO_LINEAR_TEAM?.trim() || undefined;
+  const project =
+    flags.project?.trim() || env.OTTO_LINEAR_PROJECT?.trim() || undefined;
   const limit = flags.limit != null ? Number(flags.limit) : 50;
   if (!Number.isInteger(limit) || limit <= 0) {
     return { error: `--limit must be a positive integer, got: ${flags.limit}` };
   }
-  return team ? { label, team, limit } : { label, limit };
+  // Omit absent filters entirely so listIssues' `if (team)`/`if (project)`
+  // guards stay clean and tests can assert the exact arg shape.
+  const opts: { label: string; team?: string; project?: string; limit: number } =
+    { label, limit };
+  if (team) opts.team = team;
+  if (project) opts.project = project;
+  return opts;
 }
 
 /**
@@ -103,7 +113,9 @@ export async function runLinear(
 
   // Validate args before touching credentials so usage errors stay exit 2.
   let ref: ReturnType<typeof parseLinearRef> | undefined;
-  let listOpts: { label: string; team?: string; limit: number } | undefined;
+  let listOpts:
+    | { label: string; team?: string; project?: string; limit: number }
+    | undefined;
   switch (sub) {
     case "list":
     case "dump": {

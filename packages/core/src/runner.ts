@@ -10,6 +10,7 @@ import {
 import { createInterface } from "node:readline";
 import { join, posix } from "node:path";
 
+import type { AgentRuntimeId } from "./agent-runtime.js";
 import type { Stage } from "./stages.js";
 import {
   dim,
@@ -134,14 +135,16 @@ function abortError(): Error {
 export function stageLogPath(
   workspaceDir: string,
   iteration: number,
-  stageName: string
+  stageName: string,
+  runtimeId?: AgentRuntimeId
 ): string {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const suffix = runtimeId ? `-${runtimeId}` : "";
   return join(
     workspaceDir,
     ".otto-tmp",
     "logs",
-    `${timestamp}-iter${iteration}-${stageName}.ndjson`
+    `${timestamp}-iter${iteration}-${stageName}${suffix}.ndjson`
   );
 }
 

@@ -8,6 +8,7 @@ import {
   resolveRunner,
   resolveSandboxNet,
   resultFromEvent,
+  stageLogPath,
 } from "../runner.js";
 
 describe("parseGraceMs", () => {
@@ -46,6 +47,19 @@ describe("parseGraceMs", () => {
   it("honors a custom default", () => {
     expect(parseGraceMs(undefined, 1000)).toBe(1000);
     expect(parseGraceMs("abc", 1000)).toBe(1000);
+  });
+});
+
+describe("stageLogPath", () => {
+  it("appends the runtime id as a filename suffix when given", () => {
+    const p = stageLogPath("/ws", 2, "implementer", "codex");
+    expect(p).toMatch(/-iter2-implementer-codex\.ndjson$/);
+  });
+
+  it("omits the suffix when no runtime id is given (back-compat)", () => {
+    const p = stageLogPath("/ws", 2, "implementer");
+    expect(p).toMatch(/-iter2-implementer\.ndjson$/);
+    expect(p).not.toContain("-claude");
   });
 });
 

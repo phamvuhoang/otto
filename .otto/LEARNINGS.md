@@ -2,6 +2,26 @@
 
 ## Conventions
 
+- **Runtime visibility threading (issue #24 P1 step 2)** — the resolved
+  `{id,displayName}` reaches `runLoop` via two new `LoopOptions`
+  (`agentId`/`agentDisplayName`, default `claude`/`Claude Code`) wired from
+  run-bin's `agent.id`/`agent.displayName`, surfacing on FOUR seams: the version
+  banner (`… (core x) · runtime: <displayName>`), the per-stage banner
+  (`… (stage n/m) · <displayName>`, both color + plain), the NDJSON log filename
+  (`stageLogPath` gained an optional 4th `runtimeId` arg → `-<id>` suffix; passed
+  by `stage-exec.ts` via a new `ExecuteStageOptions.agentId` and by loop's
+  failure-marker call), and the summary line (`· runtime: <id>`). The panel
+  threads it too (`RunPanelOptions.agentId` → each `executeStage`), so lens/synth
+  logs are runtime-labelled. `runWatch` carries `agentId`/`agentDisplayName`
+  through to its inner `runLoop`. **The log suffix is ALWAYS applied on a real
+  run** (claude → `-claude.ndjson`); the "Claude behavior byte-for-byte" rule is
+  about the spawned CLI args/output, not internal artifact filenames, and the
+  roadmap explicitly wants the runtime in the log path. `stageLogPath`'s param is
+  optional so test mocks/older callers stay back-compatible (no suffix when
+  omitted). Pinned by `runner.test.ts` (suffix present/absent), `loop.test.ts`
+  (banner+summary show runtime; claude default), `stage-exec.test.ts` (agentId →
+  filename). The runner still spawns `claude` — adapter extraction is the next
+  plan task (P0 boundary).
 - **Agent runtime selection (`--agent`/`OTTO_AGENT`/config `agent`, issue #24
   P0/P1 step 1)** is config-parsing + visibility ONLY — the runner still spawns
   `claude` (no adapter yet). Pure module `agent-runtime.ts`: `AgentRuntimeId =

@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import type { AgentRuntimeId } from "./agent-runtime.js";
 import { readCoreVersion } from "./cli-help.js";
 import { acquire, type Releaser } from "./keepalive.js";
 import { notifyComplete, notifyError } from "./notify.js";
@@ -150,6 +151,10 @@ export type LoopOptions = {
   maxWaitMs?: number;
   /** Force a fresh run, ignoring/clearing prior state. Default false. */
   fresh?: boolean;
+  /** Active agent runtime id. Default "claude". Labels log files + the summary line. */
+  agentId?: AgentRuntimeId;
+  /** Active runtime display name (e.g. "Claude Code"). Default "Claude Code". Shown in the run + stage banners. */
+  agentDisplayName?: string;
 };
 
 export type LoopOutcome = {
@@ -178,9 +183,11 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     mode = "afk",
     maxWaitMs = DEFAULT_MAX_WAIT_MS,
     fresh = false,
+    agentId = "claude",
+    agentDisplayName = "Claude Code",
   } = opts;
 
-  const versionLine = `${bin} ${cliVersion} (core ${readCoreVersion()})`;
+  const versionLine = `${bin} ${cliVersion} (core ${readCoreVersion()}) · runtime: ${agentDisplayName}`;
   process.stderr.write(
     `${USE_COLOR ? `${dim("━━━")} ${bold(versionLine)} ${dim("━━━")}` : `== ${versionLine} ==`}\n`
   );
@@ -278,7 +285,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       tokenMode === "off" ? "" : ` · tokens ${formatTokenUsage(runTokenUsage)}`;
     let line =
       `${greenOut(SYM_OUT.bullet)} ${boldOut(`Otto ${reason}`)}` +
-      `${dimOut(` · ${iters} · $${runCostUsd.toFixed(2)}${tokens}`)}\n` +
+      `${dimOut(` · ${iters} · $${runCostUsd.toFixed(2)}${tokens} · runtime: ${agentId}`)}\n` +
       `${dimOut(`  → next: ${nextActionFor(reason)}`)}\n`;
     const deferred = deferredFollowupCount(workspaceDir);
     if (deferred > 0) {
@@ -346,8 +353,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         }
 
         const banner = USE_COLOR
-          ? `${dim("━━━")} ${bold(`iteration ${i}/${total}`)} ${dim("·")} ${bold(stage.name)} ${dim(`(stage ${s + 1}/${stages.length})`)} ${dim("━━━")}`
-          : `== iteration ${i}/${total} · ${stage.name} (stage ${s + 1}/${stages.length}) ==`;
+          ? `${dim("━━━")} ${bold(`iteration ${i}/${total}`)} ${dim("·")} ${bold(stage.name)} ${dim(`(stage ${s + 1}/${stages.length})`)} ${dim("·")} ${bold(agentDisplayName)} ${dim("━━━")}`
+          : `== iteration ${i}/${total} · ${stage.name} (stage ${s + 1}/${stages.length}) · ${agentDisplayName} ==`;
         process.stderr.write(`\n${banner}\n`);
 
         const usePanel =
@@ -366,6 +373,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               cooldownMs,
               tokenMode,
               signal: activeSignal,
+              agentId,
               onStage: accountStage,
             });
           }
@@ -378,6 +386,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             maxRetries,
             tokenMode,
             signal: activeSignal,
+            agentId,
           });
           accountStage(r);
           return r;
@@ -438,7 +447,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             summarize("aborted", i - 1);
             return outcome();
           }
-          const stageLog = stageLogPath(workspaceDir, i, stage.name);
+          const stageLog = stageLogPath(workspaceDir, i, stage.name, agentId);
           const failureMarker = `[failure] iteration ${i} stage ${stage.name} failed after ${maxRetries} retries: ${(err as Error).message}`;
           try {
             appendFileSync(stageLog, failureMarker + "\n");

@@ -511,6 +511,8 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       provider: cfg.watchProvider,
       scope,
       scopes,
+      agentId: agent.id,
+      agentDisplayName: agent.displayName,
     });
     return;
   }
@@ -533,5 +535,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     mode: runMode,
     maxWaitMs,
     fresh: flags.fresh,
+    agentId: agent.id,
+    agentDisplayName: agent.displayName,
   });
 }

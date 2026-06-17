@@ -183,6 +183,41 @@ describe("runLoop", () => {
     expect(stderr).toContain("otto-afk 9.9.9 (core ");
   });
 
+  it("shows the active runtime in the version banner, stage banner, and summary", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    await runLoop(
+      loopOptions(dirs, {
+        bin: "otto-afk",
+        cliVersion: "9.9.9",
+        agentId: "codex",
+        agentDisplayName: "Codex CLI",
+      })
+    );
+
+    const stderr = stderrText();
+    // run banner
+    expect(stderr).toContain("otto-afk 9.9.9 (core ");
+    expect(stderr).toContain("runtime: Codex CLI");
+    // stage banner names the runtime
+    expect(stderr).toMatch(/iteration 1\/1 · implementer .*Codex CLI/);
+    // summary line names the runtime id
+    expect(stdoutText()).toContain("runtime: codex");
+  });
+
+  it("defaults the runtime to Claude when not provided", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    await runLoop(loopOptions(dirs, { bin: "otto-afk", cliVersion: "9.9.9" }));
+
+    expect(stderrText()).toContain("runtime: Claude Code");
+    expect(stdoutText()).toContain("runtime: claude");
+  });
+
   it("uses the bin name in the wake-lock reason", async () => {
     const dirs = makeDirs();
     roots.push(dirs.root);

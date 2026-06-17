@@ -11,7 +11,7 @@ task. Implement the first unchecked task per run.
       flag→env→config→default (invalid env/config reported by `--print-config`,
       fatal on real run); `--print-config` shows runtime + display name + source;
       a non-claude real run exits 1 "not implemented yet". Default stays Claude.
-- [ ] **Runtime in run banner, stage banner, log path, and final summary.**
+- [x] **Runtime in run banner, stage banner, log path, and final summary.**
       `runtime: Claude Code` on the version banner; `· Claude Code` on the stage
       banner; `-<runtime>` suffix on the NDJSON log filename; `runtime: claude`
       on the summary line. Thread resolved runtime into `runLoop`.

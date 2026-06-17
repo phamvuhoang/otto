@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import type { AgentRuntimeId } from "./agent-runtime.js";
 import { acquire, type Releaser } from "./keepalive.js";
 import {
   createLinearClient,
@@ -176,6 +177,10 @@ export type RunWatchOptions = {
    * watch never picks up issues from outside the scope.
    */
   scope?: WorkScope;
+  /** Active agent runtime id, threaded into each loop. Default "claude". */
+  agentId?: AgentRuntimeId;
+  /** Active runtime display name, shown in the per-run banner. Default "Claude Code". */
+  agentDisplayName?: string;
   /**
    * Multi-target watch: several GitHub scopes the daemon rotates through. When
    * set, each cycle polls every scope, runs one loop for the first scope with
@@ -327,6 +332,8 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
             signal: daemonAbort.signal,
             bin,
             cliVersion: opts.cliVersion,
+            agentId: opts.agentId,
+            agentDisplayName: opts.agentDisplayName,
           });
           cumulativeCost += outcome.costUsd;
           process.stderr.write(

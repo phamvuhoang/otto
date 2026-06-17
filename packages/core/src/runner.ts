@@ -22,6 +22,7 @@ import {
   isLimitResult,
   resetsAtFromEvent,
 } from "./rate-limit.js";
+import { emptyTokenUsage, parseTokenUsage, type TokenUsage } from "./tokens.js";
 
 export type RunStageOptions = {
   signal?: AbortSignal;
@@ -32,6 +33,7 @@ export type StageResult = {
   costUsd: number;
   isError: boolean;
   apiErrorStatus: string | null;
+  usage: TokenUsage;
 };
 
 /** Pure extraction of the fields Otto tracks from a stream-json `result` event. */
@@ -43,6 +45,7 @@ export function resultFromEvent(ev: unknown): StageResult {
     isError: e.is_error === true,
     apiErrorStatus:
       typeof e.api_error_status === "string" ? e.api_error_status : null,
+    usage: parseTokenUsage(e),
   };
 }
 
@@ -259,6 +262,7 @@ function streamClaude(
       costUsd: 0,
       isError: false,
       apiErrorStatus: null,
+      usage: emptyTokenUsage(),
     };
     let lastResetsAt: number | null = null;
     const stderrTail: string[] = [];

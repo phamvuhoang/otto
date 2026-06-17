@@ -5,6 +5,7 @@ import { executeStage } from "./stage-exec.js";
 import { sleep } from "./pacing.js";
 import type { StageResult } from "./runner.js";
 import { bold, dim, green, red, SYM } from "./stream-render.js";
+import type { TokenMode } from "./tokens.js";
 
 const LENS_STAGE = {
   name: "review-lens",
@@ -80,6 +81,7 @@ export type RunPanelOptions = {
   iteration: number;
   maxRetries: number;
   cooldownMs: number;
+  tokenMode?: TokenMode;
   signal?: AbortSignal;
   /**
    * Called after every panel sub-agent (each lens + synth) so the loop owns
@@ -114,6 +116,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     iteration,
     maxRetries,
     cooldownMs,
+    tokenMode = "off",
     signal,
     onStage,
   } = opts;
@@ -164,6 +167,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
         packageDir,
         iteration,
         maxRetries,
+        tokenMode,
         signal,
         logLabel: `lens-${lens}`,
       });
@@ -190,6 +194,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
       packageDir,
       iteration,
       maxRetries,
+      tokenMode,
       signal,
       logLabel: "verify",
     });
@@ -226,6 +231,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
       packageDir,
       iteration,
       maxRetries,
+      tokenMode,
       signal,
       logLabel: "synth",
     });

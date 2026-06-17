@@ -1,10 +1,12 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
+import { applyPromptReduction } from "./prompt-reduction.js";
 import { renderTemplate } from "./render.js";
 import { DEFAULT_BACKOFF_MS, backoffFor, withRetries } from "./retry.js";
 import { runStage, stageLogPath, type StageResult } from "./runner.js";
 import { USE_COLOR, dim } from "./stream-render.js";
 import type { Stage } from "./stages.js";
+import type { TokenMode } from "./tokens.js";
 
 export type ExecuteStageOptions = {
   stage: Stage;
@@ -13,6 +15,7 @@ export type ExecuteStageOptions = {
   packageDir: string;
   iteration: number;
   maxRetries: number;
+  tokenMode?: TokenMode;
   signal?: AbortSignal;
   /** Disambiguates spill/log paths when multiple sub-stages share an iteration (panel lenses). */
   logLabel?: string;
@@ -29,6 +32,7 @@ export async function executeStage(
     packageDir,
     iteration,
     maxRetries,
+    tokenMode = "off",
     signal,
   } = opts;
   const label = opts.logLabel ?? stage.name;
@@ -40,11 +44,19 @@ export async function executeStage(
 
   return withRetries(
     () => {
-      const prompt = renderTemplate(
+      let prompt = renderTemplate(
         join(packageDir, "templates", stage.template),
         vars,
         { cwd: workspaceDir, spillHostDir, spillRefPath }
       );
+      if (tokenMode === "reduce") {
+        const reduced = applyPromptReduction(prompt);
+        prompt = reduced.prompt;
+        const { originalChars, reducedChars, cacheHits } = reduced.stats;
+        process.stderr.write(
+          `${dim(`prompt reduce ${originalChars} -> ${reducedChars} chars | cache hits ${cacheHits}`)}\n`
+        );
+      }
       return runStage(
         stage,
         prompt,

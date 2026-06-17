@@ -95,7 +95,9 @@ describe("pollLinearIssues", () => {
     const r = await pollLinearIssues({
       label: "otto",
       resolveAuth: () => auth,
-      makeClient: () => ({ listIssues: async () => [{ id: "1" }, { id: "2" }] as any }),
+      makeClient: () => ({
+        listIssues: async () => [{ id: "1" }, { id: "2" }] as any,
+      }),
     });
     expect(r).toEqual({ ok: true, count: 2 });
   });
@@ -193,7 +195,11 @@ describe("pollLinearIssues", () => {
         },
       }),
     });
-    expect(seen).toMatchObject({ label: "ops", team: "ENG", project: "Roadmap Q3" });
+    expect(seen).toMatchObject({
+      label: "ops",
+      team: "ENG",
+      project: "Roadmap Q3",
+    });
   });
 });
 
@@ -230,6 +236,7 @@ describe("runWatch", () => {
         budgetUsd: 5,
         maxRetries: 0,
         reviewLenses: ["correctness"],
+        tokenMode: "measure",
       })
     );
     // first run gets the full budget remaining + the loop flags that --watch must honor
@@ -238,6 +245,7 @@ describe("runWatch", () => {
       expect.objectContaining({
         maxRetries: 0,
         reviewLenses: ["correctness"],
+        tokenMode: "measure",
         budgetUsd: 5,
         noKeepAlive: true,
       })
@@ -369,8 +377,9 @@ describe("runWatch", () => {
         { provider: "github" as const, owner: "acme", repo: "web" },
         { provider: "github" as const, owner: "acme", repo: "db" },
       ];
-      mocks.pollIssues.mockImplementation((_l: string, _c: string, repo?: string) =>
-        repo === "acme/api" ? { ok: true, count: 0 } : { ok: true, count: 1 }
+      mocks.pollIssues.mockImplementation(
+        (_l: string, _c: string, repo?: string) =>
+          repo === "acme/api" ? { ok: true, count: 0 } : { ok: true, count: 1 }
       );
       let repoDuringRun: string | undefined;
       mocks.runLoop.mockImplementation(async () => {
@@ -382,7 +391,11 @@ describe("runWatch", () => {
       expect(mocks.runLoop).toHaveBeenCalledTimes(1);
       expect(repoDuringRun).toBe("acme/web");
       // break stops the cycle before the third scope is even polled
-      expect(mocks.pollIssues).not.toHaveBeenCalledWith("otto", "/ws", "acme/db");
+      expect(mocks.pollIssues).not.toHaveBeenCalledWith(
+        "otto",
+        "/ws",
+        "acme/db"
+      );
     });
 
     it("a failed poll for one scope does not block a later scope with work from running", async () => {
@@ -390,10 +403,11 @@ describe("runWatch", () => {
       // the later scope: the loop must still RUN, confined to acme/web. (The poll
       // continuing is necessary but not sufficient — the actual P3 criterion is
       // that a later scope with work still gets a run after an earlier failure.)
-      mocks.pollIssues.mockImplementation((_l: string, _c: string, repo?: string) =>
-        repo === "acme/api"
-          ? { ok: false, auth: false, detail: "boom" }
-          : { ok: true, count: 1 }
+      mocks.pollIssues.mockImplementation(
+        (_l: string, _c: string, repo?: string) =>
+          repo === "acme/api"
+            ? { ok: false, auth: false, detail: "boom" }
+            : { ok: true, count: 1 }
       );
       let repoDuringRun: string | undefined;
       mocks.runLoop.mockImplementation(async () => {
@@ -414,7 +428,10 @@ describe("runWatch", () => {
       { provider: "linear" as const, team: "ENG", project: "Roadmap Q3" },
       { provider: "linear" as const, team: "ENG", project: "Bugs" },
     ];
-    const linearProvider = { name: "Linear", authCmd: "otto-linear-auth login" };
+    const linearProvider = {
+      name: "Linear",
+      authCmd: "otto-linear-auth login",
+    };
     let prevProject: string | undefined;
     beforeEach(() => {
       prevProject = process.env.OTTO_LINEAR_PROJECT;

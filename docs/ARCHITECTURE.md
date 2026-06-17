@@ -10,9 +10,9 @@ All source links are relative to this `docs/` directory (e.g. [`../packages/core
 
 Otto ships as a pnpm monorepo (Node >= 20, pnpm >= 9, root `packageManager pnpm@9.12.0`) that produces three release components:
 
-| Component                 | Path            | Version | What it is                                                                                                                          |
-| ------------------------- | --------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `@phamvuhoang/otto-core` | `packages/core` | 0.6.3   | Library: loop driver, native-sandbox runner, template renderer, stage registry, AFK machinery. ESM, TS → `dist/`.                   |
+| Component                | Path            | Version | What it is                                                                                                                        |
+| ------------------------ | --------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `@phamvuhoang/otto-core` | `packages/core` | 0.6.3   | Library: loop driver, native-sandbox runner, template renderer, stage registry, AFK machinery. ESM, TS → `dist/`.                 |
 | `@phamvuhoang/otto`      | `apps/cli`      | 0.6.3   | CLI exposing `otto-afk` and `otto-ghafk` bin entries. Hand-written JS bins, **no build step**, depends on core via `workspace:^`. |
 
 Both packages are **ESM only** (`"type": "module"`). Relative imports inside [`../packages/core/src`](../packages/core/src) end in `.js` (compiled-output extension required by `moduleResolution: NodeNext`).
@@ -28,7 +28,7 @@ otto-afk / otto-ghafk           bin (apps/cli/bin/*.js → import { runAfk|runGh
         │
         ▼
 runAfk / runGhAfk                 (main.ts / gh-main.ts → runBin in run-bin.ts)
-   parseFlags (cli-help.ts)       --help/-V/--print-config/--no-keep-alive/--max-retries/--detach/--log/--notify
+   parseFlags (cli-help.ts)       --help/-V/--print-config/--no-keep-alive/--max-retries/--detach/--log/--notify/--token-mode
    resolve workspaceDir, packageDir from env
    [--detach] detachAndExit       fork-and-exit, parent returns 0
         │
@@ -38,7 +38,7 @@ runLoop (loop.ts)
    install SIGINT/SIGTERM handlers + AbortController
    for i in 1..iterations:
      for s in 0..stages.length-1:
-        renderTemplate(...)  (render.ts)       expand tags → prompt string
+        executeStage(...)  (stage-exec.ts)     renderTemplate + optional prompt reduction
         runStage(...)  (runner.ts)             wrapped in withRetries (retry.ts)
            writeFileSync(.run-*.md)
            [sandbox] writeFileSync(.sandbox-*.json) native OS sandbox settings
@@ -55,7 +55,7 @@ Two resolved directories drive everything (set in `run-bin.ts`, shared by both b
 
 | Dir            | Source                                    | Use                                                             |
 | -------------- | ----------------------------------------- | --------------------------------------------------------------- |
-| `workspaceDir` | `OTTO_WORKSPACE` or `process.cwd()`      | Host repo Claude runs against (`cwd`); root for `.otto-tmp/`.  |
+| `workspaceDir` | `OTTO_WORKSPACE` or `process.cwd()`       | Host repo Claude runs against (`cwd`); root for `.otto-tmp/`.   |
 | `packageDir`   | `resolve(dirname(import.meta.url), "..")` | The installed core package dir; `templates/` is read from here. |
 
 ---
@@ -97,39 +97,50 @@ On a hit the loop prints `Otto complete` and returns immediately — subsequent 
 
 [`../packages/core/src`](../packages/core/src) holds the following key TypeScript modules plus `__tests__/`.
 
-| Module                                                | Responsibility                                                                                                                                                                                                                                             |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`main.ts`](../packages/core/src/main.ts)             | `runAfk` bin entry: parse flags, resolve dirs, optionally detach, then `runLoop([implementer, reviewer], inputs=planAndPrd)`.                                                                                                                              |
-| [`gh-main.ts`](../packages/core/src/gh-main.ts)       | `runGhAfk` bin entry: same shape, `runLoop([ghafkImplementer, reviewer], inputs="")`.                                                                                                                                                                      |
-| [`loop.ts`](../packages/core/src/loop.ts)             | `runLoop` — iteration driver: wake-lock, signal handlers, per-stage render→runStage with retries, sentinel gate, rate-limit wait (capped by `--max-wait`), resume from saved state, notify on terminal events.                                             |
-| [`render.ts`](../packages/core/src/render.ts)         | `renderTemplate` — expand the five tag forms; `resolveShell` picks the host shell for shell/spill tags.                                                                                                                                                    |
-| [`runner.ts`](../packages/core/src/runner.ts)         | Native-sandbox runner: `runStage`, `streamClaude`, sandbox-settings helpers, `stageLogPath`, TTY-gated color exports. Reads `OTTO_RUNNER` / `OTTO_SANDBOX_NET`.                                                                                          |
-| [`stages.ts`](../packages/core/src/stages.ts)         | `STAGES` registry: `implementer` (afk.md), `ghafkImplementer` (ghafk.md), `reviewer` (review.md), all `bypassPermissions`; `Stage` type.                                                                                                                   |
-| [`index.ts`](../packages/core/src/index.ts)           | Public barrel — see exact exports below.                                                                                                                                                                                                                   |
-| [`cli-help.ts`](../packages/core/src/cli-help.ts)     | `parseFlags`, `printHelp`, `printVersion`, `printConfig`, `readCoreVersion`. **Internal** (not exported from `index.ts`).                                                                                                                                  |
-| [`retry.ts`](../packages/core/src/retry.ts)           | `withRetries`, `backoffFor`, `DEFAULT_BACKOFF_MS`, `DEFAULT_MAX_RETRIES`. **Internal.**                                                                                                                                                                    |
-| [`keepalive.ts`](../packages/core/src/keepalive.ts)   | `acquire` — OS wake-lock, returns a `Releaser`; per-platform inhibitor. **Internal.**                                                                                                                                                                      |
-| [`detach.ts`](../packages/core/src/detach.ts)         | `detachAndExit`, `stripDetachFlags` — fork loop into background, parent exits 0. **Internal.**                                                                                                                                                             |
-| [`notify.ts`](../packages/core/src/notify.ts)         | `notify`, `notifyComplete`, `notifyError` — OS toast + terminal bell. **Internal.**                                                                                                                                                                        |
-| [`branch.ts`](../packages/core/src/branch.ts)         | `resolveBranchStrategy` — resolves the branch strategy once at startup (precedence: flag/env → `.otto/config.json` → TTY prompt → `current`) and returns the effective workspace dir the loop runs in (a worktree path in `worktree` mode). **Internal.** |
-| [`git.ts`](../packages/core/src/git.ts)               | Shared low-level git helpers (branch creation, worktree setup, dirty-tree detection). Used by `branch.ts` and `panel.ts`. **Internal.**                                                                                                                    |
-| [`rate-limit.ts`](../packages/core/src/rate-limit.ts) | Detects Claude rate-limit events from the NDJSON stream; extracts the reset timestamp and throws a `RateLimitError` carrying `resetsAt`. **Internal.**                                                                                                     |
-| [`state.ts`](../packages/core/src/state.ts)           | Reads and writes advisory `.otto/state.json` (gitignored) — bin, mode, inputs, iteration/total, status, `resetsAt`; `matchesResume` determines whether a saved state matches the current invocation. **Internal.**                                        |
-| `__tests__/`                                          | Vitest suites: `detach`, `keepalive`, `loop`, `notify`, `retry`, `runner` (6 files).                                                                                                                                                                       |
+| Module                                                            | Responsibility                                                                                                                                                                                                                                            |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`main.ts`](../packages/core/src/main.ts)                         | `runAfk` bin entry: parse flags, resolve dirs, optionally detach, then `runLoop([implementer, reviewer], inputs=planAndPrd)`.                                                                                                                             |
+| [`gh-main.ts`](../packages/core/src/gh-main.ts)                   | `runGhAfk` bin entry: same shape, `runLoop([ghafkImplementer, reviewer], inputs="")`.                                                                                                                                                                     |
+| [`loop.ts`](../packages/core/src/loop.ts)                         | `runLoop` — iteration driver: wake-lock, signal handlers, per-stage render→runStage with retries, sentinel gate, rate-limit wait (capped by `--max-wait`), resume from saved state, notify on terminal events.                                            |
+| [`render.ts`](../packages/core/src/render.ts)                     | `renderTemplate` — expand the five tag forms; `resolveShell` picks the host shell for shell/spill tags.                                                                                                                                                   |
+| [`stage-exec.ts`](../packages/core/src/stage-exec.ts)             | Shared render/retry/run helper used by the loop and review panel. Applies `--token-mode reduce` prompt compaction after template rendering and before `runStage`.                                                                                         |
+| [`tokens.ts`](../packages/core/src/tokens.ts)                     | Pure token usage parsing/formatting, token-mode validation, and aggregation helpers.                                                                                                                                                                      |
+| [`prompt-reduction.ts`](../packages/core/src/prompt-reduction.ts) | Conservative render-time prompt compaction for reduce mode. It does not remove context or cache mutating agent outputs.                                                                                                                                   |
+| [`runner.ts`](../packages/core/src/runner.ts)                     | Native-sandbox runner: `runStage`, `streamClaude`, sandbox-settings helpers, `stageLogPath`, TTY-gated color exports. Reads `OTTO_RUNNER` / `OTTO_SANDBOX_NET`.                                                                                           |
+| [`stages.ts`](../packages/core/src/stages.ts)                     | `STAGES` registry: `implementer` (afk.md), `ghafkImplementer` (ghafk.md), `reviewer` (review.md), all `bypassPermissions`; `Stage` type.                                                                                                                  |
+| [`index.ts`](../packages/core/src/index.ts)                       | Public barrel for the library surface.                                                                                                                                                                                                                    |
+| [`cli-help.ts`](../packages/core/src/cli-help.ts)                 | `parseFlags`, `printHelp`, `printVersion`, `printConfig`, `readCoreVersion`. **Internal** (not exported from `index.ts`).                                                                                                                                 |
+| [`retry.ts`](../packages/core/src/retry.ts)                       | `withRetries`, `backoffFor`, `DEFAULT_BACKOFF_MS`, `DEFAULT_MAX_RETRIES`. **Internal.**                                                                                                                                                                   |
+| [`keepalive.ts`](../packages/core/src/keepalive.ts)               | `acquire` — OS wake-lock, returns a `Releaser`; per-platform inhibitor. **Internal.**                                                                                                                                                                     |
+| [`detach.ts`](../packages/core/src/detach.ts)                     | `detachAndExit`, `stripDetachFlags` — fork loop into background, parent exits 0. **Internal.**                                                                                                                                                            |
+| [`notify.ts`](../packages/core/src/notify.ts)                     | `notify`, `notifyComplete`, `notifyError` — OS toast + terminal bell. **Internal.**                                                                                                                                                                       |
+| [`branch.ts`](../packages/core/src/branch.ts)                     | `resolveBranchStrategy` — resolves the branch strategy once at startup (precedence: flag/env → `.otto/config.json` → TTY prompt → `current`) and returns the effective workspace dir the loop runs in (a worktree path in `worktree` mode). **Internal.** |
+| [`git.ts`](../packages/core/src/git.ts)                           | Shared low-level git helpers (branch creation, worktree setup, dirty-tree detection). Used by `branch.ts` and `panel.ts`. **Internal.**                                                                                                                   |
+| [`rate-limit.ts`](../packages/core/src/rate-limit.ts)             | Detects Claude rate-limit events from the NDJSON stream; extracts the reset timestamp and throws a `RateLimitError` carrying `resetsAt`. **Internal.**                                                                                                    |
+| [`state.ts`](../packages/core/src/state.ts)                       | Reads and writes advisory `.otto/state.json` (gitignored) — bin, mode, inputs, iteration/total, status, `resetsAt`; `matchesResume` determines whether a saved state matches the current invocation. **Internal.**                                        |
+| `__tests__/`                                                      | Vitest suites covering CLI parsing, loop/runtime behavior, templates, providers, runner parsing, and helpers.                                                                                                                                             |
 
-`index.ts` re-exports **exactly**:
+`index.ts` re-exports the public runtime surface, including:
 
 ```ts
 export { runAfk } from "./main.js";
 export { runGhAfk } from "./gh-main.js";
-export { runLoop, type LoopOptions } from "./loop.js";
+export { runLinearAfk, type RunLinearAfkOptions } from "./linear-main.js";
+export { runLoop, type LoopOptions, type LoopOutcome } from "./loop.js";
 export { STAGES, type Stage } from "./stages.js";
 export {
   renderTemplate,
   type RenderOptions,
   type RenderVars,
 } from "./render.js";
-export { runStage } from "./runner.js";
+export { runStage, type StageResult } from "./runner.js";
+export {
+  emptyTokenUsage,
+  parseTokenMode,
+  parseTokenUsage,
+  type TokenMode,
+  type TokenUsage,
+} from "./tokens.js";
 ```
 
 `keepalive` / `detach` / `notify` / `retry` / `cli-help` are deliberately **not** part of the public surface.
@@ -305,11 +316,21 @@ The settings file is written to `.otto-tmp/` and deleted in `finally`.
 
 - **assistant `text`** → printed to **stdout** with a `●` bullet (the visible answer stream).
 - **`tool_use` / `tool_result` / `thinking` / `system:init`** → rendered to **stderr** (tool name + truncated input/result preview + elapsed ms).
-- **`result`** event → its `result` string is captured as `finalResult`, the stage's return value.
+- **`result`** event → its `result` string is captured as the stage's return value. `total_cost_usd`, error fields, and `usage` token fields are parsed into `StageResult`.
 
 Color is **TTY-gated and stream-split**: `USE_COLOR` (stderr) and `USE_COLOR_STDOUT` (stdout) are independent, so `otto-ghafk 1 > out.txt` stays clean even on a TTY. ANSI is disabled when `NO_COLOR` is set or `TERM=dumb`.
 
 **Post-result grace timer:** when the `result` event arrives, a one-shot timer (`OTTO_RESULT_GRACE_MS`, default **30000 ms**; `0` disables) is armed. If the `claude` child emits its final NDJSON but never exits (a known claude-CLI self-deadlock), the timer kills the child and resolves with the captured result so the loop is not hung. On non-zero exit, `streamClaude` rejects with the last ~40 stderr lines.
+
+### Token accounting and reduction
+
+`--token-mode` controls token observability:
+
+- `off` (default) preserves current output and prompt rendering.
+- `measure` aggregates the `usage` object from each Claude `result` event and prints per-stage plus end-of-run input/output/cache token counts.
+- `reduce` does the same accounting and applies conservative prompt compaction in `stage-exec.ts` after `renderTemplate()`.
+
+The reducer only removes redundant whitespace/trailing spaces from rendered prompts. It never caches implementer/reviewer/verifier/synth outputs, skips required context, or replaces source/diff/issue bodies with hidden summaries. Cache-read/cache-create token counts are displayed separately because provider-side cached tokens are not equivalent to fresh input tokens.
 
 ---
 
@@ -379,12 +400,12 @@ Release/publishing (release-please → tag-driven npm workflows) is the single-s
 
 | Variable                 | Default          | Effect                                                                                                                                                                            |
 | ------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OTTO_WORKSPACE`        | `process.cwd()`  | Host dir Claude runs against (`cwd`); root for `.otto-tmp/`.                                                                                                                     |
-| `OTTO_RUNNER`           | `sandbox`        | `sandbox` — native OS sandbox (Seatbelt on macOS), writes confined to the workspace. `host` — unsandboxed.                                                                        |
-| `OTTO_SANDBOX_NET`      | — (unrestricted) | Comma-separated domain allowlist for sandbox network egress. Unset = unrestricted (filesystem is the blast-radius control).                                                       |
-| `OTTO_RESULT_GRACE_MS`  | `30000`          | Post-result kill timer; `0` disables. Invalid/negative → default.                                                                                                                 |
-| `OTTO_MODEL`            | — (CLI default)  | `--model <value>` pass-through to `claude` for every stage. Empty/whitespace = unset.                                                                                             |
-| `OTTO_MAX_WAIT`         | `6h`             | Maximum time to wait for a Claude rate-limit to clear before halting and saving resume state. Accepts bare seconds or duration strings (`90m`, `6h`). Equivalent to `--max-wait`. |
-| `OTTO_BRANCH`           | — (`current`)    | Branch isolation strategy: `current`, `branch`, or `worktree`. Overrides `.otto/config.json`; overridden by `--branch`.                                                          |
-| `OTTO_BRANCH_PREFIX`    | `otto/`         | Prefix for the generated branch/worktree name. Overrides `.otto/config.json`; overridden by `--branch-prefix`.                                                                   |
+| `OTTO_WORKSPACE`         | `process.cwd()`  | Host dir Claude runs against (`cwd`); root for `.otto-tmp/`.                                                                                                                      |
+| `OTTO_RUNNER`            | `sandbox`        | `sandbox` — native OS sandbox (Seatbelt on macOS), writes confined to the workspace. `host` — unsandboxed.                                                                        |
+| `OTTO_SANDBOX_NET`       | — (unrestricted) | Comma-separated domain allowlist for sandbox network egress. Unset = unrestricted (filesystem is the blast-radius control).                                                       |
+| `OTTO_RESULT_GRACE_MS`   | `30000`          | Post-result kill timer; `0` disables. Invalid/negative → default.                                                                                                                 |
+| `OTTO_MODEL`             | — (CLI default)  | `--model <value>` pass-through to `claude` for every stage. Empty/whitespace = unset.                                                                                             |
+| `OTTO_MAX_WAIT`          | `6h`             | Maximum time to wait for a Claude rate-limit to clear before halting and saving resume state. Accepts bare seconds or duration strings (`90m`, `6h`). Equivalent to `--max-wait`. |
+| `OTTO_BRANCH`            | — (`current`)    | Branch isolation strategy: `current`, `branch`, or `worktree`. Overrides `.otto/config.json`; overridden by `--branch`.                                                           |
+| `OTTO_BRANCH_PREFIX`     | `otto/`          | Prefix for the generated branch/worktree name. Overrides `.otto/config.json`; overridden by `--branch-prefix`.                                                                    |
 | `NO_COLOR` / `TERM=dumb` | —                | Disable ANSI on both streams.                                                                                                                                                     |

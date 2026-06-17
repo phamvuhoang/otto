@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { runPreflight } from "./preflight.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
+import { parseTokenMode, type TokenMode } from "./tokens.js";
 
 export type CliFlags = {
   help: boolean;
@@ -16,6 +17,7 @@ export type CliFlags = {
   notify: boolean;
   budget?: number;
   cooldownMs?: number;
+  tokenMode?: TokenMode;
   reviewPanel: boolean;
   watch: boolean;
   watchIntervalSec?: number;
@@ -143,6 +145,8 @@ export function parseFlags(
   let expectingBudget = false;
   let cooldownMs: number | undefined;
   let expectingCooldown = false;
+  let tokenMode: TokenMode | undefined;
+  let expectingTokenMode = false;
   let reviewPanel = false;
   let watch = false;
   let watchIntervalSec: number | undefined;
@@ -201,6 +205,11 @@ export function parseFlags(
       }
       cooldownMs = Number.parseInt(a, 10);
       expectingCooldown = false;
+      continue;
+    }
+    if (expectingTokenMode) {
+      tokenMode = parseTokenMode(a, "--token-mode");
+      expectingTokenMode = false;
       continue;
     }
     if (expectingWatchInterval) {
@@ -268,6 +277,7 @@ export function parseFlags(
     else if (a === "--notify") notify = true;
     else if (a === "--budget") expectingBudget = true;
     else if (a === "--cooldown") expectingCooldown = true;
+    else if (a === "--token-mode") expectingTokenMode = true;
     else if (a === "--review-panel") reviewPanel = true;
     else if (a === "--watch") watch = true;
     else if (a === "--watch-interval") expectingWatchInterval = true;
@@ -294,6 +304,9 @@ export function parseFlags(
   }
   if (expectingCooldown) {
     throw new Error("--cooldown requires a value");
+  }
+  if (expectingTokenMode) {
+    throw new Error("--token-mode requires a value");
   }
   if (expectingWatchInterval) {
     throw new Error("--watch-interval requires a value");
@@ -336,6 +349,7 @@ export function parseFlags(
     notify,
     budget,
     cooldownMs,
+    tokenMode,
     reviewPanel,
     watch,
     watchIntervalSec,
@@ -404,6 +418,7 @@ Flags:
   --notify            emit OS notification + terminal bell on loop completion or unrecoverable failure (default: off)
   --budget <usd>      stop the loop when cumulative stage cost reaches this USD ceiling (default: off)
   --cooldown <ms>     wait this many milliseconds between iterations; adaptive backoff doubles on throttle (default: 0)
+  --token-mode <mode> token accounting mode: off | measure | reduce (default: off)
   --review-panel      replace the single reviewer stage with correctness/security/tests lens reviewers + one synth commit (default: off)
   --branch <mode>     where Otto commits: current (default) | branch (new branch) | worktree (isolated checkout)
   --branch-prefix <p> branch name prefix for branch/worktree modes (default: otto/)
@@ -428,6 +443,7 @@ Environment variables:
   OTTO_MODEL       pin the claude model ("--model <value>" pass-through). Unset =
                     claude CLI default. The claude CLI validates the value.
   OTTO_RESULT_GRACE_MS  post-result grace timer ms (default 30000; 0 disables).
+  OTTO_TOKEN_MODE   default token accounting mode: off | measure | reduce.
   OTTO_REVIEW_LENSES   comma-separated lens list for --review-panel (default: correctness,security,tests).
   OTTO_WATCH_LABEL     issue label to poll for in watch mode (default: "otto").
   OTTO_GITHUB_REPO     scope otto-ghafk to a single GitHub repo ("owner/name"); same as --repo.
@@ -450,6 +466,8 @@ export type PrintConfigOptions = {
   notify?: boolean;
   budget?: number;
   cooldownMs?: number;
+  tokenMode?: TokenMode | string;
+  tokenModeError?: string;
   /** Resolved review lenses (empty array = single reviewer). */
   reviewLenses?: string[];
   watch?: boolean;
@@ -489,6 +507,8 @@ export function printConfig(
     notify = false,
     budget,
     cooldownMs,
+    tokenMode = "off",
+    tokenModeError,
     reviewLenses = [],
     watch = false,
     watchIntervalSec,
@@ -526,6 +546,9 @@ export function printConfig(
 
   const budgetStatus = budget != null ? `$${budget.toFixed(2)}` : "off";
   const cooldownStatus = cooldownMs ? `${cooldownMs}ms` : "off";
+  const tokenModeStatus = tokenModeError
+    ? `invalid (${tokenMode}; ${tokenModeError})`
+    : tokenMode;
   const reviewStatus = reviewLenses.length
     ? `panel: ${reviewLenses.join(", ")}`
     : "single reviewer";
@@ -557,6 +580,7 @@ export function printConfig(
   notify                ${notifyStatus}
   budget                ${budgetStatus}
   cooldown              ${cooldownStatus}
+  token mode            ${tokenModeStatus}
   max-wait              ${maxWaitMs != null ? `${Math.round(maxWaitMs / 60000)}m` : "6h (default)"}
   review                ${reviewStatus}
   branch                ${branchStatus}

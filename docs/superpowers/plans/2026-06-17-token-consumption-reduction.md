@@ -98,12 +98,12 @@ This avoids two competing booleans (`--show-tokens` + `--reduce-tokens`) and giv
 
 **Implementation steps:**
 
-- [ ] Add `TokenUsage`, `emptyTokenUsage()`, `parseTokenUsage(ev: unknown)`, `addTokenUsage(a, b)`, and `formatTokenUsage()` to `packages/core/src/tokens.ts`.
-- [ ] Extend `StageResult` in `packages/core/src/runner.ts`:
+- [x] Add `TokenUsage`, `emptyTokenUsage()`, `parseTokenUsage(ev: unknown)`, `addTokenUsage(a, b)`, and `formatTokenUsage()` to `packages/core/src/tokens.ts`.
+- [x] Extend `StageResult` in `packages/core/src/runner.ts`:
   - `usage: TokenUsage`
-- [ ] Update `resultFromEvent()` to parse `usage` safely.
-- [ ] Keep cost/error behavior unchanged.
-- [ ] Update every test helper that returns `StageResult` to include `usage`, preferably through a shared helper like `ok(result, costUsd, usage?)`.
+- [x] Update `resultFromEvent()` to parse `usage` safely.
+- [x] Keep cost/error behavior unchanged.
+- [x] Update every test helper that returns `StageResult` to include `usage`, preferably through a shared helper like `ok(result, costUsd, usage?)`.
 
 **Acceptance criteria:**
 
@@ -119,9 +119,9 @@ This avoids two competing booleans (`--show-tokens` + `--reduce-tokens`) and giv
 
 **Tests:**
 
-- [ ] Extend `packages/core/src/__tests__/runner.test.ts` for full usage parsing.
-- [ ] Add malformed values coverage: strings, negative numbers, `null`.
-- [ ] Ensure existing result/cost/error tests still pass.
+- [x] Extend `packages/core/src/__tests__/runner.test.ts` for full usage parsing.
+- [x] Add malformed values coverage: strings, negative numbers, `null`.
+- [x] Ensure existing result/cost/error tests still pass.
 
 ---
 
@@ -134,20 +134,20 @@ This avoids two competing booleans (`--show-tokens` + `--reduce-tokens`) and giv
 
 **Implementation steps:**
 
-- [ ] Add `type TokenMode = "off" | "measure" | "reduce"` in `tokens.ts`.
-- [ ] Add `parseTokenMode(raw: string | undefined): TokenMode`:
+- [x] Add `type TokenMode = "off" | "measure" | "reduce"` in `tokens.ts`.
+- [x] Add `parseTokenMode(raw: string | undefined): TokenMode`:
   - unset/empty = `off`
   - valid = `off`, `measure`, `reduce`
   - invalid CLI value throws with a clear error
   - invalid env value should be reported by `--print-config` and fail real runs rather than silently falling back
-- [ ] Extend `CliFlags` with `tokenMode?: TokenMode`.
-- [ ] Parse `--token-mode <off|measure|reduce>` in `parseFlags()`.
-- [ ] Resolve final token mode in `run-bin.ts`: CLI flag wins over `OTTO_TOKEN_MODE`, then default `off`.
-- [ ] Add `tokenMode?: TokenMode` to `LoopOptions`.
-- [ ] Thread token mode into `runLoop()`.
-- [ ] Thread token mode through `runWatch()` if watch mode invokes `runLoop()` internally.
-- [ ] Add `token mode` to `printConfig()`.
-- [ ] Add help text and environment variable docs.
+- [x] Extend `CliFlags` with `tokenMode?: TokenMode`.
+- [x] Parse `--token-mode <off|measure|reduce>` in `parseFlags()`.
+- [x] Resolve final token mode in `run-bin.ts`: CLI flag wins over `OTTO_TOKEN_MODE`, then default `off`.
+- [x] Add `tokenMode?: TokenMode` to `LoopOptions`.
+- [x] Thread token mode into `runLoop()`.
+- [x] Thread token mode through `runWatch()` if watch mode invokes `runLoop()` internally.
+- [x] Add `token mode` to `printConfig()`.
+- [x] Add help text and environment variable docs.
 
 **Acceptance criteria:**
 
@@ -168,9 +168,9 @@ This avoids two competing booleans (`--show-tokens` + `--reduce-tokens`) and giv
 
 **Tests:**
 
-- [ ] `cli-help.test.ts`: parses each valid mode.
-- [ ] `cli-help.test.ts`: rejects invalid mode and missing value.
-- [ ] `run-bin` or print-config tests: env fallback and CLI precedence.
+- [x] `cli-help.test.ts`: parses each valid mode.
+- [x] `cli-help.test.ts`: rejects invalid mode and missing value.
+- [x] `run-bin` or print-config tests: env fallback and invalid-env diagnostics.
 
 ---
 
@@ -183,13 +183,13 @@ This avoids two competing booleans (`--show-tokens` + `--reduce-tokens`) and giv
 
 **Implementation steps:**
 
-- [ ] In `loop.ts`, add `runTokenUsage = emptyTokenUsage()`.
-- [ ] In `accountStage(sr)`, aggregate `sr.usage` into `runTokenUsage`.
-- [ ] If token mode is `measure` or `reduce`, print one concise per-stage line after the cost line:
+- [x] In `loop.ts`, add `runTokenUsage = emptyTokenUsage()`.
+- [x] In `accountStage(sr)`, aggregate `sr.usage` into `runTokenUsage`.
+- [x] If token mode is `measure` or `reduce`, print one concise per-stage line after the cost line:
   - example: `tokens in 7,739 | out 569 | cache create 0 | cache read 103,036 | run total 111,344`
-- [ ] Update `summarize()` to include token totals when token mode is not `off`.
-- [ ] Return token usage in `LoopOutcome` if useful for watch-mode budgeting/reporting.
-- [ ] Keep output unchanged when token mode is `off`.
+- [x] Update `summarize()` to include token totals when token mode is not `off`.
+- [x] Return token usage in `LoopOutcome` if useful for watch-mode budgeting/reporting.
+- [x] Keep output unchanged when token mode is `off`.
 
 **Acceptance criteria:**
 
@@ -205,9 +205,9 @@ This avoids two competing booleans (`--show-tokens` + `--reduce-tokens`) and giv
 
 **Tests:**
 
-- [ ] `loop.test.ts`: measure mode prints per-stage and summary totals.
-- [ ] `loop.test.ts`: off mode preserves old summary output.
-- [ ] `panel.test.ts`: panel sub-agents count tokens once per lens/verifier/synth through existing `onStage`.
+- [x] `loop.test.ts`: measure mode prints per-stage and summary totals.
+- [x] `loop.test.ts`: off mode preserves old summary output.
+- [x] `loop.test.ts`: panel sub-agent accounting is rolled back when a mid-panel rate-limit retries the whole panel attempt.
 
 ---
 
@@ -220,13 +220,13 @@ This avoids two competing booleans (`--show-tokens` + `--reduce-tokens`) and giv
 
 **Policy to encode in code comments and docs:**
 
-- [ ] Do not cache final implementer, reviewer, verifier, or synth agent results.
-- [ ] Do not skip reading required task inputs, diffs, issue bodies, or review docs.
-- [ ] Do not summarize source/diff context with an LLM and hide the original from the agent.
+- [x] Do not cache final implementer, reviewer, verifier, or synth agent results.
+- [x] Do not skip reading required task inputs, diffs, issue bodies, or review docs.
+- [x] Do not summarize source/diff context with an LLM and hide the original from the agent.
 - [ ] Do cache only read-only derived artifacts whose source hash is known.
 - [ ] Prefer exact-hash cache hits in MVP. Defer semantic similarity cache to a later spike.
-- [ ] Keep full original context available by spill file or direct path.
-- [ ] Treat semantic cache practices from PromptCache as future guidance: high threshold = direct hit, low threshold = miss, gray zone = verifier. Do not ship gray-zone behavior until there is a correctness harness.
+- [x] Keep full original context available by spill file or direct path.
+- [x] Treat semantic cache practices from PromptCache as future guidance: high threshold = direct hit, low threshold = miss, gray zone = verifier. Do not ship gray-zone behavior until there is a correctness harness.
 
 **Acceptance criteria:**
 
@@ -245,18 +245,18 @@ This avoids two competing booleans (`--show-tokens` + `--reduce-tokens`) and giv
 
 **Implementation steps:**
 
-- [ ] Create `packages/core/src/prompt-reduction.ts` with:
+- [x] Create `packages/core/src/prompt-reduction.ts` with:
   - `applyPromptReduction(prompt, opts): ReducedPrompt`
   - `ReducedPrompt.prompt`
   - `ReducedPrompt.stats` with `originalChars`, `reducedChars`, `cacheHits`, `cacheMisses`
-- [ ] Apply it in `stage-exec.ts` after `renderTemplate()` and before `runStage()` only when token mode is `reduce`.
-- [ ] Log a concise reduction line in reduce mode:
+- [x] Apply it in `stage-exec.ts` after `renderTemplate()` and before `runStage()` only when token mode is `reduce`.
+- [x] Log a concise reduction line in reduce mode:
   - example: `prompt reduce 48.2k -> 31.4k chars | cache hits 2`
-- [ ] Start with safe transformations only:
-  - collapse excessive blank lines in rendered prompts
-  - cap repeated boilerplate sections only when exact duplicate blocks occur in the same prompt
-  - replace large known dynamic blocks with a summary plus a full-context file path only when the full source is already available via spill/path
-- [ ] Preserve all XML-ish section markers used by templates.
+- [x] Start with safe transformations only:
+  - [x] collapse excessive blank lines in rendered prompts
+  - [ ] cap repeated boilerplate sections only when exact duplicate blocks occur in the same prompt
+  - [ ] replace large known dynamic blocks with a summary plus a full-context file path only when the full source is already available via spill/path
+- [x] Preserve all XML-ish section markers used by templates.
 - [ ] Add fixture tests for every template class: `afk`, `ghafk`, `linearafk`, `review`, `verify`, `apply-review`, `review-panel` templates.
 
 **Acceptance criteria:**
@@ -278,8 +278,8 @@ This avoids two competing booleans (`--show-tokens` + `--reduce-tokens`) and giv
 
 **Tests:**
 
-- [ ] Unit tests for `applyPromptReduction()`.
-- [ ] `stage-exec.test.ts`: reduction applies only for `reduce`.
+- [x] Unit tests for `applyPromptReduction()`.
+- [x] `stage-exec.test.ts`: reduction applies only for `reduce`.
 - [ ] Template render smoke remains green.
 
 ---
@@ -374,17 +374,17 @@ This avoids two competing booleans (`--show-tokens` + `--reduce-tokens`) and giv
 
 **Implementation steps:**
 
-- [ ] Update `README.md` flags table:
+- [x] Update `README.md` flags table:
   - `--token-mode <off|measure|reduce>`
   - examples for measuring a run and enabling reduction
-- [ ] Update `docs/CONFIG.md` environment variable table:
+- [x] Update `docs/CONFIG.md` environment variable table:
   - `OTTO_TOKEN_MODE`
-- [ ] Update `docs/ARCHITECTURE.md`:
+- [x] Update `docs/ARCHITECTURE.md`:
   - result-event token parsing
   - token accounting location
   - reduction mode safety policy
   - cache directory and gitignore behavior
-- [ ] Add troubleshooting note:
+- [x] Add troubleshooting note:
   - token counts are actual post-stage usage, not preflight estimates
   - cache-read tokens may not equal billable tokens
   - reduction mode is conservative and may show small gains on tiny prompts

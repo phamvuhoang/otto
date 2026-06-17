@@ -34,9 +34,9 @@ describe("parseIssueRef", () => {
     expect(parseIssueRef("phamvuhoang/otto#42")).toBe(42);
   });
   it("accepts a GitHub issue URL", () => {
-    expect(
-      parseIssueRef("https://github.com/phamvuhoang/otto/issues/42")
-    ).toBe(42);
+    expect(parseIssueRef("https://github.com/phamvuhoang/otto/issues/42")).toBe(
+      42
+    );
   });
   it("accepts an issue URL with a comment anchor", () => {
     expect(
@@ -110,6 +110,26 @@ describe("parseFlags --max-wait / --fresh", () => {
   });
   it("errors on an invalid --max-wait value", () => {
     expect(() => parseFlags(["--max-wait", "nope"])).toThrow();
+  });
+});
+
+describe("parseFlags --token-mode", () => {
+  it.each(["off", "measure", "reduce"] as const)("parses %s", (mode) => {
+    const f = parseFlags(["--token-mode", mode, "5"]);
+    expect(f.tokenMode).toBe(mode);
+    expect(f.rest).toEqual(["5"]);
+  });
+
+  it("errors when --token-mode has no value", () => {
+    expect(() => parseFlags(["--token-mode"])).toThrow(
+      /--token-mode requires a value/
+    );
+  });
+
+  it("errors on an invalid --token-mode value", () => {
+    expect(() => parseFlags(["--token-mode", "aggressive"])).toThrow(
+      /--token-mode must be one of/
+    );
   });
 });
 
@@ -217,13 +237,26 @@ describe("printConfig scope", () => {
   });
 });
 
+describe("printConfig token mode", () => {
+  it("shows the resolved token mode", () => {
+    const out = configOutput({ tokenMode: "measure" });
+    expect(out).toMatch(/token mode\s+measure/);
+  });
+});
+
 describe("printConfig branch convention", () => {
   it("shows the resolved branch convention when provided", () => {
-    const out = configOutput({ branchStrategy: "branch", branchConvention: "feat" });
+    const out = configOutput({
+      branchStrategy: "branch",
+      branchConvention: "feat",
+    });
     expect(out).toMatch(/branch\s+branch \(convention "feat"\)/);
   });
   it("falls back to the prefix display when no convention is set", () => {
-    const out = configOutput({ branchStrategy: "branch", branchPrefix: "bot/" });
+    const out = configOutput({
+      branchStrategy: "branch",
+      branchPrefix: "bot/",
+    });
     expect(out).toMatch(/branch\s+branch \(prefix "bot\/"\)/);
   });
 });

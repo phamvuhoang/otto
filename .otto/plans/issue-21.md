@@ -76,9 +76,17 @@ This run implements **only the first unchecked task**.
       the others); one cumulative budget; each poll/run line names its scope via
       `describeScope`; `--print-config` lists all scopes. → verify: `pnpm -r
       typecheck && pnpm -r test && pnpm test`
-- [ ] Linear repeatable `--project` / `OTTO_LINEAR_PROJECTS` (mirror the GitHub
-      half): build a linear `WorkScope[]`, poll each project per cycle, run one
-      loop for the scope with work, return to polling; cost reported per scope.
+- [x] Linear repeatable `--project` / `OTTO_LINEAR_PROJECTS` (mirror the GitHub
+      half): `parseFlags` accumulates repeated `--project` into `flags.projects`
+      (`project` kept = first); run-bin merges with the comma-list
+      `OTTO_LINEAR_PROJECTS` into a linear `WorkScope[]` (single → unchanged
+      single-target path + `OTTO_LINEAR_PROJECT` export; >1 → `scopes`). The
+      Linear poller reads the project from the env (not a poll arg), so
+      `runWatch` pins `OTTO_LINEAR_PROJECT` before polling each scope (confining
+      the poll AND the loop); one loop per cycle for the first scope with work;
+      failed polls skipped; one cumulative budget; each poll line names its scope
+      via `describeScope`; `--print-config` lists all scopes. → verify: `pnpm -r
+      typecheck && pnpm -r test && pnpm test`
 
 ## P4 — Migration + docs
 

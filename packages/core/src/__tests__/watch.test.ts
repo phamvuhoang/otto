@@ -359,8 +359,41 @@ describe("runWatch", () => {
     });
 
     it("runs one loop for the first scope with work and confines OTTO_GITHUB_REPO to it", async () => {
+      // An idle leader, then TWO scopes with work. The daemon must skip the idle
+      // leader, run exactly ONE loop for the first scope WITH work (web), and the
+      // break must stop the cycle before the third (db) — proving the
+      // one-loop-per-cycle invariant holds even when multiple scopes have work,
+      // not merely because only one scope did.
+      const threeScopes = [
+        { provider: "github" as const, owner: "acme", repo: "api" },
+        { provider: "github" as const, owner: "acme", repo: "web" },
+        { provider: "github" as const, owner: "acme", repo: "db" },
+      ];
       mocks.pollIssues.mockImplementation((_l: string, _c: string, repo?: string) =>
-        repo === "acme/web" ? { ok: true, count: 1 } : { ok: true, count: 0 }
+        repo === "acme/api" ? { ok: true, count: 0 } : { ok: true, count: 1 }
+      );
+      let repoDuringRun: string | undefined;
+      mocks.runLoop.mockImplementation(async () => {
+        repoDuringRun = process.env.OTTO_GITHUB_REPO;
+        return { costUsd: 1, sentinelHit: true };
+      });
+      mocks.sleep.mockImplementation(abortAfter(1));
+      await runWatch(baseOpts({ scopes: threeScopes })).catch(() => {});
+      expect(mocks.runLoop).toHaveBeenCalledTimes(1);
+      expect(repoDuringRun).toBe("acme/web");
+      // break stops the cycle before the third scope is even polled
+      expect(mocks.pollIssues).not.toHaveBeenCalledWith("otto", "/ws", "acme/db");
+    });
+
+    it("a failed poll for one scope does not block a later scope with work from running", async () => {
+      // acme/api's poll FAILS while acme/web has work. The failure must not block
+      // the later scope: the loop must still RUN, confined to acme/web. (The poll
+      // continuing is necessary but not sufficient — the actual P3 criterion is
+      // that a later scope with work still gets a run after an earlier failure.)
+      mocks.pollIssues.mockImplementation((_l: string, _c: string, repo?: string) =>
+        repo === "acme/api"
+          ? { ok: false, auth: false, detail: "boom" }
+          : { ok: true, count: 1 }
       );
       let repoDuringRun: string | undefined;
       mocks.runLoop.mockImplementation(async () => {
@@ -369,20 +402,64 @@ describe("runWatch", () => {
       });
       mocks.sleep.mockImplementation(abortAfter(1));
       await runWatch(baseOpts({ scopes: twoScopes })).catch(() => {});
+      expect(mocks.pollIssues).toHaveBeenCalledWith("otto", "/ws", "acme/web");
+      expect(stderr.join("")).toMatch(/boom/);
       expect(mocks.runLoop).toHaveBeenCalledTimes(1);
       expect(repoDuringRun).toBe("acme/web");
     });
+  });
 
-    it("a failed poll for one scope does not block polling the others", async () => {
-      mocks.pollIssues.mockImplementation((_l: string, _c: string, repo?: string) =>
-        repo === "acme/api"
-          ? { ok: false, auth: false, detail: "boom" }
+  describe("multi-target Linear (scopes)", () => {
+    const twoProjects = [
+      { provider: "linear" as const, team: "ENG", project: "Roadmap Q3" },
+      { provider: "linear" as const, team: "ENG", project: "Bugs" },
+    ];
+    const linearProvider = { name: "Linear", authCmd: "otto-linear-auth login" };
+    let prevProject: string | undefined;
+    beforeEach(() => {
+      prevProject = process.env.OTTO_LINEAR_PROJECT;
+      delete process.env.OTTO_LINEAR_PROJECT;
+    });
+    afterEach(() => {
+      if (prevProject === undefined) delete process.env.OTTO_LINEAR_PROJECT;
+      else process.env.OTTO_LINEAR_PROJECT = prevProject;
+    });
+
+    it("polls every project each cycle, pinning OTTO_LINEAR_PROJECT, and names each in the poll lines", async () => {
+      // The Linear poller reads the project from the env (not a repo arg), so the
+      // daemon must pin OTTO_LINEAR_PROJECT before each poll to confine it.
+      const projectsDuringPoll: (string | undefined)[] = [];
+      mocks.pollIssues.mockImplementation(() => {
+        projectsDuringPoll.push(process.env.OTTO_LINEAR_PROJECT);
+        return { ok: true, count: 0 };
+      });
+      mocks.sleep.mockImplementation(abortAfter(1));
+      await runWatch(
+        baseOpts({ scopes: twoProjects, provider: linearProvider })
+      ).catch(() => {});
+      expect(projectsDuringPoll).toEqual(["Roadmap Q3", "Bugs"]);
+      const text = stderr.join("");
+      expect(text).toMatch(/project:Roadmap Q3/);
+      expect(text).toMatch(/project:Bugs/);
+    });
+
+    it("runs one loop for the first project with work, confining OTTO_LINEAR_PROJECT to it", async () => {
+      mocks.pollIssues.mockImplementation(() =>
+        process.env.OTTO_LINEAR_PROJECT === "Bugs"
+          ? { ok: true, count: 1 }
           : { ok: true, count: 0 }
       );
+      let projectDuringRun: string | undefined;
+      mocks.runLoop.mockImplementation(async () => {
+        projectDuringRun = process.env.OTTO_LINEAR_PROJECT;
+        return { costUsd: 1, sentinelHit: true };
+      });
       mocks.sleep.mockImplementation(abortAfter(1));
-      await runWatch(baseOpts({ scopes: twoScopes })).catch(() => {});
-      expect(mocks.pollIssues).toHaveBeenCalledWith("otto", "/ws", "acme/web");
-      expect(stderr.join("")).toMatch(/boom/);
+      await runWatch(
+        baseOpts({ scopes: twoProjects, provider: linearProvider })
+      ).catch(() => {});
+      expect(mocks.runLoop).toHaveBeenCalledTimes(1);
+      expect(projectDuringRun).toBe("Bugs");
     });
   });
 });

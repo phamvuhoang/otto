@@ -212,6 +212,11 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
     s?.provider === "github" && s.owner && s.repo
       ? `${s.owner}/${s.repo}`
       : undefined;
+  // The Linear project for a scope. Unlike github (which gets a poll `--repo`
+  // arg), the Linear poller reads OTTO_LINEAR_PROJECT from the env, so the
+  // daemon pins it before each poll/run to confine that scope.
+  const linearProjectOf = (s?: WorkScope): string | undefined =>
+    s?.provider === "linear" && s.project ? s.project : undefined;
   // Human-readable scope prefix for a poll line (e.g. "github acme/web ").
   const labelOf = (s?: WorkScope): string =>
     s ? `${describeScope(s)} ` : "";
@@ -270,7 +275,13 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
       let allIdle = true;
       for (const s of scopeList) {
         const sRepo = ghRepoOf(s);
+        const sProject = linearProjectOf(s);
         const sLabel = labelOf(s);
+        // Pin the Linear project before polling so the poller (which reads it
+        // from the inherited env, not a poll arg) is confined to this scope;
+        // it also stays pinned for the loop run below. GitHub uses the sRepo
+        // poll arg instead and pins OTTO_GITHUB_REPO only on the run.
+        if (sProject) process.env.OTTO_LINEAR_PROJECT = sProject;
         const poll = await pollIssues(watchLabel, workspaceDir, sRepo);
         if (!poll.ok) {
           // Broken poll — say *why*, distinctly from an idle queue, and keep

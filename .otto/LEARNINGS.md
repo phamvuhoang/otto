@@ -119,10 +119,34 @@
   scopes (unchanged). `--print-config`/the watch banner list every scope
   (`scopes.map(describeScope).join(", ")`). Pinned by `cli-help.test.ts` (repeated
   `--repo` → `repos`) + `watch.test.ts` (`multi-target (scopes)`: polls each,
-  runs first-with-work + env-pin, failure-isolation). **Deferred:** Linear
-  `--project` repeatable / `OTTO_LINEAR_PROJECTS` (mirror this shape, like the P1
-  GitHub-then-Linear split); the `<task-key>` branch/artifact half stays blocked
-  on the legacy-read (P2/P4).
+  runs first-with-work + env-pin, failure-isolation). The Linear repeatable
+  `--project` mirror shipped (next bullet); the `<task-key>` branch/artifact half
+  stays blocked on the legacy-read (P2/P4).
+- **Linear multi-target watch (`--project` repeatable / `OTTO_LINEAR_PROJECTS`,
+  issue #21 P3)** mirrors the GitHub `--repo` multi-target shape but confines
+  scopes a DIFFERENT way. `parseFlags` accumulates repeated `--project` into
+  `flags.projects` (`project` kept = `projects[0]`, single-target callers
+  untouched); run-bin's `supportsProjectScope` merges `flags.projects` (or the
+  comma-list `OTTO_LINEAR_PROJECTS`, or the single `OTTO_LINEAR_PROJECT`) into a
+  linear `WorkScope[]` — **each project pairs with the same `OTTO_LINEAR_TEAM`**;
+  one → the unchanged single-target path (`scope` set + `OTTO_LINEAR_PROJECT`
+  exported), >1 → `scopes` to `runWatch` (no single value pinned). The crux that
+  differs from GitHub: the GitHub poller takes a `--repo` poll **arg**
+  (`ghRepoOf(s)`), but the **Linear poller reads `OTTO_LINEAR_PROJECT` from the
+  inherited env** (the `watchPoll` closure in `linear-main.ts`), so `runWatch`
+  must **pin `process.env.OTTO_LINEAR_PROJECT = sProject` BEFORE the poll** (not
+  just on the run, like GitHub's `OTTO_GITHUB_REPO`) — `linearProjectOf(s)` does
+  the per-scope lookup. Pinning before the poll confines BOTH the poll and the
+  subsequent loop (the loop's templates inherit the same env). No charset
+  validation (project is GraphQL-only free text, never a host shell — unlike
+  `--repo`). Pinned by `cli-help.test.ts` (repeated `--project` → `projects`) +
+  `watch.test.ts` (`multi-target Linear (scopes)`: env pinned per poll, names
+  each scope, runs first-with-work confined). **Test trick:** since the Linear
+  poller is the same mocked `pollIssues(label, cwd, repo)` with `repo=undefined`,
+  assert confinement by capturing `process.env.OTTO_LINEAR_PROJECT` inside the
+  mock impl, not via a poll arg. Like the GitHub P3 commit, comprehensive
+  README/CLI.md docs are deferred to P4 (only `cli-help.ts` help/env text +
+  print-config touched).
 - **Work scope + task key contract** (issue #21, P0) lives in one pure module
   `task-key.ts`, split into TWO types on purpose: `WorkScope` = *where* Otto may
   look (provider + owner/repo or team/project, NO item) for watch + `--print-config`;

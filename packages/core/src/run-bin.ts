@@ -234,10 +234,37 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   // flag, not just the env var. Scope is reported even with only a team set.
   if (cfg.supportsProjectScope) {
     const team = process.env.OTTO_LINEAR_TEAM?.trim() || undefined;
-    const project =
-      flags.project ?? (process.env.OTTO_LINEAR_PROJECT?.trim() || undefined);
-    if (project) process.env.OTTO_LINEAR_PROJECT = project;
-    if (team || project) scope = { provider: "linear", team, project };
+    // Repeated --project wins; else the comma-list OTTO_LINEAR_PROJECTS; else the
+    // single OTTO_LINEAR_PROJECT. No charset validation — a project name only
+    // ever reaches Linear's GraphQL filter, never a host shell.
+    const rawProjects =
+      flags.projects.length > 0
+        ? flags.projects
+        : (process.env.OTTO_LINEAR_PROJECTS?.split(",")
+            .map((s) => s.trim())
+            .filter(Boolean) ?? []);
+    const projects =
+      rawProjects.length > 0
+        ? rawProjects
+        : process.env.OTTO_LINEAR_PROJECT?.trim()
+          ? [process.env.OTTO_LINEAR_PROJECT.trim()]
+          : [];
+    if (projects.length > 1) {
+      // Multi-target: each project pairs with the same team. The daemon pins
+      // OTTO_LINEAR_PROJECT per-cycle (in runWatch), so no single value here.
+      scopes = projects.map((project) => ({
+        provider: "linear" as const,
+        team,
+        project,
+      }));
+    } else {
+      const project = projects[0];
+      // Export the resolved project so the `otto-linear list/dump` template
+      // commands and the watch poller (which read it from the inherited env)
+      // honor the flag, not just the env var.
+      if (project) process.env.OTTO_LINEAR_PROJECT = project;
+      if (team || project) scope = { provider: "linear", team, project };
+    }
   }
   const watchScope = scopeError
     ? `invalid (${scopeError})`

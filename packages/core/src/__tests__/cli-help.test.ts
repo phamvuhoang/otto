@@ -188,6 +188,22 @@ describe("parseFlags --project", () => {
       /--project requires a value/
     );
   });
+  it("collects repeated --project into projects, keeping project as the first (multi-target)", () => {
+    const f = parseFlags([
+      "--watch",
+      "--project",
+      "Roadmap Q3",
+      "--project",
+      "Bugs",
+      "20",
+    ]);
+    expect(f.projects).toEqual(["Roadmap Q3", "Bugs"]);
+    expect(f.project).toBe("Roadmap Q3");
+    expect(f.rest).toEqual(["20"]);
+  });
+  it("leaves projects empty when no --project is given", () => {
+    expect(parseFlags(["5"]).projects).toEqual([]);
+  });
 });
 
 describe("printConfig scope", () => {

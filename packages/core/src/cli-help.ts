@@ -56,9 +56,16 @@ export type CliFlags = {
    * only ever reaches Linear's GraphQL filter — never a host shell — so unlike
    * --repo it needs no charset validation. Resolved into a linear WorkScope by
    * run-bin; kept raw here so the same path also covers the OTTO_LINEAR_PROJECT
-   * env fallback.
+   * env fallback. Equals `projects[0]` — kept for single-target callers.
    */
   project?: string;
+  /**
+   * All `--project` values in order (repeatable, multi-target Linear watch).
+   * Empty when no `--project` is given. run-bin merges this with
+   * `OTTO_LINEAR_PROJECTS` into the scope list; a single entry behaves exactly
+   * like the legacy single-target. Mirrors `repos` for GitHub.
+   */
+  projects: string[];
   rest: string[];
 };
 
@@ -156,7 +163,7 @@ export function parseFlags(
   let expectingBranchConvention = false;
   const repos: string[] = [];
   let expectingRepo = false;
-  let project: string | undefined;
+  const projects: string[] = [];
   let expectingProject = false;
   const rest: string[] = [];
   for (const a of argv) {
@@ -247,7 +254,7 @@ export function parseFlags(
       continue;
     }
     if (expectingProject) {
-      project = a;
+      projects.push(a);
       expectingProject = false;
       continue;
     }
@@ -342,7 +349,8 @@ export function parseFlags(
     branchConvention,
     repo: repos[0],
     repos,
-    project,
+    project: projects[0],
+    projects,
     rest,
   };
 }
@@ -403,7 +411,7 @@ Flags:
   --watch             poll for labelled issues and run the loop whenever work is found (otto-ghafk + otto-linear-afk; default: off)
   --watch-interval <sec>  seconds between polls in watch mode (default: 300)
   --repo <owner/name> scope otto-ghafk to a GitHub repo: poll + list + view only that repo's issues (or OTTO_GITHUB_REPO; default: the workspace's repo); repeatable for multi-target watch (or OTTO_GITHUB_REPOS=owner/a,owner/b)
-  --project <name>    scope otto-linear-afk to a single Linear project (narrows team/label further; or OTTO_LINEAR_PROJECT; default: no project filter)
+  --project <name>    scope otto-linear-afk to a Linear project (narrows team/label further; or OTTO_LINEAR_PROJECT; default: no project filter); repeatable for multi-target watch (or OTTO_LINEAR_PROJECTS="Roadmap Q3,Bugs")
   --issue <ref>       target a single issue (otto-ghafk: number, #N, owner/repo#N, or URL; otto-linear-afk: ENG-123, UUID, or Linear URL); loop exits when it is done (default: off)
   --max-wait <dur>    cap the wait when rate-limited before halting (e.g. 90m, 6h; default 6h)
   --fresh             ignore any saved resume state and start from iteration 1
@@ -425,6 +433,7 @@ Environment variables:
   OTTO_GITHUB_REPO     scope otto-ghafk to a single GitHub repo ("owner/name"); same as --repo.
   OTTO_GITHUB_REPOS    scope otto-ghafk watch to several GitHub repos (comma-separated "owner/a,owner/b"); same as repeating --repo.
   OTTO_LINEAR_PROJECT  scope otto-linear-afk to a single Linear project (name); same as --project.
+  OTTO_LINEAR_PROJECTS scope otto-linear-afk watch to several Linear projects (comma-separated "Roadmap Q3,Bugs"); same as repeating --project.
   OTTO_MAX_WAIT        default rate-limit wait cap (seconds or 90m/6h; default 6h).
   OTTO_BRANCH          default branch strategy (current|branch|worktree) when --branch is absent.
   OTTO_BRANCH_PREFIX   default branch-name prefix (default: "otto/").

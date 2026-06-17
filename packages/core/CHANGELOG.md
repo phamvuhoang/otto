@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.5.0...otto-core-v0.6.0) (2026-06-17)
+
+
+### Features
+
+* **scope:** work scope + task key (P0) + GitHub --repo & Linear --project watch filters (P1) — issue [#21](https://github.com/phamvuhoang/otto/issues/21) ([#23](https://github.com/phamvuhoang/otto/issues/23)) ([1125ad6](https://github.com/phamvuhoang/otto/commit/1125ad645e48391d7307d92f6c736b54d3955cf9))
+
 ## [0.5.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.4.1...otto-core-v0.5.0) (2026-06-17)
 
 

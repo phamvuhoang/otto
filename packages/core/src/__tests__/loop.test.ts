@@ -11,12 +11,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Stage } from "../stages.js";
+import { emptyTokenUsage, type TokenUsage } from "../tokens.js";
 
 const mocks = vi.hoisted(() => ({
   acquire: vi.fn(),
   notifyComplete: vi.fn(),
   notifyError: vi.fn(),
   release: vi.fn(),
+  runPanel: vi.fn(),
   runStage: vi.fn(),
   sleep: vi.fn(),
 }));
@@ -49,6 +51,10 @@ vi.mock("../pacing.js", () => ({
     throttled ? Math.min(prev * 2, cap) : 1,
 }));
 
+vi.mock("../panel.js", () => ({
+  runPanel: mocks.runPanel,
+}));
+
 vi.mock("../stream-render.js", () => ({
   USE_COLOR: false,
   dim: (s: string) => s,
@@ -70,12 +76,14 @@ const sentinel = "<promise>NO MORE TASKS</promise>";
 const ok = (
   result: string,
   costUsd = 0,
-  apiErrorStatus: string | null = null
+  apiErrorStatus: string | null = null,
+  usage: TokenUsage = emptyTokenUsage()
 ) => ({
   result,
   costUsd,
   isError: apiErrorStatus != null,
   apiErrorStatus,
+  usage,
 });
 
 type LoopDirs = {
@@ -101,8 +109,18 @@ function makeDirs(): LoopDirs {
 }
 
 function stdoutText(): string {
-  return (process.stdout.write as unknown as { mock: { calls: unknown[][] } })
-    .mock.calls.map((c) => String(c[0]))
+  return (
+    process.stdout.write as unknown as { mock: { calls: unknown[][] } }
+  ).mock.calls
+    .map((c) => String(c[0]))
+    .join("");
+}
+
+function stderrText(): string {
+  return (
+    process.stderr.write as unknown as { mock: { calls: unknown[][] } }
+  ).mock.calls
+    .map((c) => String(c[0]))
     .join("");
 }
 
@@ -390,6 +408,104 @@ describe("runLoop", () => {
       expect(stdoutText()).toContain("Otto complete · 1 iteration · $0.25");
     });
 
+    it("reports token usage in measure mode", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(
+        ok(sentinel, 0.25, null, {
+          inputTokens: 10,
+          outputTokens: 2,
+          cacheCreationInputTokens: 3,
+          cacheReadInputTokens: 4,
+        })
+      );
+      await runLoop(loopOptions(dirs, { tokenMode: "measure" }));
+      expect(stderrText()).toContain(
+        "tokens in 10 | out 2 | cache create 3 | cache read 4 | total 19"
+      );
+      expect(stdoutText()).toContain(
+        "tokens in 10 | out 2 | cache create 3 | cache read 4 | total 19"
+      );
+    });
+
+    it("does not report token usage in off mode", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(
+        ok(sentinel, 0.25, null, {
+          inputTokens: 10,
+          outputTokens: 2,
+          cacheCreationInputTokens: 3,
+          cacheReadInputTokens: 4,
+        })
+      );
+      await runLoop(loopOptions(dirs, { tokenMode: "off" }));
+      expect(stderrText()).not.toContain("tokens in");
+      expect(stdoutText()).not.toContain("tokens in");
+    });
+
+    it("rolls back panel sub-stage accounting when a panel attempt is retried after a rate limit", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const reviewer: Stage = { name: "reviewer", template: "stage.md" };
+      const { RateLimitError } = await import("../rate-limit.js");
+      mocks.runStage.mockResolvedValue(ok("keep going"));
+      mocks.runPanel
+        .mockImplementationOnce(
+          (opts: { onStage: (sr: ReturnType<typeof ok>) => void }) => {
+            opts.onStage(
+              ok("failed-attempt-lens", 0.5, null, {
+                inputTokens: 10,
+                outputTokens: 0,
+                cacheCreationInputTokens: 0,
+                cacheReadInputTokens: 0,
+              })
+            );
+            throw new RateLimitError(
+              "session limit",
+              Math.floor(Date.now() / 1000)
+            );
+          }
+        )
+        .mockImplementationOnce(
+          (opts: { onStage: (sr: ReturnType<typeof ok>) => void }) => {
+            const sr = ok("successful-panel", 0.4, null, {
+              inputTokens: 7,
+              outputTokens: 1,
+              cacheCreationInputTokens: 0,
+              cacheReadInputTokens: 0,
+            });
+            opts.onStage(sr);
+            return sr;
+          }
+        );
+
+      const outcome = await runLoop(
+        loopOptions(dirs, {
+          stages: [stage, reviewer] as [Stage, Stage],
+          reviewLenses: ["correctness"],
+          tokenMode: "measure",
+          maxRetries: 0,
+        })
+      );
+
+      expect(mocks.runPanel).toHaveBeenCalledTimes(2);
+      expect(outcome.costUsd).toBeCloseTo(0.4);
+      expect(outcome.tokenUsage).toMatchObject({
+        inputTokens: 7,
+        outputTokens: 1,
+      });
+      expect(stdoutText()).toContain(
+        "tokens in 7 | out 1 | cache create 0 | cache read 0 | total 8"
+      );
+      expect(stdoutText()).not.toContain("total 18");
+      // The discarded attempt's already-printed per-stage lines reconcile via
+      // an explicit rollback note on stderr.
+      expect(stderrText()).toContain(
+        "discarding rate-limited attempt's partial accounting (−$0.50)"
+      );
+    });
+
     it("reports a budget exit with the iterations run and cost", async () => {
       const dirs = makeDirs();
       roots.push(dirs.root);
@@ -405,7 +521,9 @@ describe("runLoop", () => {
           maxRetries: 0,
         })
       );
-      expect(stdoutText()).toContain("Otto stopped (budget) · 1 iteration · $1.20");
+      expect(stdoutText()).toContain(
+        "Otto stopped (budget) · 1 iteration · $1.20"
+      );
     });
 
     it("reports a plain done summary when iterations exhaust without the sentinel", async () => {
@@ -421,7 +539,9 @@ describe("runLoop", () => {
       roots.push(dirs.root);
       mocks.runStage.mockRejectedValue(new Error("boom"));
       await runLoop(loopOptions(dirs, { iterations: 1, maxRetries: 0 }));
-      expect(stdoutText()).toContain("Otto done with failures · 1 iteration · $0.00");
+      expect(stdoutText()).toContain(
+        "Otto done with failures · 1 iteration · $0.00"
+      );
     });
 
     it("reports an aborted summary when the active stage is aborted mid-run", async () => {
@@ -435,7 +555,9 @@ describe("runLoop", () => {
         });
       });
       const ac = new AbortController();
-      const loop = runLoop(loopOptions(dirs, { signal: ac.signal, maxRetries: 0 }));
+      const loop = runLoop(
+        loopOptions(dirs, { signal: ac.signal, maxRetries: 0 })
+      );
       await Promise.resolve();
       await Promise.resolve();
       ac.abort();
@@ -507,7 +629,9 @@ describe("runLoop", () => {
           maxRetries: 0,
         })
       );
-      expect(stdoutText()).toContain("→ next: raise `--budget` and re-run to resume");
+      expect(stdoutText()).toContain(
+        "→ next: raise `--budget` and re-run to resume"
+      );
     });
 
     it("points failures at the stage logs", async () => {

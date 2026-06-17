@@ -21,6 +21,7 @@ import {
   USE_COLOR,
 } from "./stream-render.js";
 import type { Stage } from "./stages.js";
+import type { TokenMode } from "./tokens.js";
 
 /**
  * Outcome of one issue poll. Distinguishes a real idle queue (`ok` with
@@ -70,13 +71,13 @@ export function pollOpenIssues(
     // `gh` prints an auth hint ("gh auth login" / "not logged" / 401) when the
     // user is unauthenticated — treat those as auth failures, everything else
     // (network, gh missing, malformed output) as a generic poll failure.
-    const auth = /auth login|not logged|unauthenticated|credential|\b401\b/i.test(
+    const auth =
+      /auth login|not logged|unauthenticated|credential|\b401\b/i.test(stderr);
+    const detail =
       stderr
-    );
-    const detail = stderr
-      .split("\n")
-      .map((l) => l.trim())
-      .find(Boolean) ?? "";
+        .split("\n")
+        .map((l) => l.trim())
+        .find(Boolean) ?? "";
     return { ok: false, auth, detail };
   }
 }
@@ -103,7 +104,9 @@ export type LinearPollDeps = {
  * `auth`-kind error is reported as `auth: true` so the daemon can print a
  * re-login hint distinctly from a transient request/network failure.
  */
-export async function pollLinearIssues(deps: LinearPollDeps): Promise<PollResult> {
+export async function pollLinearIssues(
+  deps: LinearPollDeps
+): Promise<PollResult> {
   const auth = (deps.resolveAuth ?? (() => resolveLinearAuth()))();
   if (!auth) {
     return {
@@ -113,8 +116,9 @@ export async function pollLinearIssues(deps: LinearPollDeps): Promise<PollResult
     };
   }
   try {
-    const client = (deps.makeClient ??
-      ((t: string) => createLinearClient({ token: t })))(auth.token);
+    const client = (
+      deps.makeClient ?? ((t: string) => createLinearClient({ token: t }))
+    )(auth.token);
     const issues = await client.listIssues({
       label: deps.label,
       team: deps.team,
@@ -147,6 +151,7 @@ export type RunWatchOptions = {
   watchLabel: string;
   budgetUsd?: number;
   cooldownMs?: number;
+  tokenMode?: TokenMode;
   maxRetries?: number;
   reviewLenses?: string[];
   notify?: boolean;
@@ -191,6 +196,7 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
     watchLabel,
     budgetUsd,
     cooldownMs,
+    tokenMode = "off",
     maxRetries,
     reviewLenses,
     notify = false,
@@ -218,8 +224,7 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
   const linearProjectOf = (s?: WorkScope): string | undefined =>
     s?.provider === "linear" && s.project ? s.project : undefined;
   // Human-readable scope prefix for a poll line (e.g. "github acme/web ").
-  const labelOf = (s?: WorkScope): string =>
-    s ? `${describeScope(s)} ` : "";
+  const labelOf = (s?: WorkScope): string => (s ? `${describeScope(s)} ` : "");
   // The banner names every scope so a maintainer sees the exact watch surface.
   const bannerScope = scopeList
     .filter((s): s is WorkScope => !!s)
@@ -315,6 +320,7 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
             packageDir,
             budgetUsd: remaining,
             cooldownMs,
+            tokenMode,
             maxRetries,
             reviewLenses,
             noKeepAlive: true,

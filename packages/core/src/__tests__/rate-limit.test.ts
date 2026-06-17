@@ -5,6 +5,14 @@ import {
   isLimitResult,
   resetsAtFromEvent,
 } from "../rate-limit.js";
+import { emptyTokenUsage } from "../tokens.js";
+
+const stageResult = (
+  overrides: Omit<Parameters<typeof isLimitResult>[0], "usage">
+) => ({
+  ...overrides,
+  usage: emptyTokenUsage(),
+});
 
 describe("RateLimitError", () => {
   it("has name RateLimitError and carries resetsAt", () => {
@@ -18,42 +26,50 @@ describe("RateLimitError", () => {
 describe("isLimitResult", () => {
   it("true when is_error and api_error_status 429", () => {
     expect(
-      isLimitResult({
-        result: "x",
-        costUsd: 0,
-        isError: true,
-        apiErrorStatus: "429",
-      })
+      isLimitResult(
+        stageResult({
+          result: "x",
+          costUsd: 0,
+          isError: true,
+          apiErrorStatus: "429",
+        })
+      )
     ).toBe(true);
   });
   it("true on the session-limit result text even without 429", () => {
     expect(
-      isLimitResult({
-        result: "You've hit your session limit · resets 4:50pm (Asia/Saigon)",
-        costUsd: 0,
-        isError: true,
-        apiErrorStatus: null,
-      })
+      isLimitResult(
+        stageResult({
+          result: "You've hit your session limit · resets 4:50pm (Asia/Saigon)",
+          costUsd: 0,
+          isError: true,
+          apiErrorStatus: null,
+        })
+      )
     ).toBe(true);
   });
   it("false for a normal successful result", () => {
     expect(
-      isLimitResult({
-        result: "done",
-        costUsd: 0.1,
-        isError: false,
-        apiErrorStatus: null,
-      })
+      isLimitResult(
+        stageResult({
+          result: "done",
+          costUsd: 0.1,
+          isError: false,
+          apiErrorStatus: null,
+        })
+      )
     ).toBe(false);
   });
   it("false for a non-limit error (e.g. 500)", () => {
     expect(
-      isLimitResult({
-        result: "boom",
-        costUsd: 0,
-        isError: true,
-        apiErrorStatus: "500",
-      })
+      isLimitResult(
+        stageResult({
+          result: "boom",
+          costUsd: 0,
+          isError: true,
+          apiErrorStatus: "500",
+        })
+      )
     ).toBe(false);
   });
 });

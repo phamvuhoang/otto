@@ -17,6 +17,13 @@ export {
 } from "./render.js";
 export { runStage, type StageResult } from "./runner.js";
 export {
+  emptyTokenUsage,
+  parseTokenMode,
+  parseTokenUsage,
+  type TokenMode,
+  type TokenUsage,
+} from "./tokens.js";
+export {
   runWatch,
   pollOpenIssues,
   pollLinearIssues,

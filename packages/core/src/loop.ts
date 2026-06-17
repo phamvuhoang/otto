@@ -29,6 +29,13 @@ import {
   SYM_OUT,
 } from "./stream-render.js";
 import type { Stage } from "./stages.js";
+import {
+  addTokenUsage,
+  emptyTokenUsage,
+  formatTokenUsage,
+  type TokenMode,
+  type TokenUsage,
+} from "./tokens.js";
 
 // The agent emits this literal when there is no more work; the same string is
 // mirrored in the playbook templates (prompt.md / ghprompt.md) that instruct it.
@@ -129,6 +136,8 @@ export type LoopOptions = {
   budgetUsd?: number;
   /** Milliseconds to wait between iterations. 0 = no cooldown. */
   cooldownMs?: number;
+  /** Token accounting/reduction mode. Default: off. */
+  tokenMode?: TokenMode;
   /** Opt-in reviewer panel: replace the single reviewer stage with K read-only lens reviewers + one synth commit. */
   reviewLenses?: string[];
   /** Injected AbortSignal for daemon callers (e.g. watch mode). When provided,
@@ -143,7 +152,11 @@ export type LoopOptions = {
   fresh?: boolean;
 };
 
-export type LoopOutcome = { costUsd: number; sentinelHit: boolean };
+export type LoopOutcome = {
+  costUsd: number;
+  sentinelHit: boolean;
+  tokenUsage: TokenUsage;
+};
 
 export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   const {
@@ -159,6 +172,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     cliVersion = "?",
     budgetUsd,
     cooldownMs = 0,
+    tokenMode = "off",
     reviewLenses,
     signal: externalSignal,
     mode = "afk",
@@ -218,7 +232,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   let completedIterations = 0;
   let sentinelHit = false;
   let runCostUsd = 0;
+  let runTokenUsage = emptyTokenUsage();
   let cooldownFactor = 1;
+  const outcome = (): LoopOutcome => ({
+    costUsd: runCostUsd,
+    sentinelHit,
+    tokenUsage: runTokenUsage,
+  });
 
   // Single source of truth for per-stage accounting: tally cost, report it,
   // advance the adaptive cooldown factor on throttle, and report whether the
@@ -229,9 +249,15 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     sr: StageResult
   ): { stop: boolean; cooldownFactor: number } => {
     runCostUsd += sr.costUsd;
+    runTokenUsage = addTokenUsage(runTokenUsage, sr.usage);
     process.stderr.write(
       `${dim(`· $${sr.costUsd.toFixed(2)} (run $${runCostUsd.toFixed(2)})`)}\n`
     );
+    if (tokenMode !== "off") {
+      process.stderr.write(
+        `${dim(`tokens ${formatTokenUsage(sr.usage)} | run ${formatTokenUsage(runTokenUsage)}`)}\n`
+      );
+    }
     cooldownFactor = nextCooldownFactor(
       cooldownFactor,
       isThrottle(sr.apiErrorStatus)
@@ -248,9 +274,11 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // (like the other completion lines) so it survives `> out.txt` redirection.
   const summarize = (reason: string, iterations: number): void => {
     const iters = `${iterations} iteration${iterations === 1 ? "" : "s"}`;
+    const tokens =
+      tokenMode === "off" ? "" : ` · tokens ${formatTokenUsage(runTokenUsage)}`;
     let line =
       `${greenOut(SYM_OUT.bullet)} ${boldOut(`Otto ${reason}`)}` +
-      `${dimOut(` · ${iters} · $${runCostUsd.toFixed(2)}`)}\n` +
+      `${dimOut(` · ${iters} · $${runCostUsd.toFixed(2)}${tokens}`)}\n` +
       `${dimOut(`  → next: ${nextActionFor(reason)}`)}\n`;
     const deferred = deferredFollowupCount(workspaceDir);
     if (deferred > 0) {
@@ -314,7 +342,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         // Budget gate: check before running each stage.
         if (budgetUsd != null && runCostUsd >= budgetUsd) {
           summarize("stopped (budget)", i - 1);
-          return { costUsd: runCostUsd, sentinelHit };
+          return outcome();
         }
 
         const banner = USE_COLOR
@@ -336,6 +364,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               iteration: i,
               maxRetries,
               cooldownMs,
+              tokenMode,
               signal: activeSignal,
               onStage: accountStage,
             });
@@ -347,6 +376,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             packageDir,
             iteration: i,
             maxRetries,
+            tokenMode,
             signal: activeSignal,
           });
           accountStage(r);
@@ -355,11 +385,30 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
         try {
           for (;;) {
+            const accountingSnapshot = {
+              costUsd: runCostUsd,
+              tokenUsage: runTokenUsage,
+              cooldownFactor,
+            };
             try {
               sr = await runOnce();
               break;
             } catch (err) {
               if ((err as Error)?.name !== "RateLimitError") throw err;
+              // A panel attempt may have accounted completed sub-agents before
+              // a later sub-agent rate-limited. The whole panel is retried, so
+              // rollback that failed attempt's accounting before waiting. The
+              // per-stage cost/token lines already printed to stderr can't be
+              // un-printed — emit a note so the running totals still reconcile.
+              const discardedCost = runCostUsd - accountingSnapshot.costUsd;
+              if (discardedCost > 0) {
+                process.stderr.write(
+                  `${dim(`↩ discarding rate-limited attempt's partial accounting (−$${discardedCost.toFixed(2)})`)}\n`
+                );
+              }
+              runCostUsd = accountingSnapshot.costUsd;
+              runTokenUsage = accountingSnapshot.tokenUsage;
+              cooldownFactor = accountingSnapshot.cooldownFactor;
               const resetsAt = (err as RateLimitError).resetsAt;
               const waitMs = computeWaitMs(
                 resetsAt,
@@ -373,7 +422,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
                   `${dim(`reset is beyond --max-wait; re-run to resume from iteration ${i}`)}\n`
                 );
                 summarize("halted (rate limit)", i - 1);
-                return { costUsd: runCostUsd, sentinelHit };
+                return outcome();
               }
               persist(i, "waiting-rate-limit", resetsAt);
               const mins = Math.round(waitMs / 60000);
@@ -387,7 +436,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         } catch (err) {
           if (activeSignal.aborted) {
             summarize("aborted", i - 1);
-            return { costUsd: runCostUsd, sentinelHit };
+            return outcome();
           }
           const stageLog = stageLogPath(workspaceDir, i, stage.name);
           const failureMarker = `[failure] iteration ${i} stage ${stage.name} failed after ${maxRetries} retries: ${(err as Error).message}`;
@@ -412,7 +461,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             summarize("complete", i);
             persist(i, "complete");
             clearState(workspaceDir);
-            return { costUsd: runCostUsd, sentinelHit };
+            return outcome();
           }
         }
       }
@@ -435,7 +484,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     // as an abort, not an error, matching the mid-stage abort path above.
     if (activeSignal.aborted) {
       summarize("aborted", completedIterations);
-      return { costUsd: runCostUsd, sentinelHit };
+      return outcome();
     }
     if (notify) notifyError((err as Error).message);
     summarize("stopped (error)", completedIterations);
@@ -450,5 +499,5 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   }
   summarize(sawFailure ? "done with failures" : "done", completedIterations);
   clearState(workspaceDir);
-  return { costUsd: runCostUsd, sentinelHit };
+  return outcome();
 }

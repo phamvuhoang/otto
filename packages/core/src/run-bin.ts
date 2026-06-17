@@ -2,11 +2,7 @@ import { existsSync, readFileSync, appendFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  dirtyTreeWarning,
-  ensureTmpIgnored,
-  resolveBranch,
-} from "./branch.js";
+import { dirtyTreeWarning, ensureTmpIgnored, resolveBranch } from "./branch.js";
 import {
   parseFlags,
   parseDurationMs,
@@ -17,11 +13,9 @@ import {
 import { detachAndExit } from "./detach.js";
 import { runLoop } from "./loop.js";
 import type { Stage } from "./stages.js";
-import {
-  parseGithubRepo,
-  describeScope,
-  type WorkScope,
-} from "./task-key.js";
+import { parseGithubRepo, describeScope, type WorkScope } from "./task-key.js";
+import type { TokenMode } from "./tokens.js";
+import { parseTokenMode } from "./tokens.js";
 import type { PollResult, WatchProvider } from "./watch.js";
 
 export type RunBinConfig = {
@@ -130,6 +124,18 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   const envMaxWait = process.env.OTTO_MAX_WAIT?.trim();
   const maxWaitMs =
     flags.maxWaitMs ?? (envMaxWait ? parseDurationMs(envMaxWait) : undefined);
+  let tokenMode: TokenMode = flags.tokenMode ?? "off";
+  let tokenModeError: string | undefined;
+  if (flags.tokenMode == null) {
+    try {
+      tokenMode = parseTokenMode(
+        process.env.OTTO_TOKEN_MODE,
+        "OTTO_TOKEN_MODE"
+      );
+    } catch (err) {
+      tokenModeError = (err as Error).message;
+    }
+  }
 
   const envBranch = process.env.OTTO_BRANCH?.trim();
   const branchStrategyArg =
@@ -140,8 +146,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       ? envBranch
       : undefined);
   const branchPrefixArg =
-    flags.branchPrefix ??
-    (process.env.OTTO_BRANCH_PREFIX?.trim() || undefined);
+    flags.branchPrefix ?? (process.env.OTTO_BRANCH_PREFIX?.trim() || undefined);
   const branchConventionArg =
     flags.branchConvention ??
     (process.env.OTTO_BRANCH_CONVENTION?.trim() || undefined);
@@ -176,9 +181,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   // Both --print-config and the runWatch call below read this, so the reported
   // label can't drift from what a watch run actually polls.
   const watchLabel =
-    cfg.resolveWatchLabel?.() ||
-    process.env.OTTO_WATCH_LABEL?.trim() ||
-    "otto";
+    cfg.resolveWatchLabel?.() || process.env.OTTO_WATCH_LABEL?.trim() || "otto";
 
   // Resolve the GitHub single-target scope (--repo / OTTO_GITHUB_REPO) up front
   // so --print-config can report it before any run starts. Validated into a
@@ -285,6 +288,10 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       notify: flags.notify,
       budget: flags.budget,
       cooldownMs: flags.cooldownMs,
+      tokenMode: tokenModeError
+        ? (process.env.OTTO_TOKEN_MODE?.trim() ?? "")
+        : tokenMode,
+      tokenModeError,
       reviewLenses: reviewLenses ?? [],
       watch: flags.watch,
       watchIntervalSec: flags.watchIntervalSec,
@@ -299,8 +306,15 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     return;
   }
 
+  if (tokenModeError) {
+    console.error(tokenModeError);
+    process.exit(1);
+  }
+
   if (flags.issue != null && !cfg.issueStage) {
-    console.error("--issue is only supported by otto-ghafk and otto-linear-afk");
+    console.error(
+      "--issue is only supported by otto-ghafk and otto-linear-afk"
+    );
     process.exit(1);
   }
 
@@ -442,6 +456,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       watchLabel,
       budgetUsd: flags.budget,
       cooldownMs: flags.cooldownMs,
+      tokenMode,
       maxRetries: flags.maxRetries,
       reviewLenses,
       notify: flags.notify,
@@ -468,6 +483,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     cliVersion: cfg.cliVersion,
     budgetUsd: flags.budget,
     cooldownMs: flags.cooldownMs,
+    tokenMode,
     reviewLenses,
     mode: runMode,
     maxWaitMs,

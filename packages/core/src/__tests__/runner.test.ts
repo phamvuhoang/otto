@@ -136,12 +136,24 @@ describe("resultFromEvent", () => {
         total_cost_usd: 0.39,
         is_error: false,
         api_error_status: null,
+        usage: {
+          input_tokens: 10,
+          output_tokens: 2,
+          cache_creation_input_tokens: 3,
+          cache_read_input_tokens: 4,
+        },
       })
     ).toEqual({
       result: "done",
       costUsd: 0.39,
       isError: false,
       apiErrorStatus: null,
+      usage: {
+        inputTokens: 10,
+        outputTokens: 2,
+        cacheCreationInputTokens: 3,
+        cacheReadInputTokens: 4,
+      },
     });
   });
   it("defaults missing fields safely", () => {
@@ -150,6 +162,12 @@ describe("resultFromEvent", () => {
       costUsd: 0,
       isError: false,
       apiErrorStatus: null,
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+      },
     });
   });
   it("captures an error status string", () => {
@@ -212,12 +230,7 @@ describe("buildClaudeArgs", () => {
   });
 
   it("injects --settings before the prompt when a settings path is given", () => {
-    const args = buildClaudeArgs(
-      stage,
-      promptPath,
-      [],
-      "/ws/.otto-tmp/s.json"
-    );
+    const args = buildClaudeArgs(stage, promptPath, [], "/ws/.otto-tmp/s.json");
     const sIdx = args.indexOf("--settings");
     expect(sIdx).toBeGreaterThan(-1);
     expect(args[sIdx + 1]).toBe("/ws/.otto-tmp/s.json");

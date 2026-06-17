@@ -9,6 +9,7 @@ vi.mock("../stage-exec.js", () => ({ executeStage: mocks.executeStage }));
 vi.mock("../pacing.js", () => ({ sleep: mocks.sleep }));
 
 import { runPanel } from "../panel.js";
+import { emptyTokenUsage } from "../tokens.js";
 
 const ok = (
   result: string,
@@ -19,6 +20,7 @@ const ok = (
   costUsd,
   isError: apiErrorStatus != null,
   apiErrorStatus,
+  usage: emptyTokenUsage(),
 });
 const noStop = () => ({ stop: false, cooldownFactor: 1 });
 

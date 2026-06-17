@@ -62,6 +62,7 @@ More than a `while`-loop around `claude`:
 - 🧠 **It remembers.** Otto keeps a git-tracked `.otto/LEARNINGS.md` in your repo and injects it into every prompt. As it works it appends durable, reusable knowledge — conventions, gotchas, decisions _and their why_, dead ends — so each iteration starts smarter. The file rides in the work commit; delete it to reset Otto's memory.
 - 📐 **It thinks before it codes.** Every iteration runs an adaptive **brainstorm → spec → plan → TDD** workflow. Hand it a crisp plan and it implements directly; hand it a vague one and it plays both sides of a brainstorm — generating clarifying questions, answering each with the most reasonable repo-grounded default, recording assumptions to `.otto/specs/`, then implementing test-first. Autonomously: it records its reasoning and proceeds rather than stopping to ask.
 - 🔎 **It reviews itself, on a budget.** Past the single reviewer, an opt-in **review panel** runs read-only `correctness` / `security` / `tests` lenses, then an adversarial verifier that tries to _refute_ each finding (rejecting when unsure) before a single `fix(review):` commit lands only the confirmed defects. Cap spend with `--budget`, pace with `--cooldown`.
+- 📊 **It can show token usage.** `--token-mode measure` prints per-stage and run-total input/output/cache token counts from Claude's `result` event. `--token-mode reduce` also applies conservative render-time prompt compaction; default `off` preserves current output and prompts.
 - 🔁 **It survives the night.** Holds an OS wake-lock, retries transient failures with backoff, waits out Claude rate limits and resumes the same iteration, and persists `.otto/state.json` so a restart picks up where it left off — never redoing committed work.
 
 Beyond the build loop, two read/repair modes reuse all of the above:
@@ -92,6 +93,12 @@ otto-afk --budget 5 "./docs/plans/spike.md" 20
 
 # Higher-confidence review: multi-lens panel → one consolidated fix(review): commit
 otto-afk --review-panel "./docs/plans/feature.md" 30
+
+# See actual token usage without changing prompts
+otto-afk --token-mode measure "./docs/plans/feature.md" 5
+
+# Opt into conservative prompt compaction and token reporting
+otto-afk --token-mode reduce "./docs/plans/feature.md" 5
 
 # Read-only audit: did the plan actually land? (writes .otto-tmp/verify-report.md)
 otto-afk --verify "./docs/plans/feature.md ./docs/prd/feature.md"
@@ -127,11 +134,12 @@ The [architecture diagram](#otto) above maps the full stack: CLI + template laye
 
 Otto is configured by flags and environment variables. The essentials:
 
-| Variable         | Default         | Purpose                                                              |
-| ---------------- | --------------- | -------------------------------------------------------------------- |
-| `OTTO_WORKSPACE` | `cwd`           | Host repo Claude runs against; also where `.otto-tmp/` is written.   |
-| `OTTO_RUNNER`    | `sandbox`       | `sandbox` confines writes to the workspace; `host` runs unsandboxed. |
-| `OTTO_MODEL`     | _(CLI default)_ | Pin the Claude model (`--model` pass-through).                       |
+| Variable          | Default         | Purpose                                                              |
+| ----------------- | --------------- | -------------------------------------------------------------------- |
+| `OTTO_WORKSPACE`  | `cwd`           | Host repo Claude runs against; also where `.otto-tmp/` is written.   |
+| `OTTO_RUNNER`     | `sandbox`       | `sandbox` confines writes to the workspace; `host` runs unsandboxed. |
+| `OTTO_MODEL`      | _(CLI default)_ | Pin the Claude model (`--model` pass-through).                       |
+| `OTTO_TOKEN_MODE` | `off`           | `off`, `measure`, or `reduce`; overridden by `--token-mode`.         |
 
 ```bash
 otto-afk --print-config     # resolved config + a preflight check of run prerequisites, then exit
@@ -155,17 +163,17 @@ Requires **Node 20+**, an authenticated **Claude Code** (`claude /login`), and �
 
 ## Documentation
 
-| Doc                                                | What's in it                                                                                                                        |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| **[QUICKSTART.md](./QUICKSTART.md)**               | Zero-to-first-loop getting started.                                                                                                 |
-| **[docs/CLI.md](./docs/CLI.md)**                   | Every command, flag, and mode — start at [Choosing a mode](./docs/CLI.md#choosing-a-mode) (afk vs ghafk vs verify vs apply-review). |
-| **[docs/CONFIG.md](./docs/CONFIG.md)**             | Environment variables, runner/sandbox, branch strategy, setup.                                                                      |
-| **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** | Runtime internals and data flow for library extenders.                                                                              |
-| **[docs/MIGRATION.md](./docs/MIGRATION.md)**       | Task-grouped `.otto/tasks/<task-key>/` layout, old→new path mapping, branch-convention namespace, and how to migrate an existing repo. |
-| **[docs/quality-report-samples.md](./docs/quality-report-samples.md)** | Filled-in sample quality reports — what good verification output looks like per run mode.                       |
-| **[SECURITY.md](./SECURITY.md)**                   | Threat model and the `bypassPermissions` blast-radius story.                                                                        |
-| **[CONTRIBUTING.md](./CONTRIBUTING.md)**           | Dev loop, tests, adding a stage, release pipeline.                                                                                  |
-| **[RELEASING.md](./RELEASING.md)**                 | release-please flow, version policy, secrets, rollback.                                                                             |
+| Doc                                                                    | What's in it                                                                                                                           |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **[QUICKSTART.md](./QUICKSTART.md)**                                   | Zero-to-first-loop getting started.                                                                                                    |
+| **[docs/CLI.md](./docs/CLI.md)**                                       | Every command, flag, and mode — start at [Choosing a mode](./docs/CLI.md#choosing-a-mode) (afk vs ghafk vs verify vs apply-review).    |
+| **[docs/CONFIG.md](./docs/CONFIG.md)**                                 | Environment variables, runner/sandbox, branch strategy, setup.                                                                         |
+| **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)**                     | Runtime internals and data flow for library extenders.                                                                                 |
+| **[docs/MIGRATION.md](./docs/MIGRATION.md)**                           | Task-grouped `.otto/tasks/<task-key>/` layout, old→new path mapping, branch-convention namespace, and how to migrate an existing repo. |
+| **[docs/quality-report-samples.md](./docs/quality-report-samples.md)** | Filled-in sample quality reports — what good verification output looks like per run mode.                                              |
+| **[SECURITY.md](./SECURITY.md)**                                       | Threat model and the `bypassPermissions` blast-radius story.                                                                           |
+| **[CONTRIBUTING.md](./CONTRIBUTING.md)**                               | Dev loop, tests, adding a stage, release pipeline.                                                                                     |
+| **[RELEASING.md](./RELEASING.md)**                                     | release-please flow, version policy, secrets, rollback.                                                                                |
 
 ---
 

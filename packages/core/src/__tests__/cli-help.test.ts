@@ -156,6 +156,22 @@ describe("parseFlags --repo", () => {
   it("errors when --repo has no value", () => {
     expect(() => parseFlags(["--repo"])).toThrow(/--repo requires a value/);
   });
+  it("collects repeated --repo into repos, keeping repo as the first (multi-target)", () => {
+    const f = parseFlags([
+      "--watch",
+      "--repo",
+      "acme/api",
+      "--repo",
+      "acme/web",
+      "20",
+    ]);
+    expect(f.repos).toEqual(["acme/api", "acme/web"]);
+    expect(f.repo).toBe("acme/api");
+    expect(f.rest).toEqual(["20"]);
+  });
+  it("leaves repos empty when no --repo is given", () => {
+    expect(parseFlags(["5"]).repos).toEqual([]);
+  });
 });
 
 describe("parseFlags --project", () => {

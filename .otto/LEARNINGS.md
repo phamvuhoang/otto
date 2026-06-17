@@ -97,6 +97,32 @@
   takes an optional 3rd `repo` arg (`gh issue list --repo`); `runWatch` derives it
   from `scope` and prefixes every poll line with `describeScope(scope)`. The
   Linear `--project` P1 item should mirror this shape.
+- **GitHub multi-target watch (`--repo` repeatable / `OTTO_GITHUB_REPOS`, issue
+  #21 P3)** layers on the P1 single-target shape WITHOUT forking it. `parseFlags`
+  now **accumulates** repeated `--repo` into `flags.repos: string[]` (no longer
+  overwrites); `flags.repo` is kept = `repos[0]` so every single-target caller is
+  untouched. run-bin merges `flags.repos` (or, if empty, the comma-list
+  `OTTO_GITHUB_REPOS`, or the single `OTTO_GITHUB_REPO`) through `parseGithubRepo`
+  into a github `WorkScope[]`: **exactly one → the unchanged single-target path**
+  (`scope` set + `OTTO_GITHUB_REPO` exported); **>1 → `scopes` passed to
+  `runWatch`, and NO single `OTTO_GITHUB_REPO` is pinned** (the daemon pins it
+  per-cycle). `runWatch` takes `scopes?: WorkScope[]`, normalizes to
+  `scopeList = scopes?.length ? scopes : [scope]` (a lone `undefined` = workspace
+  default), and each cycle **polls every scope, runs ONE loop for the first scope
+  with work, then breaks back to the sleep+repoll** (one loop at a time → no
+  parallel workspace mutation). The confinement crux: before that loop it sets
+  `process.env.OTTO_GITHUB_REPO = sRepo` for the selected scope (the inherited-env
+  trick from P1 is how the templates/agent get scoped — there is no per-loop
+  `env` arg). A `!poll.ok` scope is logged (`describeScope`-prefixed) and
+  `continue`d so it **never blocks the others** (P3 failure-isolation criterion);
+  idle prints once only when `allIdle && !ran`. One cumulative budget spans all
+  scopes (unchanged). `--print-config`/the watch banner list every scope
+  (`scopes.map(describeScope).join(", ")`). Pinned by `cli-help.test.ts` (repeated
+  `--repo` → `repos`) + `watch.test.ts` (`multi-target (scopes)`: polls each,
+  runs first-with-work + env-pin, failure-isolation). **Deferred:** Linear
+  `--project` repeatable / `OTTO_LINEAR_PROJECTS` (mirror this shape, like the P1
+  GitHub-then-Linear split); the `<task-key>` branch/artifact half stays blocked
+  on the legacy-read (P2/P4).
 - **Work scope + task key contract** (issue #21, P0) lives in one pure module
   `task-key.ts`, split into TWO types on purpose: `WorkScope` = *where* Otto may
   look (provider + owner/repo or team/project, NO item) for watch + `--print-config`;

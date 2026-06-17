@@ -187,18 +187,42 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   // to runWatch so the poller never sees another repo's issues. parseGithubRepo
   // admits only shell-safe chars, keeping OTTO_GITHUB_REPO safe to interpolate.
   let scope: WorkScope | undefined;
+  // Multi-target watch: several validated GitHub scopes the daemon rotates
+  // through (repeated --repo / OTTO_GITHUB_REPOS). Undefined for the single
+  // target path, which keeps using `scope` + the OTTO_GITHUB_REPO env export.
+  let scopes: WorkScope[] | undefined;
   let scopeError: string | undefined;
   if (cfg.supportsRepoScope) {
-    const rawRepo =
-      flags.repo ?? (process.env.OTTO_GITHUB_REPO?.trim() || undefined);
-    if (rawRepo) {
-      try {
-        const { owner, repo } = parseGithubRepo(rawRepo);
-        scope = { provider: "github", owner, repo };
-        process.env.OTTO_GITHUB_REPO = `${owner}/${repo}`;
-      } catch (err) {
-        scopeError = (err as Error).message;
+    // Repeated --repo wins; else the comma-list OTTO_GITHUB_REPOS; else the
+    // single OTTO_GITHUB_REPO. All go through parseGithubRepo (shell-safe).
+    const rawRepos =
+      flags.repos.length > 0
+        ? flags.repos
+        : (process.env.OTTO_GITHUB_REPOS?.split(",")
+            .map((s) => s.trim())
+            .filter(Boolean) ?? []);
+    const raw =
+      rawRepos.length > 0
+        ? rawRepos
+        : process.env.OTTO_GITHUB_REPO?.trim()
+          ? [process.env.OTTO_GITHUB_REPO.trim()]
+          : [];
+    try {
+      const parsed = raw.map((r) => {
+        const { owner, repo } = parseGithubRepo(r);
+        return { provider: "github" as const, owner, repo };
+      });
+      if (parsed.length === 1) {
+        scope = parsed[0];
+        // Export the canonical owner/repo so the ghafk templates confine their
+        // `gh` commands to it (single-target). Multi-target pins it per-cycle
+        // inside runWatch instead, so we don't set a single value here.
+        process.env.OTTO_GITHUB_REPO = `${parsed[0].owner}/${parsed[0].repo}`;
+      } else if (parsed.length > 1) {
+        scopes = parsed;
       }
+    } catch (err) {
+      scopeError = (err as Error).message;
     }
   }
   // Resolve the Linear single-target scope (--project / OTTO_LINEAR_PROJECT)
@@ -217,9 +241,11 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   }
   const watchScope = scopeError
     ? `invalid (${scopeError})`
-    : scope
-      ? describeScope(scope)
-      : undefined;
+    : scopes
+      ? scopes.map(describeScope).join(", ")
+      : scope
+        ? describeScope(scope)
+        : undefined;
 
   if (flags.printConfig) {
     printConfig(cfg.bin, workspaceDir, packageDir, {
@@ -397,6 +423,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       pollIssues: cfg.watchPoll,
       provider: cfg.watchProvider,
       scope,
+      scopes,
     });
     return;
   }

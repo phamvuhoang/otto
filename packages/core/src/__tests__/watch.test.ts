@@ -331,4 +331,58 @@ describe("runWatch", () => {
     expect(text).toMatch(/network is unreachable/);
     expect(text).not.toMatch(/no open issues/i);
   });
+
+  describe("multi-target (scopes)", () => {
+    const twoScopes = [
+      { provider: "github" as const, owner: "acme", repo: "api" },
+      { provider: "github" as const, owner: "acme", repo: "web" },
+    ];
+    let prevRepo: string | undefined;
+    beforeEach(() => {
+      prevRepo = process.env.OTTO_GITHUB_REPO;
+      delete process.env.OTTO_GITHUB_REPO;
+    });
+    afterEach(() => {
+      if (prevRepo === undefined) delete process.env.OTTO_GITHUB_REPO;
+      else process.env.OTTO_GITHUB_REPO = prevRepo;
+    });
+
+    it("polls every configured scope each cycle and names each in the poll lines", async () => {
+      mocks.pollIssues.mockReturnValue({ ok: true, count: 0 });
+      mocks.sleep.mockImplementation(abortAfter(1));
+      await runWatch(baseOpts({ scopes: twoScopes })).catch(() => {});
+      expect(mocks.pollIssues).toHaveBeenCalledWith("otto", "/ws", "acme/api");
+      expect(mocks.pollIssues).toHaveBeenCalledWith("otto", "/ws", "acme/web");
+      const text = stderr.join("");
+      expect(text).toMatch(/github acme\/api/);
+      expect(text).toMatch(/github acme\/web/);
+    });
+
+    it("runs one loop for the first scope with work and confines OTTO_GITHUB_REPO to it", async () => {
+      mocks.pollIssues.mockImplementation((_l: string, _c: string, repo?: string) =>
+        repo === "acme/web" ? { ok: true, count: 1 } : { ok: true, count: 0 }
+      );
+      let repoDuringRun: string | undefined;
+      mocks.runLoop.mockImplementation(async () => {
+        repoDuringRun = process.env.OTTO_GITHUB_REPO;
+        return { costUsd: 1, sentinelHit: true };
+      });
+      mocks.sleep.mockImplementation(abortAfter(1));
+      await runWatch(baseOpts({ scopes: twoScopes })).catch(() => {});
+      expect(mocks.runLoop).toHaveBeenCalledTimes(1);
+      expect(repoDuringRun).toBe("acme/web");
+    });
+
+    it("a failed poll for one scope does not block polling the others", async () => {
+      mocks.pollIssues.mockImplementation((_l: string, _c: string, repo?: string) =>
+        repo === "acme/api"
+          ? { ok: false, auth: false, detail: "boom" }
+          : { ok: true, count: 0 }
+      );
+      mocks.sleep.mockImplementation(abortAfter(1));
+      await runWatch(baseOpts({ scopes: twoScopes })).catch(() => {});
+      expect(mocks.pollIssues).toHaveBeenCalledWith("otto", "/ws", "acme/web");
+      expect(stderr.join("")).toMatch(/boom/);
+    });
+  });
 });

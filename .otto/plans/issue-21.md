@@ -65,9 +65,20 @@ This run implements **only the first unchecked task**.
 
 ## P3 — Multi-target watch filters
 
-- [ ] Repeatable `--repo` / `OTTO_GITHUB_REPOS` and `--project` /
-      `OTTO_LINEAR_PROJECTS`: poll all scopes, run one loop for the scope with
-      work, return to polling; one cumulative budget, cost reported per scope.
+- [x] GitHub repeatable `--repo` / `OTTO_GITHUB_REPOS`: `parseFlags` accumulates
+      repeated `--repo` into `flags.repos` (`repo` kept = first); run-bin merges
+      with the comma-list `OTTO_GITHUB_REPOS` into a github `WorkScope[]` (single
+      entry → unchanged single-target path + `OTTO_GITHUB_REPO` export; >1 →
+      `scopes` passed to `runWatch`, none pinned). `runWatch` polls every scope
+      each cycle, runs ONE loop for the first scope with work (pinning
+      `OTTO_GITHUB_REPO` to it so the templates/agent are confined), then returns
+      to polling; a failed poll for one scope is logged and skipped (never blocks
+      the others); one cumulative budget; each poll/run line names its scope via
+      `describeScope`; `--print-config` lists all scopes. → verify: `pnpm -r
+      typecheck && pnpm -r test && pnpm test`
+- [ ] Linear repeatable `--project` / `OTTO_LINEAR_PROJECTS` (mirror the GitHub
+      half): build a linear `WorkScope[]`, poll each project per cycle, run one
+      loop for the scope with work, return to polling; cost reported per scope.
 
 ## P4 — Migration + docs
 

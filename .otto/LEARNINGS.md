@@ -2,6 +2,31 @@
 
 ## Conventions
 
+- **Agent runtime selection (`--agent`/`OTTO_AGENT`/config `agent`, issue #24
+  P0/P1 step 1)** is config-parsing + visibility ONLY — the runner still spawns
+  `claude` (no adapter yet). Pure module `agent-runtime.ts`: `AgentRuntimeId =
+  "claude"|"codex"`, `DEFAULT_AGENT="claude"`, `AGENT_DISPLAY_NAMES`,
+  `parseAgentId(raw,source)` (throws clean `… must be one of claude|codex`),
+  `resolveAgentRuntime({flag,env,config})` → `{id,displayName,source}` with
+  precedence **flag → env → config → default** (blank env/config skipped, not an
+  error), and `readAgentConfig(workspaceDir)` reading the `.otto/config.json`
+  `agent` string (never throws; kept separate from `readBranchConfig` to
+  decouple). Wiring **mirrors the OTTO_TOKEN_MODE pattern exactly**: the
+  `--agent` flag is validated in `parseFlags` (throws → clean); an invalid
+  `OTTO_AGENT`/config value is caught in run-bin into `agentError`, **reported by
+  `--print-config` without a stack trace (exit 0) but fatal (exit 1) on a real
+  run**. `--print-config` shows `runtime <id> (<displayName>)` + `runtime source
+  <source>`. Crux: a real run whose resolved `id !== "claude"` **exits 1 with a
+  "not implemented yet" message** rather than silently running Claude — this
+  preserves the issue's "user always knows the active runtime" contract before
+  the Codex adapter exists; `--print-config` still reports the codex selection
+  (read-only diagnostic, no guard). Default stays Claude → behavior unchanged.
+  Pinned by `agent-runtime.test.ts` (parse/resolve/read), `cli-help.test.ts`
+  (`parseFlags --agent` + print-config runtime lines), `run-bin.test.ts`
+  (env-selection + invalid-reported + not-implemented-fatal; the fatal test
+  spies on `console.error` and mocks `process.exit` to throw — `process.stderr.write`
+  spy does NOT capture `console.error`). Spec/plan: `.otto/tasks/issue-24/`.
+
 - **Branch convention vs. branch prefix (`--branch-convention`, issue #21 P2)** —
   there are now TWO branch-namespace flags and the newer one is canonical. The
   pre-existing `--branch-prefix`/`OTTO_BRANCH_PREFIX`/`config.branchPrefix` is a

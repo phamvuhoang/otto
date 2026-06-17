@@ -2,6 +2,11 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  parseAgentId,
+  type AgentRuntimeId,
+  type AgentSelectionSource,
+} from "./agent-runtime.js";
 import { runPreflight } from "./preflight.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { parseTokenMode, type TokenMode } from "./tokens.js";
@@ -18,6 +23,12 @@ export type CliFlags = {
   budget?: number;
   cooldownMs?: number;
   tokenMode?: TokenMode;
+  /**
+   * Validated `--agent` value (the active agent CLI runtime). Undefined when the
+   * flag is absent; run-bin then falls back to OTTO_AGENT / .otto/config.json /
+   * the `claude` default. Validated here so an invalid flag fails fast.
+   */
+  agent?: AgentRuntimeId;
   reviewPanel: boolean;
   watch: boolean;
   watchIntervalSec?: number;
@@ -147,6 +158,8 @@ export function parseFlags(
   let expectingCooldown = false;
   let tokenMode: TokenMode | undefined;
   let expectingTokenMode = false;
+  let agent: AgentRuntimeId | undefined;
+  let expectingAgent = false;
   let reviewPanel = false;
   let watch = false;
   let watchIntervalSec: number | undefined;
@@ -210,6 +223,11 @@ export function parseFlags(
     if (expectingTokenMode) {
       tokenMode = parseTokenMode(a, "--token-mode");
       expectingTokenMode = false;
+      continue;
+    }
+    if (expectingAgent) {
+      agent = parseAgentId(a, "--agent");
+      expectingAgent = false;
       continue;
     }
     if (expectingWatchInterval) {
@@ -278,6 +296,7 @@ export function parseFlags(
     else if (a === "--budget") expectingBudget = true;
     else if (a === "--cooldown") expectingCooldown = true;
     else if (a === "--token-mode") expectingTokenMode = true;
+    else if (a === "--agent") expectingAgent = true;
     else if (a === "--review-panel") reviewPanel = true;
     else if (a === "--watch") watch = true;
     else if (a === "--watch-interval") expectingWatchInterval = true;
@@ -307,6 +326,9 @@ export function parseFlags(
   }
   if (expectingTokenMode) {
     throw new Error("--token-mode requires a value");
+  }
+  if (expectingAgent) {
+    throw new Error("--agent requires a value");
   }
   if (expectingWatchInterval) {
     throw new Error("--watch-interval requires a value");
@@ -350,6 +372,7 @@ export function parseFlags(
     budget,
     cooldownMs,
     tokenMode,
+    agent,
     reviewPanel,
     watch,
     watchIntervalSec,
@@ -419,6 +442,7 @@ Flags:
   --budget <usd>      stop the loop when cumulative stage cost reaches this USD ceiling (default: off)
   --cooldown <ms>     wait this many milliseconds between iterations; adaptive backoff doubles on throttle (default: 0)
   --token-mode <mode> token accounting mode: off | measure | reduce (default: off)
+  --agent <runtime>   agent CLI runtime: claude | codex (or OTTO_AGENT / .otto/config.json "agent"; default: claude)
   --review-panel      replace the single reviewer stage with correctness/security/tests lens reviewers + one synth commit (default: off)
   --branch <mode>     where Otto commits: current (default) | branch (new branch) | worktree (isolated checkout)
   --branch-prefix <p> branch name prefix for branch/worktree modes (default: otto/)
@@ -444,6 +468,7 @@ Environment variables:
                     claude CLI default. The claude CLI validates the value.
   OTTO_RESULT_GRACE_MS  post-result grace timer ms (default 30000; 0 disables).
   OTTO_TOKEN_MODE   default token accounting mode: off | measure | reduce.
+  OTTO_AGENT        default agent CLI runtime: claude | codex; same as --agent (default: claude).
   OTTO_REVIEW_LENSES   comma-separated lens list for --review-panel (default: correctness,security,tests).
   OTTO_WATCH_LABEL     issue label to poll for in watch mode (default: "otto").
   OTTO_GITHUB_REPO     scope otto-ghafk to a single GitHub repo ("owner/name"); same as --repo.
@@ -468,6 +493,14 @@ export type PrintConfigOptions = {
   cooldownMs?: number;
   tokenMode?: TokenMode | string;
   tokenModeError?: string;
+  /** Resolved active runtime id (e.g. "claude"); omitted → claude default. */
+  agentId?: AgentRuntimeId;
+  /** Display name for the active runtime (e.g. "Claude Code"). */
+  agentDisplayName?: string;
+  /** Where the runtime selection came from (default | flag | env | config). */
+  agentSource?: AgentSelectionSource;
+  /** Set when OTTO_AGENT / config "agent" was invalid; reported, not thrown. */
+  agentError?: string;
   /** Resolved review lenses (empty array = single reviewer). */
   reviewLenses?: string[];
   watch?: boolean;
@@ -509,6 +542,10 @@ export function printConfig(
     cooldownMs,
     tokenMode = "off",
     tokenModeError,
+    agentId = "claude",
+    agentDisplayName = "Claude Code",
+    agentSource = "default",
+    agentError,
     reviewLenses = [],
     watch = false,
     watchIntervalSec,
@@ -544,6 +581,10 @@ export function printConfig(
       ? `${rawModel.trim()} (OTTO_MODEL)`
       : "claude CLI default (OTTO_MODEL unset)";
 
+  const runtimeStatus = agentError
+    ? `invalid (${agentError})`
+    : `${agentId} (${agentDisplayName})`;
+  const runtimeSourceStatus = agentError ? "—" : agentSource;
   const budgetStatus = budget != null ? `$${budget.toFixed(2)}` : "off";
   const cooldownStatus = cooldownMs ? `${cooldownMs}ms` : "off";
   const tokenModeStatus = tokenModeError
@@ -571,6 +612,8 @@ export function printConfig(
   mode                  ${mode ?? "afk"}
   OTTO_WORKSPACE       ${workspaceDir}${process.env.OTTO_WORKSPACE ? "" : "  (default: cwd)"}
   packageDir            ${packageDir}
+  runtime               ${runtimeStatus}
+  runtime source        ${runtimeSourceStatus}
   OTTO_RUNNER          ${runner}${process.env.OTTO_RUNNER ? "" : "  (default)"}
   sandbox network       ${netStatus}
   model                 ${modelStatus}

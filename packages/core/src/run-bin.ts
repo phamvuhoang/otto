@@ -2,6 +2,11 @@ import { existsSync, readFileSync, appendFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  readAgentConfig,
+  resolveAgentRuntime,
+  type ResolvedAgentRuntime,
+} from "./agent-runtime.js";
 import { dirtyTreeWarning, ensureTmpIgnored, resolveBranch } from "./branch.js";
 import {
   parseFlags,
@@ -135,6 +140,25 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     } catch (err) {
       tokenModeError = (err as Error).message;
     }
+  }
+
+  // Resolve the active agent runtime: --agent flag → OTTO_AGENT → .otto/config.json
+  // "agent" → claude default. Mirror the token-mode handling: an invalid env/config
+  // value is reported by --print-config (no stack trace) and is fatal on a real run.
+  let agent: ResolvedAgentRuntime = {
+    id: "claude",
+    displayName: "Claude Code",
+    source: "default",
+  };
+  let agentError: string | undefined;
+  try {
+    agent = resolveAgentRuntime({
+      flag: flags.agent,
+      env: process.env.OTTO_AGENT,
+      config: readAgentConfig(workspaceDir),
+    });
+  } catch (err) {
+    agentError = (err as Error).message;
   }
 
   const envBranch = process.env.OTTO_BRANCH?.trim();
@@ -292,6 +316,10 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
         ? (process.env.OTTO_TOKEN_MODE?.trim() ?? "")
         : tokenMode,
       tokenModeError,
+      agentId: agent.id,
+      agentDisplayName: agent.displayName,
+      agentSource: agent.source,
+      agentError,
       reviewLenses: reviewLenses ?? [],
       watch: flags.watch,
       watchIntervalSec: flags.watchIntervalSec,
@@ -308,6 +336,23 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
 
   if (tokenModeError) {
     console.error(tokenModeError);
+    process.exit(1);
+  }
+
+  // An invalid OTTO_AGENT / config "agent" is fatal for a real run (it would
+  // otherwise silently fall back to claude); --print-config only reported it.
+  if (agentError) {
+    console.error(agentError);
+    process.exit(1);
+  }
+  // Only Claude is runnable end-to-end today; selecting another runtime for a
+  // real run fails loudly rather than silently running Claude, preserving the
+  // "user always knows the active runtime" contract. The Codex adapter lands in
+  // a later issue-24 slice. --print-config still reports the selection above.
+  if (agent.id !== "claude") {
+    console.error(
+      `the ${agent.displayName} runtime is not implemented yet; only Claude Code is currently runnable (see issue #24). Selection source: ${agent.source}.`
+    );
     process.exit(1);
   }
 

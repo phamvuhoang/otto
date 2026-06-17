@@ -133,6 +133,45 @@ describe("parseFlags --token-mode", () => {
   });
 });
 
+describe("parseFlags --agent", () => {
+  it.each(["claude", "codex"] as const)("parses %s", (id) => {
+    const f = parseFlags(["--agent", id, "5"]);
+    expect(f.agent).toBe(id);
+    expect(f.rest).toEqual(["5"]);
+  });
+
+  it("errors when --agent has no value", () => {
+    expect(() => parseFlags(["--agent"])).toThrow(/--agent requires a value/);
+  });
+
+  it("errors on an invalid --agent value", () => {
+    expect(() => parseFlags(["--agent", "gpt"])).toThrow(
+      /--agent must be one of claude\|codex/
+    );
+  });
+
+  it("defaults agent to undefined when absent", () => {
+    expect(parseFlags(["5"]).agent).toBeUndefined();
+  });
+});
+
+describe("printConfig runtime", () => {
+  it("shows the active runtime, display name, and selection source", () => {
+    const out = configOutput({
+      agentId: "codex",
+      agentDisplayName: "Codex CLI",
+      agentSource: "env",
+    });
+    expect(out).toMatch(/runtime\s+codex \(Codex CLI\)/);
+    expect(out).toMatch(/runtime source\s+env/);
+  });
+
+  it("reports an invalid runtime selection without throwing", () => {
+    const out = configOutput({ agentError: 'OTTO_AGENT must be one of claude|codex, got: "gpt"' });
+    expect(out).toMatch(/runtime\s+invalid/);
+  });
+});
+
 describe("parseFlags --branch / --branch-prefix", () => {
   it("parses --branch and --branch-prefix", () => {
     const f = parseFlags([

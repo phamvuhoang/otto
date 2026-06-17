@@ -48,9 +48,17 @@ This run implements **only the first unchecked task**.
       design call (the issue wants per-item task-local source but still globally
       summarizable) + a task-key source for `apply-review.md`, so it is its own
       task rather than folded into the spec/plan slice above.
-- [ ] `--branch-convention` / `OTTO_BRANCH_CONVENTION` / `.otto/config.json`:
-      branch = `<convention>/<task-key>`, default `otto`, validated + trailing-
-      slash normalized; route through `resolveBranch`.
+- [x] `--branch-convention` / `OTTO_BRANCH_CONVENTION` / `.otto/config.json`:
+      validated + trailing-slash-normalized branch namespace routed through
+      `resolveBranch` (`normalizeBranchConvention`). The canonical, git-ref-safe
+      replacement for the pre-existing raw `--branch-prefix` (kept as a
+      back-compat fallback): precedence is flagConvention → flagPrefix →
+      config.branchConvention → config.branchPrefix → `otto/`. `feat` and `feat/`
+      both yield `feat/`; unsafe values throw. `--print-config` shows the
+      convention. NOTE: the `<task-key>` half (swapping `slugify` for
+      `deriveTaskKey`) stays with the deferred legacy-read task below — this item
+      delivered the **convention namespace + validation** only. → verify:
+      `pnpm -r typecheck && pnpm -r test && pnpm test`
 - [ ] Read legacy flat paths for the **remaining** artifacts
       (`.otto/review-followups.md`, `.otto/reviews/…`) as fallback for one
       release. (Spec/plan legacy-read already shipped with the first item.)

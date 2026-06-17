@@ -132,6 +132,16 @@ describe("parseFlags --branch / --branch-prefix", () => {
   it("errors when --branch has no value", () => {
     expect(() => parseFlags(["--branch"])).toThrow(/--branch requires a value/);
   });
+  it("captures the raw --branch-convention value", () => {
+    const f = parseFlags(["--branch-convention", "feat", "5"]);
+    expect(f.branchConvention).toBe("feat");
+    expect(f.rest).toEqual(["5"]);
+  });
+  it("errors when --branch-convention has no value", () => {
+    expect(() => parseFlags(["--branch-convention"])).toThrow(
+      /--branch-convention requires a value/
+    );
+  });
 });
 
 describe("parseFlags --repo", () => {
@@ -172,6 +182,17 @@ describe("printConfig scope", () => {
   it("shows a default when no scope is resolved", () => {
     const out = configOutput({});
     expect(out).toMatch(/scope\s+default/);
+  });
+});
+
+describe("printConfig branch convention", () => {
+  it("shows the resolved branch convention when provided", () => {
+    const out = configOutput({ branchStrategy: "branch", branchConvention: "feat" });
+    expect(out).toMatch(/branch\s+branch \(convention "feat"\)/);
+  });
+  it("falls back to the prefix display when no convention is set", () => {
+    const out = configOutput({ branchStrategy: "branch", branchPrefix: "bot/" });
+    expect(out).toMatch(/branch\s+branch \(prefix "bot\/"\)/);
   });
 });
 

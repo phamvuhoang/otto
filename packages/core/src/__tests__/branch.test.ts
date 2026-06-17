@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   dirtyTreeWarning,
   ensureTmpIgnored,
+  normalizeBranchConvention,
   readBranchConfig,
   resolveBranch,
   slugify,
@@ -60,6 +61,46 @@ describe("slugify", () => {
   });
 });
 
+describe("normalizeBranchConvention", () => {
+  it("appends a trailing slash to a bare name", () => {
+    expect(normalizeBranchConvention("feat")).toBe("feat/");
+    expect(normalizeBranchConvention("otto")).toBe("otto/");
+  });
+  it("normalizes an optional trailing slash so feat and feat/ match", () => {
+    expect(normalizeBranchConvention("feat/")).toBe("feat/");
+    expect(normalizeBranchConvention("feat//")).toBe("feat/");
+    expect(normalizeBranchConvention("feat")).toBe(
+      normalizeBranchConvention("feat/")
+    );
+  });
+  it("trims surrounding whitespace", () => {
+    expect(normalizeBranchConvention("  feature  ")).toBe("feature/");
+  });
+  it("allows a multi-segment namespace", () => {
+    expect(normalizeBranchConvention("team/feat")).toBe("team/feat/");
+  });
+  it("rejects an empty or whitespace-only convention", () => {
+    expect(() => normalizeBranchConvention("")).toThrow(/branch convention/i);
+    expect(() => normalizeBranchConvention("   ")).toThrow(/branch convention/i);
+    expect(() => normalizeBranchConvention("/")).toThrow(/branch convention/i);
+  });
+  it("rejects unsafe values that would not be git-ref-safe", () => {
+    for (const bad of [
+      "feat branch", // whitespace
+      "feat..x", // .. traversal
+      "../etc", // path traversal
+      "-bad", // leading dash
+      ".hidden", // leading dot
+      "a//b", // empty interior segment
+      "x.lock", // .lock suffix git forbids
+      "feat~1", // git ref metacharacter
+      "feat:x", // git ref metacharacter
+    ]) {
+      expect(() => normalizeBranchConvention(bad), bad).toThrow(/unsafe/i);
+    }
+  });
+});
+
 describe("branch config", () => {
   it("returns empty object when .otto/config.json is absent", () => {
     expect(readBranchConfig(tmpDir())).toEqual({});
@@ -80,6 +121,11 @@ describe("branch config", () => {
       branchStrategy: "worktree",
       branchPrefix: "otto/",
     });
+  });
+  it("round-trips a written branchConvention", () => {
+    const dir = tmpDir();
+    writeBranchConfig(dir, { branchConvention: "feat" });
+    expect(readBranchConfig(dir)).toEqual({ branchConvention: "feat" });
   });
   it("merges into an existing config, preserving unknown keys", () => {
     const dir = tmpDir();
@@ -122,6 +168,45 @@ describe("resolveBranch", () => {
         .toString()
         .trim()
     ).toBe("otto/plan-x");
+  });
+
+  it("flagConvention sets a validated, slash-normalized namespace", async () => {
+    const dir = tmpRepo2();
+    const r = await resolveBranch({
+      ...base(dir),
+      flagStrategy: "branch",
+      flagConvention: "feat", // no trailing slash
+    });
+    expect(r.branchName).toBe("feat/plan-x");
+  });
+
+  it("flagConvention beats config branchPrefix", async () => {
+    const dir = tmpRepo2();
+    writeBranchConfig(dir, { branchPrefix: "bot/" });
+    const r = await resolveBranch({
+      ...base(dir),
+      flagStrategy: "branch",
+      flagConvention: "fix/",
+    });
+    expect(r.branchName).toBe("fix/plan-x");
+  });
+
+  it("config branchConvention supplies the learned default", async () => {
+    const dir = tmpRepo2();
+    writeBranchConfig(dir, { branchConvention: "feature" });
+    const r = await resolveBranch({ ...base(dir), flagStrategy: "branch" });
+    expect(r.branchName).toBe("feature/plan-x");
+  });
+
+  it("rejects an unsafe flagConvention", async () => {
+    const dir = tmpRepo2();
+    await expect(
+      resolveBranch({
+        ...base(dir),
+        flagStrategy: "branch",
+        flagConvention: "../etc",
+      })
+    ).rejects.toThrow(/unsafe/i);
   });
 
   it("config supplies the learned default", async () => {

@@ -57,6 +57,29 @@ this round** — deriving the key replaces today's `issue-<n>` task-key, and tha
 swap needs the legacy-path fallback from P2/P4, so it is a later plan task. The
 P0 helper is inert until then, so it cannot regress existing behavior.
 
+### Later run: P2 — `--branch-convention`
+
+`normalizeBranchConvention(raw)` (in `branch.ts`) validates a branch namespace
+and normalizes a trailing slash so `feat` and `feat/` both yield `feat/`. It is
+the canonical, git-ref-safe replacement for the pre-existing **raw**
+`--branch-prefix`/`OTTO_BRANCH_PREFIX` (which concatenated unchecked, so `feat`
+produced `featslug` with no separator). Both flags coexist: `--branch-prefix`
+stays as a back-compat fallback. Precedence (highest first): `flagConvention` →
+`flagPrefix` → `config.branchConvention` → `config.branchPrefix` → `otto/`.
+
+**Decision — why this item before the unchecked "remaining artifacts" item:**
+the artifacts item (reviews/followups/quality-report/metadata) is design-blocked
+(it needs the per-item-task-local-but-globally-summarizable followups call + a
+task-key source for `apply-review.md`, which has none today — see LEARNINGS). The
+branch-convention item is unblocked and self-contained, so per the AFK
+"make-forward-progress-on-the-unblocked-parts" rule it shipped first.
+
+**Deferred:** the `<convention>/<task-key>` half — swapping `slugify(inputs)` for
+`deriveTaskKey` in `resolveBranch` — stays with the legacy-read task (it needs the
+P2/P4 legacy-path fallback, same reason P0 left the key inert). This run delivered
+the **convention namespace + validation/normalization** only; the branch slug is
+still today's `slugify`.
+
 ## Assumptions
 
 - **Which single task?** → *P0 helper module + tests* → It is build-order step 1

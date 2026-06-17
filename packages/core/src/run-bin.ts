@@ -142,6 +142,9 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   const branchPrefixArg =
     flags.branchPrefix ??
     (process.env.OTTO_BRANCH_PREFIX?.trim() || undefined);
+  const branchConventionArg =
+    flags.branchConvention ??
+    (process.env.OTTO_BRANCH_CONVENTION?.trim() || undefined);
 
   const detachLogPath = flags.detach
     ? (flags.log ??
@@ -238,6 +241,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       maxWaitMs,
       branchStrategy: branchStrategyArg,
       branchPrefix: branchPrefixArg,
+      branchConvention: branchConventionArg,
     });
     return;
   }
@@ -351,6 +355,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     isTTY: Boolean(process.stdout.isTTY),
     flagStrategy: branchStrategyArg,
     flagPrefix: branchPrefixArg,
+    flagConvention: branchConventionArg,
   });
   process.stderr.write(`${resolved.summaryLine}\n`);
   // Evaluate the dirty-tree warning against the user's tree BEFORE we mutate the

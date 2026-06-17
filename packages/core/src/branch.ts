@@ -19,6 +19,12 @@ export type BranchStrategy = "current" | "branch" | "worktree";
 export type BranchConfig = {
   branchStrategy?: BranchStrategy;
   branchPrefix?: string;
+  /**
+   * Validated, slash-normalized branch namespace (`<convention>/<slug>`). The
+   * canonical replacement for the raw `branchPrefix`: it is git-ref-safe and
+   * always ends in a single `/`. Takes precedence over `branchPrefix`.
+   */
+  branchConvention?: string;
 };
 
 export type ResolvedBranch = {
@@ -40,6 +46,12 @@ export type ResolveBranchOptions = {
   isTTY: boolean;
   flagStrategy?: BranchStrategy;
   flagPrefix?: string;
+  /**
+   * Validated branch convention (e.g. `feat`, `feature`, `fix`). When set it is
+   * normalized to `<convention>/` and used as the branch namespace, taking
+   * precedence over `flagPrefix`/config. See {@link normalizeBranchConvention}.
+   */
+  flagConvention?: string;
   /** Injectable for tests; defaults to a readline prompt. Only called when isTTY && unresolved. */
   prompt?: () => Promise<BranchPromptResult>;
   /** Injectable clock for the timestamp slug (test seam). */
@@ -66,6 +78,35 @@ export function slugify(inputs: string): string {
     .replace(/-+$/g, "");
 }
 
+/**
+ * Validate + normalize a user-supplied branch convention into a `<convention>/`
+ * namespace. Trims whitespace, strips an optional trailing slash (so `feat` and
+ * `feat/` both yield `feat/`), and rejects anything that would not be git-ref-safe
+ * (whitespace, `..`, leading `-`/`.`, empty segments, `.lock` suffix, or git ref
+ * metacharacters). Throws on an empty or unsafe value.
+ */
+export function normalizeBranchConvention(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, "");
+  if (!trimmed) {
+    throw new Error(
+      `branch convention must be a non-empty name (e.g. "feat", "otto"), got: ${JSON.stringify(raw)}`
+    );
+  }
+  const safeSegment = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+  for (const segment of trimmed.split("/")) {
+    if (
+      !safeSegment.test(segment) ||
+      segment.includes("..") ||
+      segment.endsWith(".lock")
+    ) {
+      throw new Error(
+        `branch convention has an unsafe path segment ${JSON.stringify(segment)}; use letters, digits, ".", "_", "-" (e.g. "feat", "feature", "team/feat"), got: ${JSON.stringify(raw)}`
+      );
+    }
+  }
+  return `${trimmed}/`;
+}
+
 /** Read .otto/config.json. Absent or malformed → {} (never throws). */
 export function readBranchConfig(workspaceDir: string): BranchConfig {
   try {
@@ -82,6 +123,8 @@ export function readBranchConfig(workspaceDir: string): BranchConfig {
     }
     if (typeof raw.branchPrefix === "string")
       out.branchPrefix = raw.branchPrefix;
+    if (typeof raw.branchConvention === "string")
+      out.branchConvention = raw.branchConvention;
     return out;
   } catch {
     return {};
@@ -162,7 +205,17 @@ export async function resolveBranch(
   const { workspaceDir, inputs, isTTY } = opts;
   const now = opts.now ?? defaultNow;
   const config = readBranchConfig(workspaceDir);
-  const prefix = opts.flagPrefix ?? config.branchPrefix ?? DEFAULT_PREFIX;
+  // Branch namespace precedence: flags beat config, and the validated convention
+  // beats the raw prefix at each level. The convention is the canonical name; the
+  // prefix is kept as a back-compat fallback.
+  const prefix =
+    opts.flagConvention !== undefined
+      ? normalizeBranchConvention(opts.flagConvention)
+      : opts.flagPrefix !== undefined
+        ? opts.flagPrefix
+        : config.branchConvention !== undefined
+          ? normalizeBranchConvention(config.branchConvention)
+          : (config.branchPrefix ?? DEFAULT_PREFIX);
 
   let strategy: BranchStrategy;
   if (opts.flagStrategy) {

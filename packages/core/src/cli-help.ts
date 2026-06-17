@@ -32,6 +32,13 @@ export type CliFlags = {
   branch?: "current" | "branch" | "worktree";
   branchPrefix?: string;
   /**
+   * Raw `--branch-convention` value (e.g. `feat`). Validated + slash-normalized
+   * into a `<convention>/` namespace by resolveBranch; the canonical, git-ref-safe
+   * replacement for the raw `branchPrefix`. Kept raw here so the same validation
+   * path also covers the OTTO_BRANCH_CONVENTION env fallback.
+   */
+  branchConvention?: string;
+  /**
    * Raw `--repo owner/name` value (otto-ghafk watch scope). Validated into a
    * WorkScope by run-bin via parseGithubRepo — kept raw here so the single
    * validation path also covers the `OTTO_GITHUB_REPO` env fallback.
@@ -138,6 +145,8 @@ export function parseFlags(
   let expectingBranch = false;
   let branchPrefix: string | undefined;
   let expectingBranchPrefix = false;
+  let branchConvention: string | undefined;
+  let expectingBranchConvention = false;
   let repo: string | undefined;
   let expectingRepo = false;
   let project: string | undefined;
@@ -220,6 +229,11 @@ export function parseFlags(
       expectingBranchPrefix = false;
       continue;
     }
+    if (expectingBranchConvention) {
+      branchConvention = a;
+      expectingBranchConvention = false;
+      continue;
+    }
     if (expectingRepo) {
       repo = a;
       expectingRepo = false;
@@ -250,6 +264,7 @@ export function parseFlags(
     else if (a === "--apply-review") expectingApplyReview = true;
     else if (a === "--branch") expectingBranch = true;
     else if (a === "--branch-prefix") expectingBranchPrefix = true;
+    else if (a === "--branch-convention") expectingBranchConvention = true;
     else if (a === "--repo") expectingRepo = true;
     else if (a === "--project") expectingProject = true;
     else rest.push(a);
@@ -284,6 +299,9 @@ export function parseFlags(
   if (expectingBranchPrefix) {
     throw new Error("--branch-prefix requires a value");
   }
+  if (expectingBranchConvention) {
+    throw new Error("--branch-convention requires a value");
+  }
   if (expectingRepo) {
     throw new Error("--repo requires a value");
   }
@@ -314,6 +332,7 @@ export function parseFlags(
     applyReview,
     branch,
     branchPrefix,
+    branchConvention,
     repo,
     project,
     rest,
@@ -372,6 +391,7 @@ Flags:
   --review-panel      replace the single reviewer stage with correctness/security/tests lens reviewers + one synth commit (default: off)
   --branch <mode>     where Otto commits: current (default) | branch (new branch) | worktree (isolated checkout)
   --branch-prefix <p> branch name prefix for branch/worktree modes (default: otto/)
+  --branch-convention <c>  validated branch namespace <c>/<task-key> (e.g. feat, feature, fix); normalizes a trailing slash; overrides --branch-prefix (or OTTO_BRANCH_CONVENTION; default: otto)
   --watch             poll for labelled issues and run the loop whenever work is found (otto-ghafk + otto-linear-afk; default: off)
   --watch-interval <sec>  seconds between polls in watch mode (default: 300)
   --repo <owner/name> scope otto-ghafk to a single GitHub repo: poll + list + view only that repo's issues (or OTTO_GITHUB_REPO; default: the workspace's repo)
@@ -399,6 +419,7 @@ Environment variables:
   OTTO_MAX_WAIT        default rate-limit wait cap (seconds or 90m/6h; default 6h).
   OTTO_BRANCH          default branch strategy (current|branch|worktree) when --branch is absent.
   OTTO_BRANCH_PREFIX   default branch-name prefix (default: "otto/").
+  OTTO_BRANCH_CONVENTION  default validated branch namespace; same as --branch-convention (default: "otto").
 `);
 }
 
@@ -432,6 +453,7 @@ export type PrintConfigOptions = {
   mode?: string;
   branchStrategy?: "current" | "branch" | "worktree";
   branchPrefix?: string;
+  branchConvention?: string;
 };
 
 export function printConfig(
@@ -459,6 +481,7 @@ export function printConfig(
     mode,
     branchStrategy,
     branchPrefix,
+    branchConvention,
   } = opts;
   const core = readCoreVersion();
   const cli = cliVersion ?? "?";
@@ -496,7 +519,11 @@ export function printConfig(
   // strings (`ENG-123` / UUID) and stand alone.
   const issueStatus =
     issue == null ? "off" : typeof issue === "number" ? `#${issue}` : issue;
-  const branchStatus = `${branchStrategy ?? "current"} (prefix "${branchPrefix ?? "otto/"}")`;
+  const branchNamespace =
+    branchConvention != null
+      ? `convention "${branchConvention}"`
+      : `prefix "${branchPrefix ?? "otto/"}"`;
+  const branchStatus = `${branchStrategy ?? "current"} (${branchNamespace})`;
 
   process.stdout.write(`[${bin}] resolved config
   version               ${bin} ${cli} (core ${core})

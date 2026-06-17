@@ -2,6 +2,32 @@
 
 ## Conventions
 
+- **Branch convention vs. branch prefix (`--branch-convention`, issue #21 P2)** —
+  there are now TWO branch-namespace flags and the newer one is canonical. The
+  pre-existing `--branch-prefix`/`OTTO_BRANCH_PREFIX`/`config.branchPrefix` is a
+  **raw** string concatenated to the slug (no validation, no separator — `feat`
+  → `featslug`). `--branch-convention`/`OTTO_BRANCH_CONVENTION`/
+  `config.branchConvention` is the **validated, slash-normalized** namespace via
+  `normalizeBranchConvention(raw)` in `branch.ts` (trim → strip trailing `/+` →
+  reject non-git-ref-safe segments: whitespace, `..`, leading `-`/`.`, empty
+  interior segment, `.lock` suffix, ref metacharacters → return `<conv>/`). So
+  `feat` and `feat/` both yield `feat/`. They coexist (prefix kept for
+  back-compat); `resolveBranch` precedence is **flagConvention → flagPrefix →
+  config.branchConvention → config.branchPrefix → otto/** (flags beat config,
+  convention beats prefix at each level). Default `otto` normalizes to the same
+  `otto/` the old `DEFAULT_PREFIX` used, so behavior is unchanged when neither is
+  set. `--print-config` shows `branch <strategy> (convention "<c>")` when a
+  convention is set, else the prefix form. **Still deferred:** the branch SLUG is
+  still `slugify(inputs)`, NOT `deriveTaskKey` — wiring the full
+  `<convention>/<task-key>` needs the P2/P4 legacy-path fallback (same reason P0
+  left the key helper inert), so the convention namespace shipped without the
+  task-key swap. Validation is a pure regex (not a `git check-ref-format` spawn in
+  the hot path), but the resolveBranch tests prove safety by actually creating the
+  branch via `git switch -c`. Pinned by `branch.test.ts`
+  (`normalizeBranchConvention` + `resolveBranch` convention cases) and
+  `cli-help.test.ts` (parseFlags + print-config). Design-ordering call: this
+  shipped before the still-unchecked "remaining artifacts" P2 item because that
+  item is design-blocked (followups) and this one is not.
 - **Task-grouped artifact layout (`.otto/tasks/<task-key>/`, issue #21 P2)** is
   template-driven, NOT code: no otto src writes spec/plan — the `superpowers.md`
   workflow prose tells the agent where to put them, so the layout change is a

@@ -13,6 +13,8 @@ function allPresentProbes(overrides: Partial<PreflightProbes> = {}): PreflightPr
     pathExists: () => true,
     home: "/home/user",
     linearAuth: () => ({ token: "tok", source: "OTTO_LINEAR_API_KEY" }),
+    probeVersion: () => true,
+    env: { OPENAI_API_KEY: "sk-test" },
     ...overrides,
   };
 }
@@ -127,6 +129,112 @@ describe("runPreflight", () => {
     const ghAuth = byLabel(results)["gh auth"];
     expect(ghAuth.ok).toBe(false);
     expect(ghAuth.detail).toMatch(/gh auth login/);
+  });
+});
+
+describe("runPreflight codex runtime (issue #24 P3)", () => {
+  it("reports claude CLI/auth rows by default and swaps to codex when agentId=codex", () => {
+    const claude = runPreflight(
+      { bin: "otto-afk", workspaceDir: "/repo" },
+      allPresentProbes()
+    );
+    expect(claude.map((r) => r.label)).toContain("claude CLI");
+    expect(claude.map((r) => r.label)).not.toContain("codex CLI");
+
+    const codex = runPreflight(
+      { bin: "otto-afk", workspaceDir: "/repo", agentId: "codex" },
+      allPresentProbes()
+    );
+    // The selected runtime's CLI/auth rows replace claude's — Claude-specific
+    // checks are not shown blindly for a codex run.
+    expect(codex.map((r) => r.label)).toContain("codex CLI");
+    expect(codex.map((r) => r.label)).toContain("codex auth");
+    expect(codex.map((r) => r.label)).not.toContain("claude CLI");
+    expect(codex.map((r) => r.label)).not.toContain("claude auth");
+  });
+
+  it("reports codex CLI ok when on PATH and `codex --version` succeeds", () => {
+    const results = runPreflight(
+      { bin: "otto-afk", workspaceDir: "/repo", agentId: "codex" },
+      allPresentProbes({ resolveBin: () => "/opt/homebrew/bin/codex" })
+    );
+    const cli = byLabel(results)["codex CLI"];
+    expect(cli.ok).toBe(true);
+    expect(cli.detail).toBe("/opt/homebrew/bin/codex");
+  });
+
+  it("flags a shim-present-but-broken codex (version fails) as unusable, not found", () => {
+    // The npm shim can sit on PATH while its vendored native binary is missing,
+    // so `which codex` succeeds but `codex --version` does not (issue #24 P2 gap #5).
+    const results = runPreflight(
+      { bin: "otto-afk", workspaceDir: "/repo", agentId: "codex" },
+      allPresentProbes({
+        resolveBin: () => "/opt/homebrew/bin/codex",
+        probeVersion: () => false,
+      })
+    );
+    const cli = byLabel(results)["codex CLI"];
+    expect(cli.ok).toBe(false);
+    expect(cli.detail).toMatch(/codex --version/);
+    expect(cli.detail).toMatch(/\/opt\/homebrew\/bin\/codex/);
+  });
+
+  it("flags a missing codex CLI with an install hint", () => {
+    const results = runPreflight(
+      { bin: "otto-afk", workspaceDir: "/repo", agentId: "codex" },
+      allPresentProbes({ resolveBin: () => null })
+    );
+    const cli = byLabel(results)["codex CLI"];
+    expect(cli.ok).toBe(false);
+    expect(cli.detail).toMatch(/PATH/);
+    expect(cli.detail).toMatch(/@openai\/codex/);
+  });
+
+  it("accepts ~/.codex/auth.json as codex auth", () => {
+    const results = runPreflight(
+      { bin: "otto-afk", workspaceDir: "/repo", agentId: "codex" },
+      allPresentProbes({
+        env: {},
+        pathExists: (p) => p === join("/home/user", ".codex", "auth.json"),
+      })
+    );
+    const auth = byLabel(results)["codex auth"];
+    expect(auth.ok).toBe(true);
+    expect(auth.detail).toMatch(/auth\.json/);
+  });
+
+  it("accepts OPENAI_API_KEY as codex auth when no auth file exists", () => {
+    const results = runPreflight(
+      { bin: "otto-afk", workspaceDir: "/repo", agentId: "codex" },
+      allPresentProbes({
+        pathExists: () => false,
+        env: { OPENAI_API_KEY: "sk-live" },
+      })
+    );
+    const auth = byLabel(results)["codex auth"];
+    expect(auth.ok).toBe(true);
+    expect(auth.detail).toMatch(/OPENAI_API_KEY/);
+  });
+
+  it("flags missing codex auth with a remediation hint", () => {
+    const results = runPreflight(
+      { bin: "otto-afk", workspaceDir: "/repo", agentId: "codex" },
+      allPresentProbes({ pathExists: () => false, env: {} })
+    );
+    const auth = byLabel(results)["codex auth"];
+    expect(auth.ok).toBe(false);
+    expect(auth.detail).toMatch(/codex login/);
+    expect(auth.detail).toMatch(/OPENAI_API_KEY/);
+  });
+
+  it("still includes the workspace git row for a codex run", () => {
+    const results = runPreflight(
+      { bin: "otto-ghafk", workspaceDir: "/repo", agentId: "codex" },
+      allPresentProbes()
+    );
+    expect(results.map((r) => r.label)).toContain("workspace git repo");
+    // gh rows are per-bin and independent of the runtime.
+    expect(results.map((r) => r.label)).toContain("gh CLI");
   });
 });
 

@@ -2,6 +2,27 @@
 
 ## Conventions
 
+- **Runtime-aware preflight: `runPreflight(opts.agentId)` shows the SELECTED
+  runtime's CLI/auth rows, not both (issue #24 P3).** `runPreflight` takes an
+  optional `agentId`; default/`claude` → `claude CLI`+`claude auth` rows
+  (unchanged), `codex` → `codex CLI`+`codex auth` rows INSTEAD (Claude-specific
+  checks are not shown blindly for a codex run). The git/gh/linear rows are
+  per-bin and runtime-independent. Threaded from `printConfig`'s `agentId` into
+  the `runPreflight` call. **The codex CLI row probes runnability, not PATH
+  presence:** it requires `codex --version` to exit 0 via a new injectable
+  `probeVersion` probe (default `probeVersionBin` = `spawnSync(name,["--version"])
+  .status===0`, never throws) — because the `@openai/codex` npm shim sits on PATH
+  while its vendored native binary can be missing/broken, so `which codex`
+  succeeds but the binary is unusable (spike gap #5). New `PreflightProbes`
+  fields: `probeVersion(name)` and `env` (for `OPENAI_API_KEY`); the
+  `allPresentProbes` test helper must supply both. Codex auth = `~/.codex/auth.json`
+  OR `OPENAI_API_KEY`. Pinned by `preflight.test.ts` (injected probes: usable /
+  shim-broken / missing / auth-file / api-key / none) + `cli-help.test.ts`
+  (host-independent: match preflight rows by the `[✓✗] <label>` glyph prefix, NOT
+  bare `claude CLI` — the model line `"claude CLI default (OTTO_MODEL unset)"`
+  also contains that substring). The full codex `AgentRuntime` adapter
+  (`parseResultEvent`) stays BLOCKED until the `exec --json` schema is verified on
+  a host that can run codex — see the gotcha below.
 - **Codex spike lives in `scripts/`, not `src/` (issue #24 P2).** The Codex CLI
   adapter spike is a *throwaway harness* + findings doc, NOT production code:
   `scripts/codex-spike.mjs` (candidate `parseCodexEvents`/`detectCodexRateLimit`/
@@ -440,6 +461,20 @@
 
 ## Gotchas
 
+- **This dev host cannot execute the Codex CLI — live `codex exec --json`
+  verification is impossible here (issue #24 P3).** Two independent failures: (1)
+  the installed `@openai/codex` 0.104.0 npm shim is on PATH but its vendored
+  native binary is missing (`vendor/.../codex` ENOENT, empty dir); (2) a
+  freshly-downloaded official release binary
+  (`gh release download rust-v0.104.0 --repo openai/codex --pattern
+  codex-aarch64-apple-darwin.tar.gz`) — `codesign --verify` reports "valid on
+  disk / satisfies its Designated Requirement" — is still **SIGKILL'd (rc 137)**
+  on every invocation, even with the command sandbox disabled and after `xattr
+  -c`. So it is NOT a Gatekeeper/signature issue; the environment itself kills
+  it. Consequence: the P3 codex *adapter* (whose `parseResultEvent` needs the
+  UNVERIFIED `exec --json` event schema) cannot be verified here — only the
+  schema-independent pieces (preflight, and later the argv builder) are
+  shippable on this host. Re-attempt the adapter where `codex exec --json` runs.
 - Linear's GraphQL API authenticates a **personal API key** with a bare
   `Authorization: <key>` header — **no `Bearer` prefix** (that prefix is for
   OAuth access tokens only). `createLinearClient` in `linear-api.ts` sets the

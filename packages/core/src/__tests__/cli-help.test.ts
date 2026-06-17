@@ -170,6 +170,21 @@ describe("printConfig runtime", () => {
     const out = configOutput({ agentError: 'OTTO_AGENT must be one of claude|codex, got: "gpt"' });
     expect(out).toMatch(/runtime\s+invalid/);
   });
+
+  it("shows codex preflight rows (not claude) when codex is the active runtime", () => {
+    // Host-independent: the preflight row LABELS track the selected runtime even
+    // though ok/detail depend on the host (issue #24 P3).
+    // Match preflight ROWS (prefixed with a ✓/✗ status glyph), not the model
+    // line which always mentions "claude CLI default".
+    const claudeOut = configOutput({ agentId: "claude" });
+    expect(claudeOut).toMatch(/[✓✗] claude CLI/);
+    expect(claudeOut).not.toMatch(/[✓✗] codex CLI/);
+
+    const codexOut = configOutput({ agentId: "codex", agentDisplayName: "Codex CLI" });
+    expect(codexOut).toMatch(/[✓✗] codex CLI/);
+    expect(codexOut).toMatch(/[✓✗] codex auth/);
+    expect(codexOut).not.toMatch(/[✓✗] claude CLI/);
+  });
 });
 
 describe("parseFlags --branch / --branch-prefix", () => {

@@ -634,7 +634,7 @@ export function printConfig(
 
   // Preflight: report whether the run's prerequisites are satisfied so a user
   // can debug setup before any paid `claude` invocation.
-  const preflight = runPreflight({ bin, workspaceDir });
+  const preflight = runPreflight({ bin, workspaceDir, agentId });
   const preflightLines = preflight
     .map((r) => `  ${r.ok ? "✓" : "✗"} ${r.label.padEnd(20)}${r.detail}`)
     .join("\n");

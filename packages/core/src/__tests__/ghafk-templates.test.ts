@@ -75,9 +75,12 @@ describe("GitHub AFK templates — security invariant", () => {
     for (const name of GH_TEMPLATES) {
       const raw = readFileSync(tpl(name), "utf8");
       for (const body of shellCommandBodies(raw)) {
-        const envRefs = body.match(/\$[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+        // Match both bare `$VAR` and the `${VAR…}` brace form (e.g. the
+        // `${OTTO_GITHUB_REPO:+…}` guard) — `\{?` so a `${EVIL:+…}` with no bare
+        // inner ref can't slip past this RCE-invariant check.
+        const envRefs = body.match(/\$\{?[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
         for (const ref of envRefs) {
-          expect(allowed.has(ref)).toBe(true);
+          expect(allowed.has(ref.replace("{", ""))).toBe(true);
         }
       }
     }

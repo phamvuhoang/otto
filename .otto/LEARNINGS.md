@@ -2,6 +2,20 @@
 
 ## Conventions
 
+- **Work scope + task key contract** (issue #21, P0) lives in one pure module
+  `task-key.ts`, split into TWO types on purpose: `WorkScope` = *where* Otto may
+  look (provider + owner/repo or team/project, NO item) for watch + `--print-config`;
+  `WorkSource` = a scope PLUS the concrete item (issue/slug) that names artifacts +
+  branches. `deriveTaskKey(source)` emits the one normalized key
+  (`plan-<slug>` / `gh-<owner>-<repo>-<issue>[-<slug>]` / `linear-<team>-<project>-<issue>[-<slug>]`,
+  optional parts dropped when absent); `describeScope(scope)` is the human one-liner
+  the caller suffixes with `label:` etc. Every free-text part goes through the same
+  sanitizer as `slugify` (lowercase, non-`[a-z0-9]`→`-`, trim) so keys are BOTH
+  filesystem-safe and git-branch-safe; slugs cap at 40. **Test branch-safety
+  against real git** (`git check-ref-format --branch <key>` and `<convention>/<key>`),
+  not a regex. The helper is INERT until P1–P4 wire it in (swapping today's
+  `issue-<n>` task-key needs the legacy-path fallback from P2/P4), so adding it
+  can't regress existing behavior. Pinned by `task-key.test.ts`.
 - **Cross-run quality summary vs. per-run report — keep them apart.** A rollup
   *across* runs (per-verdict tally, common rejection/follow-up causes, still-open
   gaps/deferred) is NOT a per-run artifact, so it does **not** belong in the

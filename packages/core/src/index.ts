@@ -4,6 +4,12 @@ export { runLinearAfk, type RunLinearAfkOptions } from "./linear-main.js";
 export { runLoop, type LoopOptions, type LoopOutcome } from "./loop.js";
 export { STAGES, type Stage } from "./stages.js";
 export {
+  deriveTaskKey,
+  describeScope,
+  type WorkScope,
+  type WorkSource,
+} from "./task-key.js";
+export {
   renderTemplate,
   type RenderOptions,
   type RenderVars,

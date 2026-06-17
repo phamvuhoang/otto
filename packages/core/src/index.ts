@@ -6,6 +6,7 @@ export { STAGES, type Stage } from "./stages.js";
 export {
   deriveTaskKey,
   describeScope,
+  parseGithubRepo,
   type WorkScope,
   type WorkSource,
 } from "./task-key.js";

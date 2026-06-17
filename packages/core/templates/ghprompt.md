@@ -7,6 +7,8 @@ Two views of open GitHub issues are provided at the start of context:
 
 You will work on the AFK issues only, not the HITL ones. Label filtering uses the `labels` field in the summary.
 
+**Repo scope.** If the `$OTTO_GITHUB_REPO` environment variable is set (the run was scoped with `--repo owner/name`), the issue list above is already confined to that repo — work only on those issues, and pass `--repo "$OTTO_GITHUB_REPO"` to every `gh` command you run yourself (e.g. `gh issue comment`, `gh pr create`) so completion targets the same repo. If it is unset, `gh` uses the workspace's own repo as before.
+
 You've also been passed a file containing the last few commits. Review these to understand what work has been done.
 
 If all AFK tasks are complete, output <promise>NO MORE TASKS</promise>.

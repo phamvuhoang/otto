@@ -31,6 +31,12 @@ export type CliFlags = {
   applyReview?: string;
   branch?: "current" | "branch" | "worktree";
   branchPrefix?: string;
+  /**
+   * Raw `--repo owner/name` value (otto-ghafk watch scope). Validated into a
+   * WorkScope by run-bin via parseGithubRepo — kept raw here so the single
+   * validation path also covers the `OTTO_GITHUB_REPO` env fallback.
+   */
+  repo?: string;
   rest: string[];
 };
 
@@ -124,6 +130,8 @@ export function parseFlags(
   let expectingBranch = false;
   let branchPrefix: string | undefined;
   let expectingBranchPrefix = false;
+  let repo: string | undefined;
+  let expectingRepo = false;
   const rest: string[] = [];
   for (const a of argv) {
     if (expectingMaxRetries) {
@@ -202,6 +210,11 @@ export function parseFlags(
       expectingBranchPrefix = false;
       continue;
     }
+    if (expectingRepo) {
+      repo = a;
+      expectingRepo = false;
+      continue;
+    }
     if (a === "-h" || a === "--help") help = true;
     else if (a === "-V" || a === "--version") version = true;
     else if (a === "--print-config") printConfig = true;
@@ -222,6 +235,7 @@ export function parseFlags(
     else if (a === "--apply-review") expectingApplyReview = true;
     else if (a === "--branch") expectingBranch = true;
     else if (a === "--branch-prefix") expectingBranchPrefix = true;
+    else if (a === "--repo") expectingRepo = true;
     else rest.push(a);
   }
   if (expectingMaxRetries) {
@@ -254,6 +268,9 @@ export function parseFlags(
   if (expectingBranchPrefix) {
     throw new Error("--branch-prefix requires a value");
   }
+  if (expectingRepo) {
+    throw new Error("--repo requires a value");
+  }
   if (log !== undefined && !detach) {
     throw new Error("--log is only meaningful with --detach");
   }
@@ -278,6 +295,7 @@ export function parseFlags(
     applyReview,
     branch,
     branchPrefix,
+    repo,
     rest,
   };
 }
@@ -336,6 +354,7 @@ Flags:
   --branch-prefix <p> branch name prefix for branch/worktree modes (default: otto/)
   --watch             poll for labelled issues and run the loop whenever work is found (otto-ghafk + otto-linear-afk; default: off)
   --watch-interval <sec>  seconds between polls in watch mode (default: 300)
+  --repo <owner/name> scope otto-ghafk to a single GitHub repo: poll + list + view only that repo's issues (or OTTO_GITHUB_REPO; default: the workspace's repo)
   --issue <ref>       target a single issue (otto-ghafk: number, #N, owner/repo#N, or URL; otto-linear-afk: ENG-123, UUID, or Linear URL); loop exits when it is done (default: off)
   --max-wait <dur>    cap the wait when rate-limited before halting (e.g. 90m, 6h; default 6h)
   --fresh             ignore any saved resume state and start from iteration 1
@@ -354,6 +373,7 @@ Environment variables:
   OTTO_RESULT_GRACE_MS  post-result grace timer ms (default 30000; 0 disables).
   OTTO_REVIEW_LENSES   comma-separated lens list for --review-panel (default: correctness,security,tests).
   OTTO_WATCH_LABEL     issue label to poll for in watch mode (default: "otto").
+  OTTO_GITHUB_REPO     scope otto-ghafk to a single GitHub repo ("owner/name"); same as --repo.
   OTTO_MAX_WAIT        default rate-limit wait cap (seconds or 90m/6h; default 6h).
   OTTO_BRANCH          default branch strategy (current|branch|worktree) when --branch is absent.
   OTTO_BRANCH_PREFIX   default branch-name prefix (default: "otto/").
@@ -379,6 +399,12 @@ export type PrintConfigOptions = {
    * can't drift from the actual watch run. Defaults to the gh resolution.
    */
   watchLabel?: string;
+  /**
+   * Resolved work scope (e.g. `github owner/name`), pre-rendered via
+   * describeScope. Shown so a user sees the exact repo/team/project a run (and
+   * especially a --watch run) will be confined to before it starts.
+   */
+  watchScope?: string;
   issue?: number | string;
   maxWaitMs?: number;
   mode?: string;
@@ -405,6 +431,7 @@ export function printConfig(
     watch = false,
     watchIntervalSec,
     watchLabel = process.env.OTTO_WATCH_LABEL?.trim() || "otto",
+    watchScope,
     issue,
     maxWaitMs,
     mode,
@@ -442,6 +469,7 @@ export function printConfig(
   const watchStatus = watch
     ? `on (every ${watchIntervalSec ?? 300}s, label "${watchLabel}")`
     : "off";
+  const scopeStatus = watchScope ?? "default (workspace repo / team)";
   // GitHub refs are numbers (rendered `#42`); Linear refs are already-canonical
   // strings (`ENG-123` / UUID) and stand alone.
   const issueStatus =
@@ -466,6 +494,7 @@ export function printConfig(
   review                ${reviewStatus}
   branch                ${branchStatus}
   watch                 ${watchStatus}
+  scope                 ${scopeStatus}
   issue                 ${issueStatus}
 `);
 

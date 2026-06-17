@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveTaskKey,
   describeScope,
+  parseGithubRepo,
   type WorkScope,
   type WorkSource,
 } from "../task-key.js";
@@ -148,6 +149,61 @@ describe("describeScope", () => {
   it("linear with neither team nor project → default", () => {
     expect(describeScope({ provider: "linear" })).toBe(
       "linear (default team)"
+    );
+  });
+});
+
+describe("parseGithubRepo", () => {
+  it("parses an owner/repo pair", () => {
+    expect(parseGithubRepo("phamvuhoang/otto")).toEqual({
+      owner: "phamvuhoang",
+      repo: "otto",
+    });
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(parseGithubRepo("  acme/web  ")).toEqual({
+      owner: "acme",
+      repo: "web",
+    });
+  });
+
+  it("allows hyphens, dots and underscores in the repo name", () => {
+    expect(parseGithubRepo("my-org/web.app_v2")).toEqual({
+      owner: "my-org",
+      repo: "web.app_v2",
+    });
+  });
+
+  it("preserves the original case (gh display form)", () => {
+    expect(parseGithubRepo("PhamVuHoang/Otto")).toEqual({
+      owner: "PhamVuHoang",
+      repo: "Otto",
+    });
+  });
+
+  it.each([
+    "",
+    "owner",
+    "owner/",
+    "/repo",
+    "owner/repo/extra",
+    "own er/repo",
+    "owner/re po",
+    "owner/$(rm -rf ~)",
+    "owner/repo;ls",
+    "-owner/repo",
+    "owner-/repo",
+    "owner/..",
+    "owner/.",
+  ])("rejects unsafe or malformed %j", (bad) => {
+    expect(() => parseGithubRepo(bad)).toThrow();
+  });
+
+  it("yields a shell-safe owner/repo string (no metacharacters)", () => {
+    const { owner, repo } = parseGithubRepo("a-b/c.d_e");
+    expect(`${owner}/${repo}`).toMatch(
+      /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/
     );
   });
 });

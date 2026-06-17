@@ -2,6 +2,29 @@
 
 ## Conventions
 
+- **GitHub watch scope (`--repo`/`OTTO_GITHUB_REPO`, issue #21 P1)** threads a
+  validated repo end-to-end without breaking the host-shell RCE invariant. The
+  raw `--repo` value is captured untyped in `parseFlags` (`flags.repo`); run-bin
+  resolves `flags.repo ?? (OTTO_GITHUB_REPO env || undefined)` through
+  `parseGithubRepo` (in `task-key.ts`, charset-validated → shell-safe `owner/repo`,
+  case preserved) into a `WorkScope`, then **re-exports the canonical owner/repo
+  as `process.env.OTTO_GITHUB_REPO`**. The ghafk templates consume it with the
+  **opt-in shell guard** `${OTTO_GITHUB_REPO:+--repo "$OTTO_GITHUB_REPO"}` — empty/unset
+  expands to nothing (default = workspace repo), set → `--repo owner/repo`; this
+  preserves the "existing behavior is the default" criterion with no per-call
+  conditional in code. `render.ts`/`runner.ts` use `execSync`/`spawn` with NO
+  explicit `env`, so the value inherited from `process.env` reaches BOTH the
+  render-time `gh issue list/view` shell tags AND the spawned claude agent (whose
+  completion `gh` commands the prose tells it to scope). So now **TWO** validated
+  env vars may appear in a shell/spill tag body — `$OTTO_ISSUE` and
+  `$OTTO_GITHUB_REPO` — pinned by `ghafk-templates.test.ts` (mirror of
+  `linear-templates.test.ts`: RCE `{{` invariant + allowed-env-ref set). Gating:
+  `RunBinConfig.supportsRepoScope` (otto-ghafk only); `--repo` on another bin
+  errors; an invalid repo is **fatal on a real run but only reported (exit 0)
+  under `--print-config`** (the read-only-diagnostic contract). `pollOpenIssues`
+  takes an optional 3rd `repo` arg (`gh issue list --repo`); `runWatch` derives it
+  from `scope` and prefixes every poll line with `describeScope(scope)`. The
+  Linear `--project` P1 item should mirror this shape.
 - **Work scope + task key contract** (issue #21, P0) lives in one pure module
   `task-key.ts`, split into TWO types on purpose: `WorkScope` = *where* Otto may
   look (provider + owner/repo or team/project, NO item) for watch + `--print-config`;

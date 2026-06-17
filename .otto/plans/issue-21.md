@@ -12,9 +12,12 @@ This run implements **only the first unchecked task**.
 
 ## P1 — Single-target watch filters
 
-- [ ] GitHub `--repo owner/name` / `OTTO_GITHUB_REPO`: parse + validate into a
-      `WorkScope`, thread into `pollOpenIssues` (`gh issue list --repo`) and the
-      ghafk implementer/completion templates.
+- [x] GitHub `--repo owner/name` / `OTTO_GITHUB_REPO`: `parseGithubRepo` →
+      `WorkScope`; threaded into `pollOpenIssues` (`gh issue list --repo`), the
+      ghafk list/view templates (`${OTTO_GITHUB_REPO:+--repo …}`), the completion
+      prose, and `--print-config`/watch poll lines via `describeScope`. Gated to
+      otto-ghafk; invalid scope is fatal for a real run, reported (exit 0) under
+      `--print-config`. → verify: `pnpm -r typecheck && pnpm -r test && pnpm test`
 - [ ] Linear `--project "Name"` / `OTTO_LINEAR_PROJECT`: extend
       `listIssues`/`dump`/`view` filtering by project, thread into
       `pollLinearIssues` and the linear templates.

@@ -10,6 +10,7 @@ import {
 import { runLoop } from "./loop.js";
 import { notifyComplete, notifyError } from "./notify.js";
 import { sleep } from "./pacing.js";
+import { describeScope, type WorkScope } from "./task-key.js";
 import {
   bold,
   dim,
@@ -31,12 +32,20 @@ export type PollResult =
   | { ok: true; count: number }
   | { ok: false; auth: boolean; detail: string };
 
-/** Poll open issues carrying `label`, via gh. Never throws. */
-export function pollOpenIssues(label: string, cwd: string): PollResult {
+/**
+ * Poll open issues carrying `label`, via gh. Never throws. When `repo`
+ * (`owner/name`) is given the poll is confined to that repository (watch
+ * scoping) instead of the workspace's default repo.
+ */
+export function pollOpenIssues(
+  label: string,
+  cwd: string,
+  repo?: string
+): PollResult {
   try {
-    // execFileSync (no shell) so `label` is passed as a literal argv entry — a
-    // value like `$(rm -rf ~)` can never be shell-evaluated. See SECURITY.md.
-    // stderr is piped (not ignored) so a failure's message can be classified.
+    // execFileSync (no shell) so `label`/`repo` are passed as literal argv
+    // entries — a value like `$(rm -rf ~)` can never be shell-evaluated. See
+    // SECURITY.md. stderr is piped (not ignored) so failures can be classified.
     const out = execFileSync(
       "gh",
       [
@@ -46,6 +55,7 @@ export function pollOpenIssues(label: string, cwd: string): PollResult {
         "open",
         "--label",
         label,
+        ...(repo ? ["--repo", repo] : []),
         "--json",
         "number",
       ],
@@ -142,11 +152,23 @@ export type RunWatchOptions = {
   cliVersion?: string;
   /**
    * Poller for open labelled issues. Defaults to the gh poller; otto-linear-afk
-   * passes a Linear poller. May be async. Injectable for tests too.
+   * passes a Linear poller. May be async. Injectable for tests too. `repo` is
+   * the resolved GitHub scope (`owner/name`) or undefined; the Linear poller
+   * ignores it.
    */
-  pollIssues?: (label: string, cwd: string) => PollResult | Promise<PollResult>;
+  pollIssues?: (
+    label: string,
+    cwd: string,
+    repo?: string
+  ) => PollResult | Promise<PollResult>;
   /** Provider-specific poll/auth messaging; defaults to gh. */
   provider?: WatchProvider;
+  /**
+   * Resolved work scope this daemon is confined to (e.g. github owner/name).
+   * Named in the poll lines and used to derive the gh `--repo` poll filter so
+   * watch never picks up issues from outside the scope.
+   */
+  scope?: WorkScope;
 };
 
 export async function runWatch(opts: RunWatchOptions): Promise<void> {
@@ -165,7 +187,17 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
     bin = "otto-ghafk",
     pollIssues = pollOpenIssues,
     provider = GH_PROVIDER,
+    scope,
   } = opts;
+
+  // Derive the gh `--repo` filter from a github scope; other providers (Linear)
+  // carry their scope in the label/team the poller already honors.
+  const repo =
+    scope?.provider === "github" && scope.owner && scope.repo
+      ? `${scope.owner}/${scope.repo}`
+      : undefined;
+  // One human-readable scope prefix for every poll line (e.g. "github acme/web").
+  const scopeLabel = scope ? `${describeScope(scope)} ` : "";
 
   const releaser: Releaser = acquire({ reason: `${bin} watch` });
   let released = false;
@@ -189,7 +221,7 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
   process.on("SIGTERM", onSigterm);
 
   process.stderr.write(
-    `${USE_COLOR ? dim("watching") + " " + bold(`label:${watchLabel} every ${watchIntervalSec}s`) : `watching label:${watchLabel} every ${watchIntervalSec}s`}\n`
+    `${USE_COLOR ? dim("watching") + " " + bold(`${scopeLabel}label:${watchLabel} every ${watchIntervalSec}s`) : `watching ${scopeLabel}label:${watchLabel} every ${watchIntervalSec}s`}\n`
   );
 
   let cumulativeCost = 0;
@@ -207,7 +239,7 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
         if (notify) notifyComplete(0, false);
         return;
       }
-      const poll = await pollIssues(watchLabel, workspaceDir);
+      const poll = await pollIssues(watchLabel, workspaceDir, repo);
       if (!poll.ok) {
         // Broken poll — say *why*, distinctly from an idle queue, and keep
         // polling (auth may get fixed / a transient failure may clear).

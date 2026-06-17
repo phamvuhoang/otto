@@ -17,6 +17,11 @@ import {
 import { detachAndExit } from "./detach.js";
 import { runLoop } from "./loop.js";
 import type { Stage } from "./stages.js";
+import {
+  parseGithubRepo,
+  describeScope,
+  type WorkScope,
+} from "./task-key.js";
 import type { PollResult, WatchProvider } from "./watch.js";
 
 export type RunBinConfig = {
@@ -50,6 +55,11 @@ export type RunBinConfig = {
    * the same labelled set its implementer selects.
    */
   resolveWatchLabel?: () => string;
+  /**
+   * Whether this bin accepts `--repo owner/name` / `OTTO_GITHUB_REPO` to confine
+   * the run to a single GitHub repo. Only otto-ghafk sets this.
+   */
+  supportsRepoScope?: boolean;
   /** Alternate gate stage used when --issue is set. Only otto-ghafk sets this. */
   issueStage?: Stage;
   /** Single read-only gate stage used when --verify is set. Only otto-afk sets this. */
@@ -162,6 +172,33 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     process.env.OTTO_WATCH_LABEL?.trim() ||
     "otto";
 
+  // Resolve the GitHub single-target scope (--repo / OTTO_GITHUB_REPO) up front
+  // so --print-config can report it before any run starts. Validated into a
+  // WorkScope; the canonical owner/repo is exported as OTTO_GITHUB_REPO so the
+  // ghafk templates confine their `gh` commands (list/view) to it, and passed
+  // to runWatch so the poller never sees another repo's issues. parseGithubRepo
+  // admits only shell-safe chars, keeping OTTO_GITHUB_REPO safe to interpolate.
+  let githubScope: WorkScope | undefined;
+  let scopeError: string | undefined;
+  if (cfg.supportsRepoScope) {
+    const rawRepo =
+      flags.repo ?? (process.env.OTTO_GITHUB_REPO?.trim() || undefined);
+    if (rawRepo) {
+      try {
+        const { owner, repo } = parseGithubRepo(rawRepo);
+        githubScope = { provider: "github", owner, repo };
+        process.env.OTTO_GITHUB_REPO = `${owner}/${repo}`;
+      } catch (err) {
+        scopeError = (err as Error).message;
+      }
+    }
+  }
+  const watchScope = scopeError
+    ? `invalid (${scopeError})`
+    : githubScope
+      ? describeScope(githubScope)
+      : undefined;
+
   if (flags.printConfig) {
     printConfig(cfg.bin, workspaceDir, packageDir, {
       cliVersion: cfg.cliVersion,
@@ -177,6 +214,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       watch: flags.watch,
       watchIntervalSec: flags.watchIntervalSec,
       watchLabel,
+      watchScope,
       issue: flags.issue,
       maxWaitMs,
       branchStrategy: branchStrategyArg,
@@ -187,6 +225,17 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
 
   if (flags.issue != null && !cfg.issueStage) {
     console.error("--issue is only supported by otto-ghafk and otto-linear-afk");
+    process.exit(1);
+  }
+
+  if (flags.repo != null && !cfg.supportsRepoScope) {
+    console.error("--repo is only supported by otto-ghafk");
+    process.exit(1);
+  }
+  // A malformed --repo / OTTO_GITHUB_REPO is fatal for a real run (it would
+  // silently fall back to the workspace repo); --print-config only reports it.
+  if (scopeError) {
+    console.error(scopeError);
     process.exit(1);
   }
 
@@ -319,6 +368,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       cliVersion: cfg.cliVersion,
       pollIssues: cfg.watchPoll,
       provider: cfg.watchProvider,
+      scope: githubScope,
     });
     return;
   }

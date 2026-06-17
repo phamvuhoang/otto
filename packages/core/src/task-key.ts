@@ -89,6 +89,39 @@ export function deriveTaskKey(source: WorkSource): string {
   return parts.filter(Boolean).join("-");
 }
 
+// GitHub owner (user/org): alphanumeric or single hyphens, no leading/trailing
+// hyphen. Repo name: alphanumeric plus `.`, `_`, `-` — but never the reserved
+// `.`/`..`. Both admit only shell-safe chars, so the resulting `owner/repo` is
+// safe to reach a host shell (the `gh issue list --repo` poller arg + the
+// `$OTTO_GITHUB_REPO` env the ghafk templates interpolate).
+const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
+const REPO_RE = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Parse + validate a user-supplied `owner/repo` (from `--repo` or
+ * `OTTO_GITHUB_REPO`) into its parts. Throws on anything malformed or that
+ * carries shell metacharacters, so the validated result is safe to pass to
+ * `gh` and to export as `OTTO_GITHUB_REPO`. The original case is preserved
+ * (gh's display form); {@link deriveTaskKey} lowercases when it builds keys.
+ */
+export function parseGithubRepo(raw: string): { owner: string; repo: string } {
+  const s = raw.trim();
+  const slash = s.indexOf("/");
+  const owner = slash >= 0 ? s.slice(0, slash) : "";
+  const repo = slash >= 0 ? s.slice(slash + 1) : "";
+  if (
+    !OWNER_RE.test(owner) ||
+    !REPO_RE.test(repo) ||
+    repo === "." ||
+    repo === ".."
+  ) {
+    throw new Error(
+      `--repo must be a valid GitHub "owner/name", got: ${JSON.stringify(raw)}`
+    );
+  }
+  return { owner, repo };
+}
+
 /**
  * A human-readable one-line description of a scope, for `--print-config` and
  * watch poll lines (the caller appends provider-specific filters like `label:`).

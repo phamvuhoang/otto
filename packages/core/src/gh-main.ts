@@ -15,6 +15,7 @@ export async function runGhAfk(
     takesInputArg: false,
     cliVersion: opts.cliVersion,
     supportsWatch: true,
+    supportsRepoScope: true,
     issueStage: STAGES.ghafkIssueImplementer,
     mode: "ghafk",
   });

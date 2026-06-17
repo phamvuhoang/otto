@@ -71,6 +71,21 @@ describe("pollOpenIssues", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.auth).toBe(false);
   });
+
+  it("scopes the poll to --repo when a repo is given", () => {
+    mocks.execFileSync.mockReturnValue("[]");
+    pollOpenIssues("otto", "/ws", "acme/web");
+    const call = mocks.execFileSync.mock.calls.at(-1);
+    expect(call?.[0]).toBe("gh");
+    expect(call?.[1]).toEqual(expect.arrayContaining(["--repo", "acme/web"]));
+  });
+
+  it("omits --repo when no repo is given (workspace default)", () => {
+    mocks.execFileSync.mockReturnValue("[]");
+    pollOpenIssues("otto", "/ws");
+    const call = mocks.execFileSync.mock.calls.at(-1);
+    expect(call?.[1]).not.toContain("--repo");
+  });
 });
 
 describe("pollLinearIssues", () => {
@@ -273,6 +288,16 @@ describe("runWatch", () => {
     expect(text).toMatch(/otto-linear-auth login/);
     expect(text).not.toMatch(/gh auth login/);
     expect(text).not.toMatch(/no open issues/i);
+  });
+
+  it("scope: forwards the github repo to the poller and names it in the poll lines", async () => {
+    mocks.pollIssues.mockReturnValue({ ok: true, count: 0 });
+    mocks.sleep.mockImplementation(abortAfter(2));
+    await runWatch(
+      baseOpts({ scope: { provider: "github", owner: "acme", repo: "web" } })
+    ).catch(() => {});
+    expect(mocks.pollIssues).toHaveBeenCalledWith("otto", "/ws", "acme/web");
+    expect(stderr.join("")).toMatch(/github acme\/web/);
   });
 
   it("poll failure: prints a poll-failed line distinct from idle", async () => {

@@ -105,6 +105,27 @@ task. Implement the first unchecked task per run.
 
 ## P5 — docs + smoke
 
-- [ ] **Docs + smoke tests** (README, docs/CLI.md, docs/CONFIG.md, SECURITY.md,
-      ARCHITECTURE; smoke: Claude default, Codex preflight-fails-clean, runtime
-      visible in config/banner, auto-switch mocked path).
+- [x] **Docs + smoke tests** (README, docs/CLI.md, docs/CONFIG.md, SECURITY.md,
+      ARCHITECTURE). All five surfaces now document the agent runtime: a new
+      `## Agent runtime (--agent)` section in CLI.md (flags table,
+      flag→env→config→default precedence, `--print-config`/banner/log/summary
+      visibility, provider-specific model env, honest "codex selectable but
+      adapter not yet shipped" status); CONFIG.md env-var rows for `OTTO_AGENT` /
+      `OTTO_FALLBACK_AGENT` / `OTTO_AUTO_SWITCH_ON_LIMIT` / `OTTO_CLAUDE_MODEL` /
+      `OTTO_CODEX_MODEL` + a runtime-aware preflight note (codex CLI/auth, probes
+      `codex --version`); README runtime flags/env + a `--print-config` example;
+      SECURITY.md per-runtime credential/sandbox note (claude `~/.claude` +
+      `--settings`; codex `~/.codex/auth.json`/`OPENAI_API_KEY` + its own
+      `--sandbox`); ARCHITECTURE.md `### Agent runtime abstraction` (the
+      `AgentRuntime` contract, `getAgentRuntime`, sole `claudeRuntime` adapter,
+      codex-not-implemented throw, provider-neutral switch in `loop.ts`).
+      Pinned by `scripts/agent-runtime-doc-contract.test.mjs` (drift-proof: parses
+      `AGENT_DISPLAY_NAMES`/`DEFAULT_AGENT` + flag names from source, asserts every
+      doc reflects them; the repo's established doc-contract pattern). **The four
+      P5 smoke scenarios are already covered by unit tests** — Claude default
+      config/banner + runtime-visible-in-config (`cli-help.test.ts`,
+      `loop.test.ts`), codex preflight-fails-clean (`preflight.test.ts` injected
+      probes), auto-switch mocked-limit path (`loop.test.ts`) — so no redundant new
+      smoke harness was added (YAGNI); the doc-contract test is the docs regression
+      guard. **The Codex adapter task above stays the only open P5/P3 item, BLOCKED
+      on a runnable codex binary (still ENOENT on this host).**

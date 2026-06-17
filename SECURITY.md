@@ -35,6 +35,18 @@ may act on. The trust boundary is:
   `~/.claude.json`, and `~/.config/gh` directly. An agent running with `bypassPermissions`
   can read and overwrite those files. Use a scoped, short-lived `gh` token for untrusted inputs.
 
+- **Per-runtime credentials and sandbox differ.** Otto is Claude-first by default, but the
+  agent runtime is selectable (`--agent` / `OTTO_AGENT`; see [docs/CLI.md](./docs/CLI.md#agent-runtime---agent)).
+  The default **Claude Code** runtime authenticates from `~/.claude` and is confined by the
+  `--settings` native OS sandbox under `OTTO_RUNNER=sandbox` (below). The **Codex CLI** runtime
+  authenticates from `~/.codex/auth.json` or the `OPENAI_API_KEY` environment variable, and does
+  **not** use Claude's `--settings` sandbox — it has its own `--sandbox <mode> --ask-for-approval never`
+  confinement, so the blast-radius controls are runtime-specific. Each runtime exposes only its
+  own provider's credentials to the agent; review the active runtime with `--print-config` before
+  a run. (The Codex execution adapter is not yet shipped — a real `--agent codex` run exits with a
+  "not implemented yet" message — but its credential/sandbox surface is documented here so the
+  threat model is complete when it lands.)
+
 ### Reducing blast radius
 
 - Use the default `OTTO_RUNNER=sandbox` (native OS sandbox confines writes to the workspace).

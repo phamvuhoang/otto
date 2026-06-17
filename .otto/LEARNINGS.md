@@ -2,6 +2,28 @@
 
 ## Conventions
 
+- **Agent-runtime docs span 5 surfaces, pinned by one doc-contract test, and
+  document Codex HONESTLY (issue #24 P5).** The runtime feature is documented in
+  README (flags/env lists + a `--print-config` example), `docs/CLI.md` (a
+  `## Agent runtime (--agent)` section — anchor `#agent-runtime---agent`, also in
+  the TOC), `docs/CONFIG.md` (env-var rows + a runtime-aware preflight note),
+  `SECURITY.md` (per-runtime credential/sandbox: claude `~/.claude`+`--settings`;
+  codex `~/.codex/auth.json`/`OPENAI_API_KEY`+its own `--sandbox`), and
+  `docs/ARCHITECTURE.md` (a `### Agent runtime abstraction` subsection). All five
+  are drift-proofed by `scripts/agent-runtime-doc-contract.test.mjs`, which
+  **parses `AGENT_DISPLAY_NAMES`/`DEFAULT_AGENT` + the flag names from source**
+  (not hardcoded) so adding a runtime id forces the docs to grow — same pattern as
+  `security-doc-contract`/`quality-report-samples`/`migration-doc-contract`. **The
+  framing decision to preserve:** Codex is documented as *selectable* (flag/env/
+  config), *preflighted*, *model-env-aware*, and *fallback-configurable*, but its
+  **execution adapter is explicitly "not yet shipped"** (a real `--agent codex`
+  run exits "not implemented yet") — do NOT let a future doc edit claim Codex
+  *runs* until the BLOCKED adapter lands. The test's "no doc claims Otto runs only
+  Claude" case guards the opposite drift. **The four P5 smoke scenarios needed no
+  new harness — they were already unit-tested** (`cli-help.test.ts`/`loop.test.ts`
+  for default config/banner + runtime visibility, `preflight.test.ts` for
+  codex-preflight-fails-clean, `loop.test.ts` for the auto-switch mocked-limit
+  path); the doc-contract test is the only net-new test (YAGNI on redundant smoke).
 - **Switch-on-limit is loop-orchestration, not a runner change (issue #24 P4).**
   `runLoop` gained `fallbackAgentId`/`fallbackAgentDisplayName`/`autoSwitchOnLimit`
   (from run-bin's resolved `fallback.*`, threaded through `runWatch` too). The

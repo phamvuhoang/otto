@@ -278,6 +278,25 @@ The reviewer reviews only the latest commit; emits `<review>OK</review>` / `<rev
 
 [`runner.ts`](../packages/core/src/runner.ts).
 
+### Agent runtime abstraction
+
+The runner does not hardcode `claude`. Everything provider-specific lives behind an `AgentRuntime` object:
+
+```ts
+type AgentRuntime = {
+  id: AgentRuntimeId; // "claude" | "codex"
+  displayName: string; // "Claude Code" | "Codex CLI"
+  command: string;
+  supportsSandboxSettings: boolean;
+  buildArgs(stage, promptRel, modelArgs, settings?): string[];
+  parseResultEvent(ev): StageResult; // stamps StageResult.runtimeId
+};
+```
+
+Runtime **selection** is pure config in [`agent-runtime.ts`](../packages/core/src/agent-runtime.ts) (`parseAgentId`, `resolveAgentRuntime` with precedence flag → env → config → default, `readAgentConfig`, `AGENT_DISPLAY_NAMES`, `DEFAULT_AGENT`, plus `resolveFallback`/`readFallbackConfig` for the fallback-on-limit config). The runner's `getAgentRuntime(id)` selects the **adapter**; `claudeRuntime` is the sole shipped adapter (it delegates `buildArgs`→`buildClaudeArgs` and `parseResultEvent`→`resultFromEvent`, so Claude behavior is byte-for-byte unchanged). `streamRuntime(runtime, …)` routes the spawn, stream parse, and final-result mapping through the adapter; `supportsSandboxSettings` gates whether the `--settings` sandbox file is written (Claude=`true`).
+
+`codex` is recognized for selection, model env, preflight, and fallback config, but `getAgentRuntime("codex")` throws a clean "not implemented" — the execution adapter is not yet shipped (its `codex exec --json` event schema is documented UNVERIFIED in [docs/spikes/codex-runtime-spike.md](spikes/codex-runtime-spike.md); a real `--agent codex` run is already blocked upstream in `run-bin`). Rate-limit auto-switch orchestration lives in [`loop.ts`](../packages/core/src/loop.ts) and is provider-neutral: it switches the mutable active runtime at the rate-limit boundary, persists it to `RunState.agent`, and restores it on resume.
+
 ### `claude` argv shape
 
 `runStage` writes the rendered prompt to `<workspace>/.otto-tmp/.run-<pid>-<iter>-<ts>.md`, then assembles:
@@ -404,7 +423,8 @@ Release/publishing (release-please → tag-driven npm workflows) is the single-s
 | `OTTO_RUNNER`            | `sandbox`        | `sandbox` — native OS sandbox (Seatbelt on macOS), writes confined to the workspace. `host` — unsandboxed.                                                                        |
 | `OTTO_SANDBOX_NET`       | — (unrestricted) | Comma-separated domain allowlist for sandbox network egress. Unset = unrestricted (filesystem is the blast-radius control).                                                       |
 | `OTTO_RESULT_GRACE_MS`   | `30000`          | Post-result kill timer; `0` disables. Invalid/negative → default.                                                                                                                 |
-| `OTTO_MODEL`             | — (CLI default)  | `--model <value>` pass-through to `claude` for every stage. Empty/whitespace = unset.                                                                                             |
+| `OTTO_AGENT`             | `claude`         | Agent CLI runtime (`claude` \| `codex`); selects the `AgentRuntime` adapter. Precedence `--agent` → env → `.otto/config.json` → default. See the runtime abstraction above.       |
+| `OTTO_MODEL`             | — (CLI default)  | `--model <value>` pass-through to the active runtime for every stage. Empty/whitespace = unset. `OTTO_CLAUDE_MODEL` / `OTTO_CODEX_MODEL` override it per runtime.                 |
 | `OTTO_MAX_WAIT`          | `6h`             | Maximum time to wait for a Claude rate-limit to clear before halting and saving resume state. Accepts bare seconds or duration strings (`90m`, `6h`). Equivalent to `--max-wait`. |
 | `OTTO_BRANCH`            | — (`current`)    | Branch isolation strategy: `current`, `branch`, or `worktree`. Overrides `.otto/config.json`; overridden by `--branch`.                                                           |
 | `OTTO_BRANCH_PREFIX`     | `otto/`          | Prefix for the generated branch/worktree name. Overrides `.otto/config.json`; overridden by `--branch-prefix`.                                                                    |

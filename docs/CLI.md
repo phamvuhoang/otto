@@ -3,6 +3,7 @@
 Commands, flags, and modes for the two Otto bins. For environment variables, runner/sandbox behavior, and branch strategy see **[CONFIG.md](./CONFIG.md)**.
 
 - [Choosing a mode](#choosing-a-mode)
+- [Agent runtime (`--agent`)](#agent-runtime---agent)
 - [`otto-afk` — plan/PRD loop](#otto-afk--planprd-loop)
 - [`otto-ghafk` — GitHub-issue loop](#otto-ghafk--github-issue-loop)
 - [`otto-linear-afk` — Linear-issue loop](#otto-linear-afk--linear-issue-loop)
@@ -35,6 +36,48 @@ Otto has one build loop with several entry points. They share the same resilienc
 | `otto-afk --apply-review <doc> <n>`  | An external code-review document + iteration count              | `apply-review-implementer` | Fix the actionable findings of an external review, one per iteration; deferred ones tracked in git.       |
 
 `--verify` and `--apply-review` are `otto-afk` modes that swap the gate stage; they are mutually exclusive with each other and with `--issue` / `--watch`. `--review-panel` is orthogonal — it upgrades the **reviewer** stage in any of the above (it reviews Otto's _own_ diff), not the gate. Full per-mode detail follows.
+
+---
+
+## Agent runtime (`--agent`)
+
+Every mode above runs against an **agent runtime** — the underlying agent CLI Otto drives. Otto is **Claude-first by default**; the runtime is provider-neutral so other CLIs can share the same loop, stages, templates, logs, budget, and watch behavior.
+
+| Flag                         | Default  | What it does                                                                                                                            |
+| ---------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `--agent <runtime>`          | `claude` | Select the agent CLI runtime: `claude` or `codex`. Also via `OTTO_AGENT` or `.otto/config.json` `"agent"`.                              |
+| `--fallback-agent <runtime>` | none     | Runtime to switch to when the active one hits a usage/rate limit: `claude` or `codex`. Also via `OTTO_FALLBACK_AGENT` / config.         |
+| `--auto-switch-on-limit`     | off      | Switch to `--fallback-agent` on a limit instead of waiting it out. Also via `OTTO_AUTO_SWITCH_ON_LIMIT=1` / config `autoSwitchOnLimit`. |
+
+**Selection precedence:** `--agent` flag → `OTTO_AGENT` env → `.otto/config.json` `"agent"` → default `claude`. A blank env/config value is skipped, not an error. An invalid value is **reported** by `--print-config` (exit 0) but **fatal** on a real run (exit 1) — so you always know the runtime before spending tokens.
+
+```bash
+# default — Claude Code
+otto-afk "./docs/plans/feature.md" 10
+
+# select a runtime for one run
+otto-afk --agent codex "./docs/plans/feature.md" 10
+
+# select via environment (applies to every bin)
+OTTO_AGENT=codex otto-ghafk 10
+
+# verify the active runtime BEFORE any paid invocation
+otto-afk --agent codex --print-config
+```
+
+`--print-config` shows the resolved `runtime` (`<id> (<display name>)`), its `runtime source` (default/flag/env/config), the runtime-aware `model` line, and the `fallback` setting. The run banner echoes it (`otto-afk 0.x (core 0.x) · runtime: Claude Code`), each stage banner appends it (`iteration 2/10 · implementer · Claude Code`), the per-stage NDJSON log path carries a `-<id>` suffix (`…-iter2-implementer-claude.ndjson`), and the final summary prints `runtime: <id>` — or `runtime: claude -> codex (switched once: rate limit)` after an auto-switch.
+
+**Runtime status today:** `claude` (Claude Code) is fully supported and the default. `codex` (Codex CLI) is recognized end-to-end for **selection, model env, preflight, and fallback config**, but its execution adapter is **not yet implemented** — a real `--agent codex` run exits with a clear "not implemented yet" message rather than silently falling back to Claude. Auto-switch orchestration is implemented and unit-tested; cross-provider switching to `codex` becomes live when the Codex adapter lands.
+
+### Provider-specific model (`OTTO_CLAUDE_MODEL` / `OTTO_CODEX_MODEL`)
+
+`OTTO_MODEL` pins the model for whichever runtime is active. To pin a different model per runtime when you switch between them, set the provider-specific override — it wins over `OTTO_MODEL` for that runtime only:
+
+```bash
+OTTO_CLAUDE_MODEL=<claude-model> OTTO_CODEX_MODEL=<codex-model> otto-afk --agent codex "<plan-and-prd>" 10
+```
+
+Precedence per runtime: `OTTO_<RUNTIME>_MODEL` → `OTTO_MODEL` → the CLI's own default (an empty/whitespace override falls through). `--print-config`'s `model` line shows the resolved value and which env var supplied it.
 
 ---
 

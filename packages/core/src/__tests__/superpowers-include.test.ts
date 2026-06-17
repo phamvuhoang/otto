@@ -27,3 +27,22 @@ describe("always-on superpowers fragment", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("task-grouped artifact layout (issue #21 P2)", () => {
+  // P2 item 1: per-task artifacts live together under .otto/tasks/<task-key>/.
+  // The layout is agent/template-driven (no otto code writes spec/plan), so it is
+  // pinned at the template-contract level: the workflow must WRITE the new
+  // task-grouped paths and still READ the legacy flat layout as a fallback so an
+  // in-flight task created before the change continues without re-brainstorming.
+  const body = readFileSync(tpl("superpowers.md"), "utf8");
+
+  it("writes spec and plan under the task-grouped directory", () => {
+    expect(body).toContain(".otto/tasks/<task-key>/spec.md");
+    expect(body).toContain(".otto/tasks/<task-key>/plan.md");
+  });
+
+  it("keeps reading the legacy flat layout as a fallback", () => {
+    expect(body).toContain(".otto/specs/<task-key>-design.md");
+    expect(body).toContain(".otto/plans/<task-key>.md");
+  });
+});

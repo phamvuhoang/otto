@@ -33,13 +33,27 @@ This run implements **only the first unchecked task**.
 
 ## P2 — Artifact + branch naming restructure
 
-- [ ] Write new artifacts under `.otto/tasks/<task-key>/` (spec/plan/reviews/
-      followups/quality-report/metadata) using `deriveTaskKey`.
+- [x] Write **spec + plan** under `.otto/tasks/<task-key>/` (spec.md, plan.md)
+      via `superpowers.md`, READING the legacy flat layout
+      (`.otto/specs/<task-key>-design.md`, `.otto/plans/<task-key>.md`) as a
+      fallback in the CLARITY GATE so in-flight tasks don't re-brainstorm.
+      Template-driven (no otto code writes spec/plan); pinned by
+      `superpowers-include.test.ts` (new write paths + legacy fallback). NOT
+      migrating existing files: the currently-installed otto still reads the flat
+      layout, so a move would break it — the legacy-read fallback handles
+      migration on the next release instead. → verify: `pnpm -r typecheck && pnpm
+      -r test && pnpm test`
+- [ ] Adopt `.otto/tasks/<task-key>/` for the remaining artifacts
+      (reviews/followups/quality-report/metadata). Needs the followups
+      design call (the issue wants per-item task-local source but still globally
+      summarizable) + a task-key source for `apply-review.md`, so it is its own
+      task rather than folded into the spec/plan slice above.
 - [ ] `--branch-convention` / `OTTO_BRANCH_CONVENTION` / `.otto/config.json`:
       branch = `<convention>/<task-key>`, default `otto`, validated + trailing-
       slash normalized; route through `resolveBranch`.
-- [ ] Read legacy flat paths (`.otto/specs/…`, `.otto/plans/…`,
-      `.otto/review-followups.md`) as fallback for one release.
+- [ ] Read legacy flat paths for the **remaining** artifacts
+      (`.otto/review-followups.md`, `.otto/reviews/…`) as fallback for one
+      release. (Spec/plan legacy-read already shipped with the first item.)
 
 ## P3 — Multi-target watch filters
 

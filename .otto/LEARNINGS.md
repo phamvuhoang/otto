@@ -2,6 +2,23 @@
 
 ## Conventions
 
+- **Task-grouped artifact layout (`.otto/tasks/<task-key>/`, issue #21 P2)** is
+  template-driven, NOT code: no otto src writes spec/plan — the `superpowers.md`
+  workflow prose tells the agent where to put them, so the layout change is a
+  template edit pinned at the render-contract level (`superpowers-include.test.ts`:
+  new WRITE paths `.otto/tasks/<task-key>/{spec,plan}.md` present AND the legacy
+  flat paths still present as the CLARITY GATE READ fallback). Two non-obvious
+  rules: (1) **WRITE new, READ legacy-as-fallback** — the gate checks
+  `.otto/tasks/<task-key>/spec.md` first, then `.otto/specs/<task-key>-design.md`,
+  so an in-flight roadmap created under the old layout keeps going without
+  re-brainstorming. (2) **Do NOT migrate existing `.otto/specs|plans/*` files**
+  when changing the template: template edits only affect FUTURE otto versions, but
+  the currently-installed otto driving the live run still reads the flat layout —
+  moving the files would break the running daemon mid-roadmap. The legacy-read
+  fallback does the migration safely on the next release instead. Scope was the
+  **spec/plan** slice only; reviews/followups/quality-report/metadata are a
+  separate task (followups need a per-item-task-local-but-globally-summarizable
+  design call + a task-key source for `apply-review.md`, which has none today).
 - **Linear project scope (`OTTO_LINEAR_PROJECT` / `otto-linear --project`, issue
   #21 P1)** mirrors the team filter, NOT the GitHub `--repo` shape: a project name
   is human-friendly free text (`"Roadmap Q3"`) that only ever reaches Linear's

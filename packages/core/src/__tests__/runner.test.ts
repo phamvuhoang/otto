@@ -7,6 +7,7 @@ import {
   getAgentRuntime,
   parseGraceMs,
   resolveModelArgs,
+  resolveModelSelection,
   resolveRunner,
   resolveSandboxNet,
   resultFromEvent,
@@ -91,6 +92,61 @@ describe("resolveModelArgs", () => {
 
   it("trims surrounding whitespace", () => {
     expect(resolveModelArgs("  opus  ")).toEqual(["--model", "opus"]);
+  });
+});
+
+describe("resolveModelSelection", () => {
+  it("returns undefined when neither generic nor provider-specific is set", () => {
+    expect(resolveModelSelection("claude", {})).toBeUndefined();
+  });
+
+  it("falls back to OTTO_MODEL when no provider-specific override is set", () => {
+    expect(resolveModelSelection("claude", { OTTO_MODEL: "opus" })).toEqual({
+      spec: "opus",
+      source: "OTTO_MODEL",
+    });
+  });
+
+  it("prefers OTTO_CLAUDE_MODEL over OTTO_MODEL for the claude runtime", () => {
+    expect(
+      resolveModelSelection("claude", {
+        OTTO_MODEL: "opus",
+        OTTO_CLAUDE_MODEL: "sonnet",
+      })
+    ).toEqual({ spec: "sonnet", source: "OTTO_CLAUDE_MODEL" });
+  });
+
+  it("prefers OTTO_CODEX_MODEL over OTTO_MODEL for the codex runtime", () => {
+    expect(
+      resolveModelSelection("codex", {
+        OTTO_MODEL: "opus",
+        OTTO_CODEX_MODEL: "gpt-5",
+      })
+    ).toEqual({ spec: "gpt-5", source: "OTTO_CODEX_MODEL" });
+  });
+
+  it("does not let one runtime's override leak into another", () => {
+    expect(
+      resolveModelSelection("codex", {
+        OTTO_MODEL: "opus",
+        OTTO_CLAUDE_MODEL: "sonnet",
+      })
+    ).toEqual({ spec: "opus", source: "OTTO_MODEL" });
+  });
+
+  it("ignores an empty/whitespace provider-specific override and falls back", () => {
+    expect(
+      resolveModelSelection("codex", {
+        OTTO_MODEL: "opus",
+        OTTO_CODEX_MODEL: "   ",
+      })
+    ).toEqual({ spec: "opus", source: "OTTO_MODEL" });
+  });
+
+  it("trims the resolved spec", () => {
+    expect(
+      resolveModelSelection("codex", { OTTO_CODEX_MODEL: "  gpt-5  " })
+    ).toEqual({ spec: "gpt-5", source: "OTTO_CODEX_MODEL" });
   });
 });
 

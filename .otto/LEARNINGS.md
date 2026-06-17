@@ -2,6 +2,23 @@
 
 ## Conventions
 
+- **Provider-specific model env is runtime-aware via `resolveModelSelection`
+  (issue #24 P3).** `runner.ts`'s `resolveModelSelection(runtimeId, env)` picks
+  `OTTO_<RUNTIME>_MODEL` (e.g. `OTTO_CLAUDE_MODEL` / `OTTO_CODEX_MODEL`) over the
+  provider-neutral `OTTO_MODEL`; an empty/whitespace override falls THROUGH to
+  the generic value (so an unset-but-present var doesn't suppress `OTTO_MODEL`).
+  It returns `{spec, source}` — `source` is the literal env var name, used by
+  `--print-config`'s model line (`<value> (<source>)`, else
+  `<runtime> CLI default (OTTO_<RUNTIME>_MODEL / OTTO_MODEL unset)`). `runStage`
+  feeds `resolveModelSelection(runtime.id)?.spec` into the EXISTING
+  `resolveModelArgs` (kept as the single `--model` arg builder; not duplicated),
+  so the per-runtime override reaches the spawned CLI — `runStage`'s old
+  `resolveModelArgs(process.env.OTTO_MODEL)` call is the only wiring that
+  changed. `cli-help.ts` imports `resolveModelSelection` from `runner.js` (no
+  cycle: runner doesn't import cli-help). Pinned by `runner.test.ts`
+  (precedence/leak/empty/trim) + `cli-help.test.ts` (print-config model line).
+  Comprehensive README/CLI.md/CONFIG.md docs deferred to P5 (help text +
+  print-config touched here, mirroring the scope-flag commits).
 - **Runtime-aware preflight: `runPreflight(opts.agentId)` shows the SELECTED
   runtime's CLI/auth rows, not both (issue #24 P3).** `runPreflight` takes an
   optional `agentId`; default/`claude` → `claude CLI`+`claude auth` rows

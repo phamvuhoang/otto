@@ -171,6 +171,44 @@ describe("printConfig runtime", () => {
     expect(out).toMatch(/runtime\s+invalid/);
   });
 
+  it("shows a runtime-aware model line using the provider-specific override", () => {
+    const prev = {
+      OTTO_MODEL: process.env.OTTO_MODEL,
+      OTTO_CODEX_MODEL: process.env.OTTO_CODEX_MODEL,
+    };
+    process.env.OTTO_MODEL = "opus";
+    process.env.OTTO_CODEX_MODEL = "gpt-5";
+    try {
+      const out = configOutput({ agentId: "codex", agentDisplayName: "Codex CLI" });
+      expect(out).toMatch(/model\s+gpt-5 \(OTTO_CODEX_MODEL\)/);
+    } finally {
+      if (prev.OTTO_MODEL == null) delete process.env.OTTO_MODEL;
+      else process.env.OTTO_MODEL = prev.OTTO_MODEL;
+      if (prev.OTTO_CODEX_MODEL == null) delete process.env.OTTO_CODEX_MODEL;
+      else process.env.OTTO_CODEX_MODEL = prev.OTTO_CODEX_MODEL;
+    }
+  });
+
+  it("names the active runtime in the model-default line when no model env is set", () => {
+    const prev = {
+      OTTO_MODEL: process.env.OTTO_MODEL,
+      OTTO_CODEX_MODEL: process.env.OTTO_CODEX_MODEL,
+      OTTO_CLAUDE_MODEL: process.env.OTTO_CLAUDE_MODEL,
+    };
+    delete process.env.OTTO_MODEL;
+    delete process.env.OTTO_CODEX_MODEL;
+    delete process.env.OTTO_CLAUDE_MODEL;
+    try {
+      const out = configOutput({ agentId: "codex", agentDisplayName: "Codex CLI" });
+      expect(out).toMatch(/model\s+codex CLI default \(OTTO_CODEX_MODEL \/ OTTO_MODEL unset\)/);
+    } finally {
+      for (const [k, v] of Object.entries(prev)) {
+        if (v == null) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+
   it("shows codex preflight rows (not claude) when codex is the active runtime", () => {
     // Host-independent: the preflight row LABELS track the selected runtime even
     // though ok/detail depend on the host (issue #24 P3).

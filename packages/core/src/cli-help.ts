@@ -8,6 +8,7 @@ import {
   type AgentSelectionSource,
 } from "./agent-runtime.js";
 import { runPreflight } from "./preflight.js";
+import { resolveModelSelection } from "./runner.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { parseTokenMode, type TokenMode } from "./tokens.js";
 
@@ -464,8 +465,11 @@ Environment variables:
                     (bare while-loop — only safe in a throwaway tree).
   OTTO_SANDBOX_NET comma-separated domain allowlist for sandbox network egress.
                     Unset = unrestricted (filesystem is the blast-radius control).
-  OTTO_MODEL       pin the claude model ("--model <value>" pass-through). Unset =
-                    claude CLI default. The claude CLI validates the value.
+  OTTO_MODEL       pin the model for the active runtime ("--model <value>"
+                    pass-through). Unset = the runtime CLI's default; the CLI
+                    validates the value.
+  OTTO_CLAUDE_MODEL / OTTO_CODEX_MODEL  provider-specific model override applied
+                    only when that runtime is active; wins over OTTO_MODEL.
   OTTO_RESULT_GRACE_MS  post-result grace timer ms (default 30000; 0 disables).
   OTTO_TOKEN_MODE   default token accounting mode: off | measure | reduce.
   OTTO_AGENT        default agent CLI runtime: claude | codex; same as --agent (default: claude).
@@ -575,11 +579,10 @@ export function printConfig(
   const detachStatus =
     detach && detachLogPath ? `on (log: ${detachLogPath})` : "off";
   const notifyStatus = notify ? "on" : "off";
-  const rawModel = process.env.OTTO_MODEL;
-  const modelStatus =
-    rawModel && rawModel.trim() !== ""
-      ? `${rawModel.trim()} (OTTO_MODEL)`
-      : "claude CLI default (OTTO_MODEL unset)";
+  const modelSel = resolveModelSelection(agentId);
+  const modelStatus = modelSel
+    ? `${modelSel.spec} (${modelSel.source})`
+    : `${agentId} CLI default (OTTO_${agentId.toUpperCase()}_MODEL / OTTO_MODEL unset)`;
 
   const runtimeStatus = agentError
     ? `invalid (${agentError})`

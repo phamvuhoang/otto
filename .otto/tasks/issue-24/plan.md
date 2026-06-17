@@ -60,9 +60,16 @@ task. Implement the first unchecked task per run.
       parsing into the runner hot path violates the P0 "stays generic until the
       spike reveals the shape" call — do it on a host where `codex exec --json`
       actually runs and the fixtures can be diffed against a live stream.
-- [ ] **Provider-specific model/env handling** (`OTTO_CLAUDE_MODEL` /
+- [x] **Provider-specific model/env handling** (`OTTO_CLAUDE_MODEL` /
       `OTTO_CODEX_MODEL`, applied to the selected runtime; `OTTO_MODEL` precedence
-      documented).
+      documented). `resolveModelSelection(runtimeId, env)` in `runner.ts` picks
+      `OTTO_<RUNTIME>_MODEL` over `OTTO_MODEL` (empty/whitespace override falls
+      through), returns `{spec, source}`; `runStage` feeds its `.spec` into the
+      existing `resolveModelArgs`, so the per-runtime override reaches the spawned
+      CLI. `--print-config`'s model line is runtime-aware (value + source env var,
+      or `<runtime> CLI default (OTTO_<RUNTIME>_MODEL / OTTO_MODEL unset)`). Help
+      text documents precedence. Pinned by `runner.test.ts` + `cli-help.test.ts`.
+      (The Codex adapter above stays blocked — this task is independent of it.)
 
 ## P4 — auto-switch on limits
 

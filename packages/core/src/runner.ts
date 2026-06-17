@@ -96,6 +96,27 @@ export function resolveModelArgs(raw: string | undefined): string[] {
   return ["--model", trimmed];
 }
 
+/**
+ * Resolve the model spec for the active runtime (issue #24 P3). A
+ * provider-specific override (`OTTO_CLAUDE_MODEL` / `OTTO_CODEX_MODEL`) wins
+ * over the provider-neutral `OTTO_MODEL`, so a user who keeps both runtimes
+ * configured can pin a model per runtime. Returns the resolved spec plus the
+ * env var it came from (for `--print-config`), or `undefined` when nothing is
+ * set (the runtime's CLI default applies). Empty/whitespace overrides are
+ * ignored so they fall through to the generic value.
+ */
+export function resolveModelSelection(
+  runtimeId: AgentRuntimeId,
+  env: NodeJS.ProcessEnv = process.env
+): { spec: string; source: string } | undefined {
+  const specificVar = `OTTO_${runtimeId.toUpperCase()}_MODEL`;
+  const specific = env[specificVar]?.trim();
+  if (specific) return { spec: specific, source: specificVar };
+  const generic = env.OTTO_MODEL?.trim();
+  if (generic) return { spec: generic, source: "OTTO_MODEL" };
+  return undefined;
+}
+
 export type Runner = "sandbox" | "host";
 
 /** `OTTO_RUNNER=host` → bare host run; anything else (incl. unset) → sandbox. */
@@ -300,7 +321,7 @@ export async function runStage(
     const argv = runtime.buildArgs(
       stage,
       promptRelPath,
-      resolveModelArgs(process.env.OTTO_MODEL),
+      resolveModelArgs(resolveModelSelection(runtime.id)?.spec),
       settingsHostPath
     );
     return await streamRuntime(argv, workspaceDir, logPath, runtime, options);

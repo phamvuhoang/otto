@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.4.1...otto-core-v0.5.0) (2026-06-17)
+
+
+### Features
+
+* **verify:** standardize the Otto quality report contract (issue [#19](https://github.com/phamvuhoang/otto/issues/19)) ([#20](https://github.com/phamvuhoang/otto/issues/20)) ([e521d27](https://github.com/phamvuhoang/otto/commit/e521d279e63ab1030237440df9d6f1091e8b1710))
+
 ## [0.4.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.4.0...otto-core-v0.4.1) (2026-06-16)
 
 

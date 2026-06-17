@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.6.0...otto-core-v0.7.0) (2026-06-17)
+
+
+### Features
+
+* **tokens:** add --token-mode (off|measure|reduce) for token visibility & conservative reduction ([#26](https://github.com/phamvuhoang/otto/issues/26)) ([f7403a3](https://github.com/phamvuhoang/otto/commit/f7403a336a3bc0578c322f15e6b89d80510323a4))
+
 ## [0.6.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.5.0...otto-core-v0.6.0) (2026-06-17)
 
 

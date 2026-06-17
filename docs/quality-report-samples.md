@@ -149,7 +149,7 @@ A run that triaged an external code-review document, fixing CONFIRMED findings o
 ## Gaps And Follow-Ups
 
 - Gap: none in the fixed paths.
-- Deferred: finding #4 ("consider backpressure on the NDJSON stream") — appended to `.otto/review-followups.md`; needs a design decision, out of scope for a one-line fix.
+- Deferred: finding #4 ("consider backpressure on the NDJSON stream") — appended to the task-local `.otto/tasks/streaming-review/followups.md` (globally summarizable via `.otto/tasks/*/followups.md`); needs a design decision, out of scope for a one-line fix.
 - Recommended next action: two findings were REJECTED (cosmetic naming, false-positive race) with rationale in `verdicts.md`; a maintainer should confirm the rejections before closing the review.
 ````
 

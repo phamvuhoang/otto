@@ -103,5 +103,16 @@ This run implements **only the first unchecked task**.
 
 ## P4 — Migration + docs
 
-- [ ] Document old→new path mapping; optional migration command/steps; update
-      README, CLI docs, architecture docs, quality-report samples.
+- [x] Document old→new path mapping; optional migration command/steps; update
+      README, CLI docs, architecture docs, quality-report samples. Shipped
+      `docs/MIGRATION.md` (task-grouped layout, old→new mapping table,
+      legacy-read compat guarantee, **documented manual migration** — no CLI
+      command, YAGNI since legacy-read covers a release, branch-convention
+      namespace, "everything Otto knows" task-dir answer), drift-pinned by
+      `scripts/migration-doc-contract.test.mjs` (new paths anchored to the live
+      `superpowers.md`/`apply-review.md` templates). Documented
+      `--branch-convention`/`OTTO_BRANCH_CONVENTION` in CONFIG.md; added
+      MIGRATION.md to the README doc index; updated the apply-review follow-up
+      path in README/CLI.md/ARCHITECTURE.md/quality-report-samples.md to the
+      task-local `.otto/tasks/<task-key>/followups.md`. → verify: `pnpm -r
+      typecheck && pnpm -r test && pnpm test`

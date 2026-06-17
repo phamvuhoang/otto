@@ -67,7 +67,7 @@ More than a `while`-loop around `claude`:
 Beyond the build loop, two read/repair modes reuse all of the above:
 
 - 🔍 **`--verify`** — a read-only pass that reconciles a plan against git, runs the suites, and writes a DONE/GAP/DEFERRED report. Changes nothing.
-- 🩹 **`--apply-review <doc>`** — consumes an external code-review document and fixes its actionable findings one per iteration, tracking deferred ones in `.otto/review-followups.md`.
+- 🩹 **`--apply-review <doc>`** — consumes an external code-review document and fixes its actionable findings one per iteration, tracking deferred ones in the task-local `.otto/tasks/<task-key>/followups.md`.
 
 ---
 
@@ -161,6 +161,7 @@ Requires **Node 20+**, an authenticated **Claude Code** (`claude /login`), and �
 | **[docs/CLI.md](./docs/CLI.md)**                   | Every command, flag, and mode — start at [Choosing a mode](./docs/CLI.md#choosing-a-mode) (afk vs ghafk vs verify vs apply-review). |
 | **[docs/CONFIG.md](./docs/CONFIG.md)**             | Environment variables, runner/sandbox, branch strategy, setup.                                                                      |
 | **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** | Runtime internals and data flow for library extenders.                                                                              |
+| **[docs/MIGRATION.md](./docs/MIGRATION.md)**       | Task-grouped `.otto/tasks/<task-key>/` layout, old→new path mapping, branch-convention namespace, and how to migrate an existing repo. |
 | **[docs/quality-report-samples.md](./docs/quality-report-samples.md)** | Filled-in sample quality reports — what good verification output looks like per run mode.                       |
 | **[SECURITY.md](./SECURITY.md)**                   | Threat model and the `bypassPermissions` blast-radius story.                                                                        |
 | **[CONTRIBUTING.md](./CONTRIBUTING.md)**           | Dev loop, tests, adding a stage, release pipeline.                                                                                  |

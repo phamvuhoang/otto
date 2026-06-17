@@ -17,6 +17,11 @@ import {
 import { detachAndExit } from "./detach.js";
 import { runLoop } from "./loop.js";
 import type { Stage } from "./stages.js";
+import {
+  parseGithubRepo,
+  describeScope,
+  type WorkScope,
+} from "./task-key.js";
 import type { PollResult, WatchProvider } from "./watch.js";
 
 export type RunBinConfig = {
@@ -50,6 +55,16 @@ export type RunBinConfig = {
    * the same labelled set its implementer selects.
    */
   resolveWatchLabel?: () => string;
+  /**
+   * Whether this bin accepts `--repo owner/name` / `OTTO_GITHUB_REPO` to confine
+   * the run to a single GitHub repo. Only otto-ghafk sets this.
+   */
+  supportsRepoScope?: boolean;
+  /**
+   * Whether this bin accepts `--project "Name"` / `OTTO_LINEAR_PROJECT` to
+   * narrow the run to a single Linear project. Only otto-linear-afk sets this.
+   */
+  supportsProjectScope?: boolean;
   /** Alternate gate stage used when --issue is set. Only otto-ghafk sets this. */
   issueStage?: Stage;
   /** Single read-only gate stage used when --verify is set. Only otto-afk sets this. */
@@ -127,6 +142,9 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   const branchPrefixArg =
     flags.branchPrefix ??
     (process.env.OTTO_BRANCH_PREFIX?.trim() || undefined);
+  const branchConventionArg =
+    flags.branchConvention ??
+    (process.env.OTTO_BRANCH_CONVENTION?.trim() || undefined);
 
   const detachLogPath = flags.detach
     ? (flags.log ??
@@ -162,6 +180,100 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     process.env.OTTO_WATCH_LABEL?.trim() ||
     "otto";
 
+  // Resolve the GitHub single-target scope (--repo / OTTO_GITHUB_REPO) up front
+  // so --print-config can report it before any run starts. Validated into a
+  // WorkScope; the canonical owner/repo is exported as OTTO_GITHUB_REPO so the
+  // ghafk templates confine their `gh` commands (list/view) to it, and passed
+  // to runWatch so the poller never sees another repo's issues. parseGithubRepo
+  // admits only shell-safe chars, keeping OTTO_GITHUB_REPO safe to interpolate.
+  let scope: WorkScope | undefined;
+  // Multi-target watch: several validated GitHub scopes the daemon rotates
+  // through (repeated --repo / OTTO_GITHUB_REPOS). Undefined for the single
+  // target path, which keeps using `scope` + the OTTO_GITHUB_REPO env export.
+  let scopes: WorkScope[] | undefined;
+  let scopeError: string | undefined;
+  if (cfg.supportsRepoScope) {
+    // Repeated --repo wins; else the comma-list OTTO_GITHUB_REPOS; else the
+    // single OTTO_GITHUB_REPO. All go through parseGithubRepo (shell-safe).
+    const rawRepos =
+      flags.repos.length > 0
+        ? flags.repos
+        : (process.env.OTTO_GITHUB_REPOS?.split(",")
+            .map((s) => s.trim())
+            .filter(Boolean) ?? []);
+    const raw =
+      rawRepos.length > 0
+        ? rawRepos
+        : process.env.OTTO_GITHUB_REPO?.trim()
+          ? [process.env.OTTO_GITHUB_REPO.trim()]
+          : [];
+    try {
+      const parsed = raw.map((r) => {
+        const { owner, repo } = parseGithubRepo(r);
+        return { provider: "github" as const, owner, repo };
+      });
+      if (parsed.length === 1) {
+        scope = parsed[0];
+        // Export the canonical owner/repo so the ghafk templates confine their
+        // `gh` commands to it (single-target). Multi-target pins it per-cycle
+        // inside runWatch instead, so we don't set a single value here.
+        process.env.OTTO_GITHUB_REPO = `${parsed[0].owner}/${parsed[0].repo}`;
+      } else if (parsed.length > 1) {
+        scopes = parsed;
+      }
+    } catch (err) {
+      scopeError = (err as Error).message;
+    }
+  }
+  // Resolve the Linear single-target scope (--project / OTTO_LINEAR_PROJECT)
+  // alongside the team filter (OTTO_LINEAR_TEAM). Unlike --repo, a project name
+  // is free text that only reaches Linear's GraphQL filter (never a host shell),
+  // so it needs no charset validation. The resolved project is re-exported as
+  // OTTO_LINEAR_PROJECT so the `otto-linear list/dump` template commands and the
+  // watch poller (which read it from the inherited env, like team) honor the
+  // flag, not just the env var. Scope is reported even with only a team set.
+  if (cfg.supportsProjectScope) {
+    const team = process.env.OTTO_LINEAR_TEAM?.trim() || undefined;
+    // Repeated --project wins; else the comma-list OTTO_LINEAR_PROJECTS; else the
+    // single OTTO_LINEAR_PROJECT. No charset validation — a project name only
+    // ever reaches Linear's GraphQL filter, never a host shell.
+    const rawProjects =
+      flags.projects.length > 0
+        ? flags.projects
+        : (process.env.OTTO_LINEAR_PROJECTS?.split(",")
+            .map((s) => s.trim())
+            .filter(Boolean) ?? []);
+    const projects =
+      rawProjects.length > 0
+        ? rawProjects
+        : process.env.OTTO_LINEAR_PROJECT?.trim()
+          ? [process.env.OTTO_LINEAR_PROJECT.trim()]
+          : [];
+    if (projects.length > 1) {
+      // Multi-target: each project pairs with the same team. The daemon pins
+      // OTTO_LINEAR_PROJECT per-cycle (in runWatch), so no single value here.
+      scopes = projects.map((project) => ({
+        provider: "linear" as const,
+        team,
+        project,
+      }));
+    } else {
+      const project = projects[0];
+      // Export the resolved project so the `otto-linear list/dump` template
+      // commands and the watch poller (which read it from the inherited env)
+      // honor the flag, not just the env var.
+      if (project) process.env.OTTO_LINEAR_PROJECT = project;
+      if (team || project) scope = { provider: "linear", team, project };
+    }
+  }
+  const watchScope = scopeError
+    ? `invalid (${scopeError})`
+    : scopes
+      ? scopes.map(describeScope).join(", ")
+      : scope
+        ? describeScope(scope)
+        : undefined;
+
   if (flags.printConfig) {
     printConfig(cfg.bin, workspaceDir, packageDir, {
       cliVersion: cfg.cliVersion,
@@ -177,16 +289,33 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       watch: flags.watch,
       watchIntervalSec: flags.watchIntervalSec,
       watchLabel,
+      watchScope,
       issue: flags.issue,
       maxWaitMs,
       branchStrategy: branchStrategyArg,
       branchPrefix: branchPrefixArg,
+      branchConvention: branchConventionArg,
     });
     return;
   }
 
   if (flags.issue != null && !cfg.issueStage) {
     console.error("--issue is only supported by otto-ghafk and otto-linear-afk");
+    process.exit(1);
+  }
+
+  if (flags.repo != null && !cfg.supportsRepoScope) {
+    console.error("--repo is only supported by otto-ghafk");
+    process.exit(1);
+  }
+  if (flags.project != null && !cfg.supportsProjectScope) {
+    console.error("--project is only supported by otto-linear-afk");
+    process.exit(1);
+  }
+  // A malformed --repo / OTTO_GITHUB_REPO is fatal for a real run (it would
+  // silently fall back to the workspace repo); --print-config only reports it.
+  if (scopeError) {
+    console.error(scopeError);
     process.exit(1);
   }
 
@@ -279,6 +408,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     isTTY: Boolean(process.stdout.isTTY),
     flagStrategy: branchStrategyArg,
     flagPrefix: branchPrefixArg,
+    flagConvention: branchConventionArg,
   });
   process.stderr.write(`${resolved.summaryLine}\n`);
   // Evaluate the dirty-tree warning against the user's tree BEFORE we mutate the
@@ -319,6 +449,8 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       cliVersion: cfg.cliVersion,
       pollIssues: cfg.watchPoll,
       provider: cfg.watchProvider,
+      scope,
+      scopes,
     });
     return;
   }

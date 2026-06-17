@@ -2,6 +2,185 @@
 
 ## Conventions
 
+- **Branch convention vs. branch prefix (`--branch-convention`, issue #21 P2)** —
+  there are now TWO branch-namespace flags and the newer one is canonical. The
+  pre-existing `--branch-prefix`/`OTTO_BRANCH_PREFIX`/`config.branchPrefix` is a
+  **raw** string concatenated to the slug (no validation, no separator — `feat`
+  → `featslug`). `--branch-convention`/`OTTO_BRANCH_CONVENTION`/
+  `config.branchConvention` is the **validated, slash-normalized** namespace via
+  `normalizeBranchConvention(raw)` in `branch.ts` (trim → strip trailing `/+` →
+  reject non-git-ref-safe segments: whitespace, `..`, leading `-`/`.`, empty
+  interior segment, `.lock` suffix, ref metacharacters → return `<conv>/`). So
+  `feat` and `feat/` both yield `feat/`. They coexist (prefix kept for
+  back-compat); `resolveBranch` precedence is **flagConvention → flagPrefix →
+  config.branchConvention → config.branchPrefix → otto/** (flags beat config,
+  convention beats prefix at each level). Default `otto` normalizes to the same
+  `otto/` the old `DEFAULT_PREFIX` used, so behavior is unchanged when neither is
+  set. `--print-config` shows `branch <strategy> (convention "<c>")` when a
+  convention is set, else the prefix form. **Still deferred:** the branch SLUG is
+  still `slugify(inputs)`, NOT `deriveTaskKey` — wiring the full
+  `<convention>/<task-key>` needs the P2/P4 legacy-path fallback (same reason P0
+  left the key helper inert), so the convention namespace shipped without the
+  task-key swap. Validation is a pure regex (not a `git check-ref-format` spawn in
+  the hot path), but the resolveBranch tests prove safety by actually creating the
+  branch via `git switch -c`. Pinned by `branch.test.ts`
+  (`normalizeBranchConvention` + `resolveBranch` convention cases) and
+  `cli-help.test.ts` (parseFlags + print-config). Design-ordering call: this
+  shipped before the still-unchecked "remaining artifacts" P2 item because that
+  item is design-blocked (followups) and this one is not.
+- **Task-local follow-ups (`.otto/tasks/<task-key>/followups.md`, issue #21 P2)** —
+  the apply-review follow-up trail moved from the flat global
+  `.otto/review-followups.md` to the task-grouped layout, beside spec/plan.
+  Template-driven (`apply-review.md`), no otto code. The "no task-key source for
+  apply-review" blocker that deferred this 3× is resolved by **deriving the key from
+  the current git branch's final path segment** (`git branch --show-current` →
+  part after the last `/`): apply-review always runs on the task branch
+  `<convention>/<slug>`, so the branch IS the task-key source — resolved by the
+  agent in prose (NO shell tag, so Windows-safe; mirrors how `superpowers.md`
+  resolves its key). "Globally summarizable" (the issue's other requirement) is met
+  by the globbable `.otto/tasks/*/followups.md` path, not by re-aggregating into one
+  file. WRITE new task-local; the legacy global is still READ-as-fallback for one
+  release (new writes never go there). **Scope call: only follow-ups moved**, because
+  it is the ONLY one of the four named "remaining artifacts" actually persisted as a
+  flat `.otto/` file today — `reviews/` go to a temp `FINDINGS_DIR` (panel), the
+  quality-report is emitted to the PR/issue-comment by the contract (not a file), and
+  `metadata.json` has no producer/consumer (speculative → YAGNI, dropped). Pinned by
+  `apply-review.test.ts` ("records follow-ups under the task dir": branch-derived key,
+  task-local write path, the `*` glob, legacy-read fallback). The remaining P2 items
+  on the plan are now closed by this slice; only P4 (docs/migration) is left open.
+- **Task-grouped artifact layout (`.otto/tasks/<task-key>/`, issue #21 P2)** is
+  template-driven, NOT code: no otto src writes spec/plan — the `superpowers.md`
+  workflow prose tells the agent where to put them, so the layout change is a
+  template edit pinned at the render-contract level (`superpowers-include.test.ts`:
+  new WRITE paths `.otto/tasks/<task-key>/{spec,plan}.md` present AND the legacy
+  flat paths still present as the CLARITY GATE READ fallback). Two non-obvious
+  rules: (1) **WRITE new, READ legacy-as-fallback** — the gate checks
+  `.otto/tasks/<task-key>/spec.md` first, then `.otto/specs/<task-key>-design.md`,
+  so an in-flight roadmap created under the old layout keeps going without
+  re-brainstorming. (2) **Do NOT migrate existing `.otto/specs|plans/*` files**
+  when changing the template: template edits only affect FUTURE otto versions, but
+  the currently-installed otto driving the live run still reads the flat layout —
+  moving the files would break the running daemon mid-roadmap. The legacy-read
+  fallback does the migration safely on the next release instead. Scope was the
+  **spec/plan** slice only; reviews/followups/quality-report/metadata are a
+  separate task (followups need a per-item-task-local-but-globally-summarizable
+  design call + a task-key source for `apply-review.md`, which has none today).
+- **Linear project scope (`OTTO_LINEAR_PROJECT` / `otto-linear --project`, issue
+  #21 P1)** mirrors the team filter, NOT the GitHub `--repo` shape: a project name
+  is human-friendly free text (`"Roadmap Q3"`) that only ever reaches Linear's
+  GraphQL `IssueFilter` (`project: { name: { eq } }` in `listIssues`), never a host
+  shell — so it needs **no `parseGithubRepo`-style charset validation and no
+  template interpolation**. Like team, the linear templates DON'T pass `--project`
+  in the command body; `otto-linear list/dump` read `OTTO_LINEAR_PROJECT` from the
+  inherited env inside `listOptions`, and `runLinearAfk`'s `watchPoll` reads the
+  same env into `pollLinearIssues` (`LinearPollDeps.project`). Project names aren't
+  unique across teams (issue risk note), so a project filter is meant to be paired
+  with `OTTO_LINEAR_TEAM`; we still match on name to keep CLI input friendly.
+  Pinned by `linear-api.test.ts` (filter present/absent), `linear-cli.test.ts`
+  (flag + env defaulting), `watch.test.ts` (poll forwards project). The
+  `otto-linear-afk --project` flag + `--print-config` scope display is the
+  run-bin/`supportsProjectScope` half (mirrors `supportsRepoScope`, set on
+  linear-main only): `parseFlags` captures raw `flags.project` (free text — NO
+  charset validation / no `scopeError` path, unlike `--repo`, because it only
+  reaches Linear's GraphQL filter, never a host shell); run-bin resolves
+  `flags.project ?? OTTO_LINEAR_PROJECT` **plus** `OTTO_LINEAR_TEAM` into a linear
+  `WorkScope`, **re-exports `process.env.OTTO_LINEAR_PROJECT`** so the flag (not
+  just the env var) reaches the `otto-linear list/dump` templates and the watch
+  poller, and threads `scope` into `runWatch`/`describeScope`. Build the scope
+  when **team OR project** is set (a team-only scope is still reported), so
+  `--print-config` shows `linear team:ENG project:Roadmap Q3`. `--project` on a
+  non-linear bin errors. The unified run-bin `scope` var (was `githubScope`)
+  carries either provider's scope. Pinned by `cli-help.test.ts` (`parseFlags
+  --project`); the scope wiring mirrors the (integration-untested, parts-tested)
+  `--repo` path. Like the `--repo` commit, comprehensive README/CLI.md docs are
+  deferred to P4 — only `cli-help.ts` help text + print-config were touched.
+- **GitHub watch scope (`--repo`/`OTTO_GITHUB_REPO`, issue #21 P1)** threads a
+  validated repo end-to-end without breaking the host-shell RCE invariant. The
+  raw `--repo` value is captured untyped in `parseFlags` (`flags.repo`); run-bin
+  resolves `flags.repo ?? (OTTO_GITHUB_REPO env || undefined)` through
+  `parseGithubRepo` (in `task-key.ts`, charset-validated → shell-safe `owner/repo`,
+  case preserved) into a `WorkScope`, then **re-exports the canonical owner/repo
+  as `process.env.OTTO_GITHUB_REPO`**. The ghafk templates consume it with the
+  **opt-in shell guard** `${OTTO_GITHUB_REPO:+--repo "$OTTO_GITHUB_REPO"}` — empty/unset
+  expands to nothing (default = workspace repo), set → `--repo owner/repo`; this
+  preserves the "existing behavior is the default" criterion with no per-call
+  conditional in code. `render.ts`/`runner.ts` use `execSync`/`spawn` with NO
+  explicit `env`, so the value inherited from `process.env` reaches BOTH the
+  render-time `gh issue list/view` shell tags AND the spawned claude agent (whose
+  completion `gh` commands the prose tells it to scope). So now **TWO** validated
+  env vars may appear in a shell/spill tag body — `$OTTO_ISSUE` and
+  `$OTTO_GITHUB_REPO` — pinned by `ghafk-templates.test.ts` (mirror of
+  `linear-templates.test.ts`: RCE `{{` invariant + allowed-env-ref set). Gating:
+  `RunBinConfig.supportsRepoScope` (otto-ghafk only); `--repo` on another bin
+  errors; an invalid repo is **fatal on a real run but only reported (exit 0)
+  under `--print-config`** (the read-only-diagnostic contract). `pollOpenIssues`
+  takes an optional 3rd `repo` arg (`gh issue list --repo`); `runWatch` derives it
+  from `scope` and prefixes every poll line with `describeScope(scope)`. The
+  Linear `--project` P1 item should mirror this shape.
+- **GitHub multi-target watch (`--repo` repeatable / `OTTO_GITHUB_REPOS`, issue
+  #21 P3)** layers on the P1 single-target shape WITHOUT forking it. `parseFlags`
+  now **accumulates** repeated `--repo` into `flags.repos: string[]` (no longer
+  overwrites); `flags.repo` is kept = `repos[0]` so every single-target caller is
+  untouched. run-bin merges `flags.repos` (or, if empty, the comma-list
+  `OTTO_GITHUB_REPOS`, or the single `OTTO_GITHUB_REPO`) through `parseGithubRepo`
+  into a github `WorkScope[]`: **exactly one → the unchanged single-target path**
+  (`scope` set + `OTTO_GITHUB_REPO` exported); **>1 → `scopes` passed to
+  `runWatch`, and NO single `OTTO_GITHUB_REPO` is pinned** (the daemon pins it
+  per-cycle). `runWatch` takes `scopes?: WorkScope[]`, normalizes to
+  `scopeList = scopes?.length ? scopes : [scope]` (a lone `undefined` = workspace
+  default), and each cycle **polls every scope, runs ONE loop for the first scope
+  with work, then breaks back to the sleep+repoll** (one loop at a time → no
+  parallel workspace mutation). The confinement crux: before that loop it sets
+  `process.env.OTTO_GITHUB_REPO = sRepo` for the selected scope (the inherited-env
+  trick from P1 is how the templates/agent get scoped — there is no per-loop
+  `env` arg). A `!poll.ok` scope is logged (`describeScope`-prefixed) and
+  `continue`d so it **never blocks the others** (P3 failure-isolation criterion);
+  idle prints once only when `allIdle && !ran`. One cumulative budget spans all
+  scopes (unchanged). `--print-config`/the watch banner list every scope
+  (`scopes.map(describeScope).join(", ")`). Pinned by `cli-help.test.ts` (repeated
+  `--repo` → `repos`) + `watch.test.ts` (`multi-target (scopes)`: polls each,
+  runs first-with-work + env-pin, failure-isolation). The Linear repeatable
+  `--project` mirror shipped (next bullet); the `<task-key>` branch/artifact half
+  stays blocked on the legacy-read (P2/P4).
+- **Linear multi-target watch (`--project` repeatable / `OTTO_LINEAR_PROJECTS`,
+  issue #21 P3)** mirrors the GitHub `--repo` multi-target shape but confines
+  scopes a DIFFERENT way. `parseFlags` accumulates repeated `--project` into
+  `flags.projects` (`project` kept = `projects[0]`, single-target callers
+  untouched); run-bin's `supportsProjectScope` merges `flags.projects` (or the
+  comma-list `OTTO_LINEAR_PROJECTS`, or the single `OTTO_LINEAR_PROJECT`) into a
+  linear `WorkScope[]` — **each project pairs with the same `OTTO_LINEAR_TEAM`**;
+  one → the unchanged single-target path (`scope` set + `OTTO_LINEAR_PROJECT`
+  exported), >1 → `scopes` to `runWatch` (no single value pinned). The crux that
+  differs from GitHub: the GitHub poller takes a `--repo` poll **arg**
+  (`ghRepoOf(s)`), but the **Linear poller reads `OTTO_LINEAR_PROJECT` from the
+  inherited env** (the `watchPoll` closure in `linear-main.ts`), so `runWatch`
+  must **pin `process.env.OTTO_LINEAR_PROJECT = sProject` BEFORE the poll** (not
+  just on the run, like GitHub's `OTTO_GITHUB_REPO`) — `linearProjectOf(s)` does
+  the per-scope lookup. Pinning before the poll confines BOTH the poll and the
+  subsequent loop (the loop's templates inherit the same env). No charset
+  validation (project is GraphQL-only free text, never a host shell — unlike
+  `--repo`). Pinned by `cli-help.test.ts` (repeated `--project` → `projects`) +
+  `watch.test.ts` (`multi-target Linear (scopes)`: env pinned per poll, names
+  each scope, runs first-with-work confined). **Test trick:** since the Linear
+  poller is the same mocked `pollIssues(label, cwd, repo)` with `repo=undefined`,
+  assert confinement by capturing `process.env.OTTO_LINEAR_PROJECT` inside the
+  mock impl, not via a poll arg. Like the GitHub P3 commit, comprehensive
+  README/CLI.md docs are deferred to P4 (only `cli-help.ts` help/env text +
+  print-config touched).
+- **Work scope + task key contract** (issue #21, P0) lives in one pure module
+  `task-key.ts`, split into TWO types on purpose: `WorkScope` = *where* Otto may
+  look (provider + owner/repo or team/project, NO item) for watch + `--print-config`;
+  `WorkSource` = a scope PLUS the concrete item (issue/slug) that names artifacts +
+  branches. `deriveTaskKey(source)` emits the one normalized key
+  (`plan-<slug>` / `gh-<owner>-<repo>-<issue>[-<slug>]` / `linear-<team>-<project>-<issue>[-<slug>]`,
+  optional parts dropped when absent); `describeScope(scope)` is the human one-liner
+  the caller suffixes with `label:` etc. Every free-text part goes through the same
+  sanitizer as `slugify` (lowercase, non-`[a-z0-9]`→`-`, trim) so keys are BOTH
+  filesystem-safe and git-branch-safe; slugs cap at 40. **Test branch-safety
+  against real git** (`git check-ref-format --branch <key>` and `<convention>/<key>`),
+  not a regex. The helper is INERT until P1–P4 wire it in (swapping today's
+  `issue-<n>` task-key needs the legacy-path fallback from P2/P4), so adding it
+  can't regress existing behavior. Pinned by `task-key.test.ts`.
 - **Cross-run quality summary vs. per-run report — keep them apart.** A rollup
   *across* runs (per-verdict tally, common rejection/follow-up causes, still-open
   gaps/deferred) is NOT a per-run artifact, so it does **not** belong in the

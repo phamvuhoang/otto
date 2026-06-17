@@ -68,7 +68,8 @@ gh auth status
 | `OTTO_LINEAR_TEAM`       | _(unset)_                    | Optional Linear team-key narrowing for selection/polling (e.g. `ENG`).                                                                                                                                                 |
 | `OTTO_LINEAR_DONE_STATE` | _(unset)_                    | Name of the workflow state `otto-linear done` moves an issue to; else the first `type = completed` state.                                                                                                              |
 | `OTTO_BRANCH`            | _(unset → `current`)_        | Branch isolation strategy: `current`, `branch`, or `worktree`. Overrides `.otto/config.json`; overridden by `--branch`.                                                                                                |
-| `OTTO_BRANCH_PREFIX`     | `otto/`                      | Prefix for the generated branch/worktree name. Overrides `.otto/config.json`; overridden by `--branch-prefix`.                                                                                                         |
+| `OTTO_BRANCH_PREFIX`     | `otto/`                      | Raw prefix concatenated to the generated branch/worktree name. Overrides `.otto/config.json`; overridden by `--branch-prefix`. Superseded by `OTTO_BRANCH_CONVENTION` when both are set.                               |
+| `OTTO_BRANCH_CONVENTION` | `otto`                       | Validated, slash-normalized branch namespace (`<convention>/<task-key>`). Canonical replacement for `OTTO_BRANCH_PREFIX`. `feat` and `feat/` both yield `feat/`; unsafe values abort. Overridden by `--branch-convention`. |
 | `NO_COLOR` / `TERM=dumb` | _(unset)_                    | Disable ANSI color in Otto's own output. Color is also auto-disabled when stdout/stderr is not a TTY, so piping to a file stays clean.                                                                                  |
 
 Run `otto-afk --print-config` to see how all of the above resolve for your current shell and workspace, without launching a loop. It prints two blocks: the **resolved config**, then a **preflight** check of the run's prerequisites — the `claude` CLI and its credentials, a git workspace to commit into, and (for `otto-ghafk`) the `gh` CLI and its credentials. Each line is marked `✓`/`✗` with a remediation hint, so you can fix setup before any paid `claude` invocation:
@@ -105,6 +106,8 @@ Where Otto commits is resolved **once at startup**, in this order: `--branch`/`O
 | `branch`   | Otto creates and switches to `<prefix><slug>` before the loop starts (slug = basename of the plan file for `otto-afk`; a timestamp for `otto-ghafk`; `-2`/`-3` suffix on name collision). |
 | `worktree` | Otto creates an isolated git worktree at `<workspace>/.otto-tmp/worktrees/<slug>`; the entire run happens there. **Not** removed automatically — run `git worktree remove <path>` when done. |
 
-`--branch-prefix <p>` (default `otto/`) sets the generated branch name prefix.
+`--branch-convention <c>` (default `otto`) sets the validated branch namespace `<c>/<task-key>` — it normalizes an optional trailing slash (`feat` and `feat/` both produce `feat/`) and rejects git-ref-unsafe values. It is the canonical replacement for the older raw `--branch-prefix <p>` (kept for back-compat, concatenated verbatim with no validation). Precedence: `--branch-convention` → `--branch-prefix` → config `branchConvention` → config `branchPrefix` → `otto/`. `--print-config` shows the resolved namespace.
 
 Otto warns at startup if the working tree has uncommitted tracked changes under `current` or `branch` mode, because dirty trees disable the review panel's read-only enforcement.
+
+Per-task artifacts (spec, plan, follow-ups) are grouped under `.otto/tasks/<task-key>/`, named with the same task key as the branch. See **[MIGRATION.md](./MIGRATION.md)** for the old→new path mapping and how to migrate an existing repo.

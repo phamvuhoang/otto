@@ -332,7 +332,7 @@ A natural pairing: run an unattended `otto-afk` build, then `--verify` the same 
 
 ### `--apply-review <doc>`
 
-Runs the normal implement→review loop, but the gate triages an external review document. Per iteration it fixes **one** actionable finding (each `fix(review):`-committed, after reconciling against git so already-fixed items are skipped); deferred/follow-up findings are appended to `.otto/review-followups.md` (a git-tracked backlog, committed _with_ the related fix); cosmetic ones are recorded as skipped. The loop ends when no actionable findings remain. `--review-panel`, `--budget`, and `--cooldown` all compose with it.
+Runs the normal implement→review loop, but the gate triages an external review document. Per iteration it fixes **one** actionable finding (each `fix(review):`-committed, after reconciling against git so already-fixed items are skipped); deferred/follow-up findings are appended to the task-local `.otto/tasks/<task-key>/followups.md` (a git-tracked backlog, committed _with_ the related fix; the legacy global `.otto/review-followups.md` is still read as a fallback for one release — see **[MIGRATION.md](./MIGRATION.md)**); cosmetic ones are recorded as skipped. The loop ends when no actionable findings remain. `--review-panel`, `--budget`, and `--cooldown` all compose with it.
 
 ```bash
 # Apply an external code review, fixing actionable findings one per iteration (≤20)
@@ -349,10 +349,11 @@ otto-afk --apply-review ./pr-142-review.md --review-panel 25
 otto-afk --apply-review ./review.md 15
 ```
 
-After the run, inspect the tracked backlog of everything it intentionally deferred:
+After the run, inspect the tracked backlog of everything it intentionally deferred (per task, or globbed across all tasks):
 
 ```bash
-cat .otto/review-followups.md
+cat .otto/tasks/<task-key>/followups.md   # this task's deferrals
+cat .otto/tasks/*/followups.md            # every task's deferrals
 ```
 
 ---

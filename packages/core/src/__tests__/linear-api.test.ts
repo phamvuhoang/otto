@@ -289,6 +289,24 @@ describe("createLinearClient", () => {
     expect(calls[0].body.variables.filter.team).toBeUndefined();
   });
 
+  it("listIssues narrows by project name when a project is given", async () => {
+    const { fn, calls } = fakeFetch({ data: { issues: { nodes: [] } } });
+    const client = createLinearClient({ token: "k", fetch: fn });
+
+    await client.listIssues({ label: "otto", project: "Roadmap Q3", limit: 50 });
+
+    expect(calls[0].body.variables.filter.project.name.eq).toBe("Roadmap Q3");
+  });
+
+  it("listIssues omits the project filter when no project is given", async () => {
+    const { fn, calls } = fakeFetch({ data: { issues: { nodes: [] } } });
+    const client = createLinearClient({ token: "k", fetch: fn });
+
+    await client.listIssues({ label: "otto", team: "ENG", limit: 50 });
+
+    expect(calls[0].body.variables.filter.project).toBeUndefined();
+  });
+
   it("viewIssue by UUID queries issue(id) and maps comments", async () => {
     const { fn, calls } = fakeFetch({
       data: {

@@ -201,6 +201,7 @@ export type LinearClient = {
   listIssues(opts: {
     label: string;
     team?: string;
+    project?: string;
     limit: number;
   }): Promise<LinearIssueSummary[]>;
   viewIssue(ref: LinearRef): Promise<LinearIssueDetail>;
@@ -314,12 +315,16 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
       return data.viewer;
     },
 
-    async listIssues({ label, team, limit }) {
+    async listIssues({ label, team, project, limit }) {
       const filter: Record<string, unknown> = {
         labels: { some: { name: { eq: label } } },
         state: { type: { nin: ["completed", "canceled"] } },
       };
       if (team) filter.team = { key: { eq: team } };
+      // Narrow further by project name (single-target watch scope). Names may
+      // not be unique across teams, so a project filter is meant to be paired
+      // with a team filter; we still match on name to keep CLI input human-friendly.
+      if (project) filter.project = { name: { eq: project } };
       const data = await request<{
         issues: { nodes: RawIssue[] };
       }>(

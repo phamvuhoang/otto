@@ -9,7 +9,9 @@ Two views of open Linear issues are provided at the start of context:
   large) once you have picked an issue you want to act on.
 
 Issue selection is already filtered to open Linear issues carrying the `otto`
-label (override via `OTTO_LINEAR_LABEL`, narrow to a team via `OTTO_LINEAR_TEAM`).
+label (override via `OTTO_LINEAR_LABEL`, narrow to a team via `OTTO_LINEAR_TEAM`,
+and narrow to a project via `OTTO_LINEAR_PROJECT`). Work only on the issues the
+list shows — they are already confined to the configured team/project scope.
 
 You've also been passed a file containing the last few commits. Review these to
 understand what work has been done.

@@ -79,7 +79,7 @@ otto-afk --apply-review D  → [STAGES.applyReviewImplementer, STAGES.reviewer] 
 
 - **`otto-afk` is plan/PRD-driven.** Its first positional arg is forwarded verbatim as the `{{ INPUTS }}` tag.
 - **`otto-ghafk` is GitHub-issue-driven.** No input arg; `inputs = ""` and the issue context is pulled by the template via `gh`.
-- **`--verify`** is one-shot (`iterations` forced to 1, no reviewer) and writes a read-only report to `.otto-tmp/verify-report.md` — it makes no commits. **`--apply-review`** triages an external review document, fixing one actionable finding per iteration and accumulating deferred ones in the git-tracked `.otto/review-followups.md`.
+- **`--verify`** is one-shot (`iterations` forced to 1, no reviewer) and writes a read-only report to `.otto-tmp/verify-report.md` — it makes no commits. **`--apply-review`** triages an external review document, fixing one actionable finding per iteration and accumulating deferred ones in the git-tracked, task-local `.otto/tasks/<task-key>/followups.md` (legacy `.otto/review-followups.md` read as fallback for one release — see [MIGRATION.md](./MIGRATION.md)).
 
 **The first stage of a chain is always the gate.** After its stage runs, `loop.ts` checks the captured `result` for the exact literal sentinel:
 
@@ -259,7 +259,7 @@ The reviewer reviews only the latest commit; emits `<review>OK</review>` / `<rev
 
 **[`verify.md`](../packages/core/templates/verify.md)** (`otto-afk --verify`) — read-only gate: reconciles the plan against git + working tree, runs the suites, classifies each task done/gap/deferred, and writes a report to `.otto-tmp/verify-report.md`. Makes no commits.
 
-**[`apply-review.md`](../packages/core/templates/apply-review.md)** (`otto-afk --apply-review <doc>`) — gate that triages an external code-review document, fixing one actionable finding per iteration (`fix(review):`), recording deferred findings in the git-tracked `.otto/review-followups.md`, and emitting the sentinel when none remain.
+**[`apply-review.md`](../packages/core/templates/apply-review.md)** (`otto-afk --apply-review <doc>`) — gate that triages an external code-review document, fixing one actionable finding per iteration (`fix(review):`), recording deferred findings in the git-tracked, task-local `.otto/tasks/<task-key>/followups.md`, and emitting the sentinel when none remain.
 
 ---
 

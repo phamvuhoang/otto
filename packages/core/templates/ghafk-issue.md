@@ -12,11 +12,13 @@
 
 <issue>
 
-!?`gh issue view "$OTTO_ISSUE" --json number,title,state|||Issue not found`
+!?`gh issue view "$OTTO_ISSUE" ${OTTO_GITHUB_REPO:+--repo "$OTTO_GITHUB_REPO"} --json number,title,state|||Issue not found`
 
-Full issue body + comments spilled to: @spill?:issue.json=`gh issue view "$OTTO_ISSUE" --json number,title,body,comments,state|||[]`
+Full issue body + comments spilled to: @spill?:issue.json=`gh issue view "$OTTO_ISSUE" ${OTTO_GITHUB_REPO:+--repo "$OTTO_GITHUB_REPO"} --json number,title,body,comments,state|||[]`
 
 `Read` that file to get the full body and comments before acting on the issue.
+
+If `$OTTO_GITHUB_REPO` is set (run scoped with `--repo owner/name`), pass `--repo "$OTTO_GITHUB_REPO"` to every `gh` command you run yourself (issue comment, pr create) so completion targets that repo. If unset, `gh` uses the workspace's own repo.
 
 </issue>
 

@@ -10,6 +10,7 @@ import {
 import { runLoop } from "./loop.js";
 import { notifyComplete, notifyError } from "./notify.js";
 import { sleep } from "./pacing.js";
+import { describeScope, type WorkScope } from "./task-key.js";
 import {
   bold,
   dim,
@@ -31,12 +32,20 @@ export type PollResult =
   | { ok: true; count: number }
   | { ok: false; auth: boolean; detail: string };
 
-/** Poll open issues carrying `label`, via gh. Never throws. */
-export function pollOpenIssues(label: string, cwd: string): PollResult {
+/**
+ * Poll open issues carrying `label`, via gh. Never throws. When `repo`
+ * (`owner/name`) is given the poll is confined to that repository (watch
+ * scoping) instead of the workspace's default repo.
+ */
+export function pollOpenIssues(
+  label: string,
+  cwd: string,
+  repo?: string
+): PollResult {
   try {
-    // execFileSync (no shell) so `label` is passed as a literal argv entry — a
-    // value like `$(rm -rf ~)` can never be shell-evaluated. See SECURITY.md.
-    // stderr is piped (not ignored) so a failure's message can be classified.
+    // execFileSync (no shell) so `label`/`repo` are passed as literal argv
+    // entries — a value like `$(rm -rf ~)` can never be shell-evaluated. See
+    // SECURITY.md. stderr is piped (not ignored) so failures can be classified.
     const out = execFileSync(
       "gh",
       [
@@ -46,6 +55,7 @@ export function pollOpenIssues(label: string, cwd: string): PollResult {
         "open",
         "--label",
         label,
+        ...(repo ? ["--repo", repo] : []),
         "--json",
         "number",
       ],
@@ -79,6 +89,7 @@ export function pollOpenIssues(label: string, cwd: string): PollResult {
 export type LinearPollDeps = {
   label: string;
   team?: string;
+  project?: string;
   limit?: number;
   /** Resolve the Linear credential; defaults to env/file precedence. */
   resolveAuth?: () => LinearAuth | null;
@@ -107,6 +118,7 @@ export async function pollLinearIssues(deps: LinearPollDeps): Promise<PollResult
     const issues = await client.listIssues({
       label: deps.label,
       team: deps.team,
+      project: deps.project,
       limit: deps.limit ?? 50,
     });
     return { ok: true, count: issues.length };
@@ -142,11 +154,31 @@ export type RunWatchOptions = {
   cliVersion?: string;
   /**
    * Poller for open labelled issues. Defaults to the gh poller; otto-linear-afk
-   * passes a Linear poller. May be async. Injectable for tests too.
+   * passes a Linear poller. May be async. Injectable for tests too. `repo` is
+   * the resolved GitHub scope (`owner/name`) or undefined; the Linear poller
+   * ignores it.
    */
-  pollIssues?: (label: string, cwd: string) => PollResult | Promise<PollResult>;
+  pollIssues?: (
+    label: string,
+    cwd: string,
+    repo?: string
+  ) => PollResult | Promise<PollResult>;
   /** Provider-specific poll/auth messaging; defaults to gh. */
   provider?: WatchProvider;
+  /**
+   * Resolved work scope this daemon is confined to (e.g. github owner/name).
+   * Named in the poll lines and used to derive the gh `--repo` poll filter so
+   * watch never picks up issues from outside the scope.
+   */
+  scope?: WorkScope;
+  /**
+   * Multi-target watch: several GitHub scopes the daemon rotates through. When
+   * set, each cycle polls every scope, runs one loop for the first scope with
+   * work (confining `OTTO_GITHUB_REPO` to it), then returns to polling all. A
+   * failed poll for one scope never blocks the others. Falls back to `scope`
+   * (or the workspace default) when omitted.
+   */
+  scopes?: WorkScope[];
 };
 
 export async function runWatch(opts: RunWatchOptions): Promise<void> {
@@ -165,7 +197,35 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
     bin = "otto-ghafk",
     pollIssues = pollOpenIssues,
     provider = GH_PROVIDER,
+    scope,
+    scopes,
   } = opts;
+
+  // The scopes this daemon rotates through each cycle. Multi-target watch
+  // passes `scopes`; otherwise a single `scope` (or the workspace default,
+  // represented by a lone `undefined`).
+  const scopeList: (WorkScope | undefined)[] =
+    scopes && scopes.length > 0 ? scopes : [scope];
+  // Derive the gh `--repo` filter from a github scope; other providers (Linear)
+  // carry their scope in the label/team the poller already honors.
+  const ghRepoOf = (s?: WorkScope): string | undefined =>
+    s?.provider === "github" && s.owner && s.repo
+      ? `${s.owner}/${s.repo}`
+      : undefined;
+  // The Linear project for a scope. Unlike github (which gets a poll `--repo`
+  // arg), the Linear poller reads OTTO_LINEAR_PROJECT from the env, so the
+  // daemon pins it before each poll/run to confine that scope.
+  const linearProjectOf = (s?: WorkScope): string | undefined =>
+    s?.provider === "linear" && s.project ? s.project : undefined;
+  // Human-readable scope prefix for a poll line (e.g. "github acme/web ").
+  const labelOf = (s?: WorkScope): string =>
+    s ? `${describeScope(s)} ` : "";
+  // The banner names every scope so a maintainer sees the exact watch surface.
+  const bannerScope = scopeList
+    .filter((s): s is WorkScope => !!s)
+    .map(describeScope)
+    .join(", ");
+  const scopeLabel = bannerScope ? `${bannerScope} ` : "";
 
   const releaser: Releaser = acquire({ reason: `${bin} watch` });
   let released = false;
@@ -189,7 +249,7 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
   process.on("SIGTERM", onSigterm);
 
   process.stderr.write(
-    `${USE_COLOR ? dim("watching") + " " + bold(`label:${watchLabel} every ${watchIntervalSec}s`) : `watching label:${watchLabel} every ${watchIntervalSec}s`}\n`
+    `${USE_COLOR ? dim("watching") + " " + bold(`${scopeLabel}label:${watchLabel} every ${watchIntervalSec}s`) : `watching ${scopeLabel}label:${watchLabel} every ${watchIntervalSec}s`}\n`
   );
 
   let cumulativeCost = 0;
@@ -207,45 +267,72 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
         if (notify) notifyComplete(0, false);
         return;
       }
-      const poll = await pollIssues(watchLabel, workspaceDir);
-      if (!poll.ok) {
-        // Broken poll — say *why*, distinctly from an idle queue, and keep
-        // polling (auth may get fixed / a transient failure may clear).
-        wasIdle = false;
-        const suffix = poll.detail ? ` — ${poll.detail}` : "";
-        const why = poll.auth
-          ? `${provider.name} not authenticated — run '${provider.authCmd}' (label ${watchLabel})${suffix}`
-          : `${provider.name} issue poll failed (label ${watchLabel})${suffix}`;
-        process.stderr.write(`${dim(why)}\n`);
-      } else if (poll.count > 0) {
-        wasIdle = false;
-        process.stderr.write(
-          `${dim(`${poll.count} open issue(s) labelled ${watchLabel} — running loop`)}\n`
-        );
-        const remaining =
-          budgetUsd != null ? budgetUsd - cumulativeCost : undefined;
-        const outcome = await runLoop({
-          stages,
-          inputs: "",
-          iterations,
-          workspaceDir,
-          packageDir,
-          budgetUsd: remaining,
-          cooldownMs,
-          maxRetries,
-          reviewLenses,
-          noKeepAlive: true,
-          signal: daemonAbort.signal,
-          bin,
-          cliVersion: opts.cliVersion,
-        });
-        cumulativeCost += outcome.costUsd;
-        process.stderr.write(
-          `${dim(`watch run done — cumulative $${cumulativeCost.toFixed(2)}`)}\n`
-        );
-      } else if (!wasIdle) {
+      // Poll every scope this cycle. Run one loop for the FIRST scope with
+      // work, then break back to the sleep+repoll — one loop at a time, no
+      // parallel mutation of the workspace. A failed poll for one scope is
+      // logged and skipped so it never blocks polling the others.
+      let ran = false;
+      let allIdle = true;
+      for (const s of scopeList) {
+        const sRepo = ghRepoOf(s);
+        const sProject = linearProjectOf(s);
+        const sLabel = labelOf(s);
+        // Pin the Linear project before polling so the poller (which reads it
+        // from the inherited env, not a poll arg) is confined to this scope;
+        // it also stays pinned for the loop run below. GitHub uses the sRepo
+        // poll arg instead and pins OTTO_GITHUB_REPO only on the run.
+        if (sProject) process.env.OTTO_LINEAR_PROJECT = sProject;
+        const poll = await pollIssues(watchLabel, workspaceDir, sRepo);
+        if (!poll.ok) {
+          // Broken poll — say *why*, distinctly from an idle queue, and keep
+          // polling (auth may get fixed / a transient failure may clear).
+          allIdle = false;
+          wasIdle = false;
+          const suffix = poll.detail ? ` — ${poll.detail}` : "";
+          const why = poll.auth
+            ? `${sLabel}${provider.name} not authenticated — run '${provider.authCmd}' (label ${watchLabel})${suffix}`
+            : `${sLabel}${provider.name} issue poll failed (label ${watchLabel})${suffix}`;
+          process.stderr.write(`${dim(why)}\n`);
+          continue;
+        }
+        if (poll.count > 0) {
+          allIdle = false;
+          wasIdle = false;
+          process.stderr.write(
+            `${dim(`${sLabel}${poll.count} open issue(s) labelled ${watchLabel} — running loop`)}\n`
+          );
+          // Confine this loop's `gh` commands (render-time tags + the spawned
+          // agent) to the selected scope by pinning OTTO_GITHUB_REPO before the
+          // run; single-target left it set in run-bin, this covers multi-target.
+          if (sRepo) process.env.OTTO_GITHUB_REPO = sRepo;
+          const remaining =
+            budgetUsd != null ? budgetUsd - cumulativeCost : undefined;
+          const outcome = await runLoop({
+            stages,
+            inputs: "",
+            iterations,
+            workspaceDir,
+            packageDir,
+            budgetUsd: remaining,
+            cooldownMs,
+            maxRetries,
+            reviewLenses,
+            noKeepAlive: true,
+            signal: daemonAbort.signal,
+            bin,
+            cliVersion: opts.cliVersion,
+          });
+          cumulativeCost += outcome.costUsd;
+          process.stderr.write(
+            `${dim(`${sLabel}watch run done — cumulative $${cumulativeCost.toFixed(2)}`)}\n`
+          );
+          ran = true;
+          break;
+        }
+      }
+      if (!ran && allIdle && !wasIdle) {
         // First empty poll after activity — announce idle once, then stay quiet
-        // until the queue becomes non-empty (or a poll fails) and idles again.
+        // until a queue becomes non-empty (or a poll fails) and idles again.
         wasIdle = true;
         process.stderr.write(
           `${dim(`no open issues labelled ${watchLabel} — idle, next poll in ${watchIntervalSec}s`)}\n`

@@ -1,6 +1,27 @@
 import { describe, expect, it } from "vitest";
 
-import { parseFlags, parseIssueRef, parseDurationMs } from "../cli-help.js";
+import {
+  parseFlags,
+  parseIssueRef,
+  parseDurationMs,
+  printConfig,
+} from "../cli-help.js";
+
+/** Capture printConfig's stdout for a given options bag. */
+function configOutput(opts: Parameters<typeof printConfig>[3]): string {
+  const chunks: string[] = [];
+  const orig = process.stdout.write.bind(process.stdout);
+  (process.stdout as { write: unknown }).write = (s: string) => {
+    chunks.push(String(s));
+    return true;
+  };
+  try {
+    printConfig("otto-ghafk", "/ws", "/pkg", opts);
+  } finally {
+    (process.stdout as { write: unknown }).write = orig;
+  }
+  return chunks.join("");
+}
 
 describe("parseIssueRef", () => {
   it("accepts a bare number", () => {
@@ -110,6 +131,100 @@ describe("parseFlags --branch / --branch-prefix", () => {
   });
   it("errors when --branch has no value", () => {
     expect(() => parseFlags(["--branch"])).toThrow(/--branch requires a value/);
+  });
+  it("captures the raw --branch-convention value", () => {
+    const f = parseFlags(["--branch-convention", "feat", "5"]);
+    expect(f.branchConvention).toBe("feat");
+    expect(f.rest).toEqual(["5"]);
+  });
+  it("errors when --branch-convention has no value", () => {
+    expect(() => parseFlags(["--branch-convention"])).toThrow(
+      /--branch-convention requires a value/
+    );
+  });
+});
+
+describe("parseFlags --repo", () => {
+  it("captures the raw --repo value", () => {
+    const f = parseFlags(["--watch", "--repo", "owner/name", "5"]);
+    expect(f.repo).toBe("owner/name");
+    expect(f.rest).toEqual(["5"]);
+  });
+  it("leaves repo undefined when absent", () => {
+    expect(parseFlags(["5"]).repo).toBeUndefined();
+  });
+  it("errors when --repo has no value", () => {
+    expect(() => parseFlags(["--repo"])).toThrow(/--repo requires a value/);
+  });
+  it("collects repeated --repo into repos, keeping repo as the first (multi-target)", () => {
+    const f = parseFlags([
+      "--watch",
+      "--repo",
+      "acme/api",
+      "--repo",
+      "acme/web",
+      "20",
+    ]);
+    expect(f.repos).toEqual(["acme/api", "acme/web"]);
+    expect(f.repo).toBe("acme/api");
+    expect(f.rest).toEqual(["20"]);
+  });
+  it("leaves repos empty when no --repo is given", () => {
+    expect(parseFlags(["5"]).repos).toEqual([]);
+  });
+});
+
+describe("parseFlags --project", () => {
+  it("captures the raw --project value", () => {
+    const f = parseFlags(["--watch", "--project", "Roadmap Q3", "5"]);
+    expect(f.project).toBe("Roadmap Q3");
+    expect(f.rest).toEqual(["5"]);
+  });
+  it("leaves project undefined when absent", () => {
+    expect(parseFlags(["5"]).project).toBeUndefined();
+  });
+  it("errors when --project has no value", () => {
+    expect(() => parseFlags(["--project"])).toThrow(
+      /--project requires a value/
+    );
+  });
+  it("collects repeated --project into projects, keeping project as the first (multi-target)", () => {
+    const f = parseFlags([
+      "--watch",
+      "--project",
+      "Roadmap Q3",
+      "--project",
+      "Bugs",
+      "20",
+    ]);
+    expect(f.projects).toEqual(["Roadmap Q3", "Bugs"]);
+    expect(f.project).toBe("Roadmap Q3");
+    expect(f.rest).toEqual(["20"]);
+  });
+  it("leaves projects empty when no --project is given", () => {
+    expect(parseFlags(["5"]).projects).toEqual([]);
+  });
+});
+
+describe("printConfig scope", () => {
+  it("shows the resolved watch scope when provided", () => {
+    const out = configOutput({ watchScope: "github acme/web" });
+    expect(out).toMatch(/scope\s+github acme\/web/);
+  });
+  it("shows a default when no scope is resolved", () => {
+    const out = configOutput({});
+    expect(out).toMatch(/scope\s+default/);
+  });
+});
+
+describe("printConfig branch convention", () => {
+  it("shows the resolved branch convention when provided", () => {
+    const out = configOutput({ branchStrategy: "branch", branchConvention: "feat" });
+    expect(out).toMatch(/branch\s+branch \(convention "feat"\)/);
+  });
+  it("falls back to the prefix display when no convention is set", () => {
+    const out = configOutput({ branchStrategy: "branch", branchPrefix: "bot/" });
+    expect(out).toMatch(/branch\s+branch \(prefix "bot\/"\)/);
   });
 });
 

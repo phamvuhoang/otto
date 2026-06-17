@@ -51,3 +51,8 @@ The prompt-template renderer (`render.ts`) executes the **command bodies** of th
 reads, never re-shelled on the host) — so there is no host command-injection vector today.
 **This invariant must be preserved:** never interpolate runtime or untrusted data into a tag
 command body. Doing so would create direct host RCE.
+
+The only runtime values a tag body may reference are the env vars `run-bin` validates to a
+shell-safe charset before exporting — `$OTTO_ISSUE` (positive int / Linear ref) and
+`$OTTO_GITHUB_REPO` (`owner/name`, via `parseGithubRepo`) — read from the process environment by
+the shell, never spliced into the template text.

@@ -141,11 +141,46 @@ Otto is configured by flags and environment variables. The essentials:
 | `OTTO_MODEL`      | _(CLI default)_ | Pin the Claude model (`--model` pass-through).                       |
 | `OTTO_TOKEN_MODE` | `off`           | `off`, `measure`, or `reduce`; overridden by `--token-mode`.         |
 
+### How to set config values
+
+Every value resolves in a fixed precedence order — **CLI flag → environment variable → `.otto/config.json` → built-in default** — so a flag always wins for a single run, an env var sets a per-shell default, and the config file persists a choice for a repo. Pick the mechanism by how long the choice should stick:
+
+```bash
+# 1. Per-run — a flag, highest precedence, affects only this invocation
+otto-afk --token-mode measure --budget 5 "<plan-and-prd>" 20
+
+# 2. Per-shell — an env var, applies to every Otto run in this shell
+export OTTO_RUNNER=host
+export OTTO_MODEL=claude-opus-4-8
+otto-afk "<plan-and-prd>" 20
+
+# 2b. One-off env override, scoped to a single command
+OTTO_TOKEN_MODE=reduce otto-afk "<plan-and-prd>" 20
+
+# 3. Persistent — add the export lines to ~/.zshrc / ~/.bashrc for every new shell
+```
+
+Branch settings (`branchStrategy`, `branchPrefix`, `branchConvention`) can also be **persisted per-repo** in `<workspace>/.otto/config.json`. Running `otto-afk` in a TTY offers to write this file for you ("Remember for this repo?"); flags and env still override it.
+
+Always confirm what actually resolved before a paid run:
+
 ```bash
 otto-afk --print-config     # resolved config + a preflight check of run prerequisites, then exit
 ```
 
-Full environment reference, runner/sandbox details, and branch strategy: **[docs/CONFIG.md](./docs/CONFIG.md)**.
+### What you can set
+
+**Flags** (per-run; same set across all bins unless noted):
+
+- **Loop & cost** — `--budget <usd>`, `--cooldown <ms>`, `--max-retries <N>`, `--max-wait <dur>`, `--token-mode <off|measure|reduce>`, `--review-panel`, `--fresh`
+- **Process & UX** — `--detach`, `--log <path>`, `--notify`, `--no-keep-alive`, `--print-config`, `--help`, `--version`
+- **Branch** — `--branch <current|branch|worktree>`, `--branch-convention <c>`, `--branch-prefix <p>`
+- **Targeting** (`otto-ghafk` / `otto-linear-afk`) — `--watch`, `--watch-interval <sec>`, `--repo <owner/name>`, `--project <name>`, `--issue <ref>`
+- **Modes** (`otto-afk`) — `--verify`, `--apply-review <doc>`
+
+**Environment variables** (per-shell defaults): `OTTO_WORKSPACE`, `OTTO_RUNNER`, `OTTO_SANDBOX_NET`, `OTTO_RESULT_GRACE_MS`, `OTTO_MODEL`, `OTTO_TOKEN_MODE`, `OTTO_REVIEW_LENSES`, `OTTO_MAX_WAIT`, `OTTO_WATCH_LABEL`, `OTTO_GITHUB_REPO(S)`, `OTTO_BRANCH`, `OTTO_BRANCH_PREFIX`, `OTTO_BRANCH_CONVENTION`, `OTTO_LINEAR_API_KEY` / `LINEAR_API_KEY`, `OTTO_LINEAR_LABEL`, `OTTO_LINEAR_TEAM`, `OTTO_LINEAR_PROJECT(S)`, `OTTO_LINEAR_DONE_STATE`, and `NO_COLOR` / `TERM=dumb`.
+
+Full per-value descriptions, defaults, and runner/sandbox/branch details live in **[docs/CONFIG.md](./docs/CONFIG.md)**; every flag and mode is documented in **[docs/CLI.md](./docs/CLI.md)**.
 
 ---
 

@@ -29,9 +29,15 @@ task. Implement the first unchecked task per run.
 
 ## P2 — Codex spike
 
-- [ ] **Codex CLI adapter spike (throwaway harness + findings doc).** Prove
+- [x] **Codex CLI adapter spike (throwaway harness + findings doc).** Prove
       non-interactive prompt-file invocation, machine-readable output → StageResult
       mapping, auth/preflight detection, sandbox model. Document known gaps.
+      Harness + candidate parser/preflight/argv in `scripts/codex-spike.mjs`
+      (throwaway, not shipped), pinned by `scripts/codex-spike.test.mjs`; findings
+      in `docs/spikes/codex-runtime-spike.md`. **Live smoke BLOCKED here** —
+      Codex 0.104.0's native binary is missing (ENOENT, empty `vendor/`), so the
+      `exec --json` event schema is documented as UNVERIFIED; P3's first step is
+      to confirm it against a working binary.
 
 ## P3 — stable Codex
 

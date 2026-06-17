@@ -2,6 +2,25 @@
 
 ## Conventions
 
+- **Codex spike lives in `scripts/`, not `src/` (issue #24 P2).** The Codex CLI
+  adapter spike is a *throwaway harness* + findings doc, NOT production code:
+  `scripts/codex-spike.mjs` (candidate `parseCodexEvents`/`detectCodexRateLimit`/
+  `codexPreflight`/`buildCodexArgs` + a runnable smoke) pinned by
+  `scripts/codex-spike.test.mjs` (auto-globbed by `pnpm test`), findings in
+  `docs/spikes/codex-runtime-spike.md`. Deliberately OUTSIDE `packages/core/src/`
+  so (a) the unverified Codex parsing doesn't pollute the runner hot path (honours
+  the P0 "stays generic until the spike reveals the shape" call) and (b) it ships
+  in no tarball (`scripts/` isn't in core's package `files`). **P3 promotes** the
+  verified pieces into a real `codexRuntime` `AgentRuntime` adapter + preflight
+  rows. Key spike findings the P3 adapter must act on: Codex is driven by
+  `codex exec --json` (JSONL thread/item events — **schema UNVERIFIED**, the live
+  smoke was BLOCKED because Codex 0.104.0's vendored native binary is missing here,
+  ENOENT/empty `vendor/`); Codex emits **no USD cost** (only token counts → budget
+  reports $0 until cost is derived); it has **no `--settings` sandbox** (uses its
+  own `--sandbox <mode> --ask-for-approval never`, so codex's adapter sets
+  `supportsSandboxSettings:false`); auth is `~/.codex/auth.json` OR `OPENAI_API_KEY`;
+  and preflight must check `codex --version` succeeds, not just PATH presence (the
+  npm shim is on PATH even when its native binary is broken).
 - **`AgentRuntime` adapter boundary (issue #24 P0 step 3)** — the runner no
   longer hardcodes `claude`; everything Claude-specific lives behind an
   `AgentRuntime` object in `runner.ts`: `{ id, displayName, command,

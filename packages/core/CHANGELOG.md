@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.7.0...otto-core-v0.8.0) (2026-06-18)
+
+
+### Features
+
+* **agent:** implement Codex execution adapter ([#33](https://github.com/phamvuhoang/otto/issues/33)) ([4bda5d3](https://github.com/phamvuhoang/otto/commit/4bda5d335d3dfcc58f02e104fd89dc79717b3ffe))
+
 ## [0.7.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.6.0...otto-core-v0.7.0) (2026-06-17)
 
 

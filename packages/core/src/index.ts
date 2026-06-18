@@ -15,7 +15,23 @@ export {
   type RenderOptions,
   type RenderVars,
 } from "./render.js";
-export { runStage, type StageResult } from "./runner.js";
+export {
+  claudeRuntime,
+  getAgentRuntime,
+  runStage,
+  type AgentRuntime,
+  type StageResult,
+} from "./runner.js";
+export {
+  AGENT_DISPLAY_NAMES,
+  DEFAULT_AGENT,
+  parseAgentId,
+  readAgentConfig,
+  resolveAgentRuntime,
+  type AgentRuntimeId,
+  type AgentSelectionSource,
+  type ResolvedAgentRuntime,
+} from "./agent-runtime.js";
 export {
   emptyTokenUsage,
   parseTokenMode,

@@ -2,6 +2,214 @@
 
 ## Conventions
 
+- **Agent-runtime docs span 5 surfaces, pinned by one doc-contract test, and
+  document Codex HONESTLY (issue #24 P5).** The runtime feature is documented in
+  README (flags/env lists + a `--print-config` example), `docs/CLI.md` (a
+  `## Agent runtime (--agent)` section — anchor `#agent-runtime---agent`, also in
+  the TOC), `docs/CONFIG.md` (env-var rows + a runtime-aware preflight note),
+  `SECURITY.md` (per-runtime credential/sandbox: claude `~/.claude`+`--settings`;
+  codex `~/.codex/auth.json`/`OPENAI_API_KEY`+its own `--sandbox`), and
+  `docs/ARCHITECTURE.md` (a `### Agent runtime abstraction` subsection). All five
+  are drift-proofed by `scripts/agent-runtime-doc-contract.test.mjs`, which
+  **parses `AGENT_DISPLAY_NAMES`/`DEFAULT_AGENT` + the flag names from source**
+  (not hardcoded) so adding a runtime id forces the docs to grow — same pattern as
+  `security-doc-contract`/`quality-report-samples`/`migration-doc-contract`. **The
+  framing decision to preserve:** Codex is documented as *selectable* (flag/env/
+  config), *preflighted*, *model-env-aware*, and *fallback-configurable*, but its
+  **execution adapter is explicitly "not yet shipped"** (a real `--agent codex`
+  run exits "not implemented yet") — do NOT let a future doc edit claim Codex
+  *runs* until the BLOCKED adapter lands. The test's "no doc claims Otto runs only
+  Claude" case guards the opposite drift. **The four P5 smoke scenarios needed no
+  new harness — they were already unit-tested** (`cli-help.test.ts`/`loop.test.ts`
+  for default config/banner + runtime visibility, `preflight.test.ts` for
+  codex-preflight-fails-clean, `loop.test.ts` for the auto-switch mocked-limit
+  path); the doc-contract test is the only net-new test (YAGNI on redundant smoke).
+- **Switch-on-limit is loop-orchestration, not a runner change (issue #24 P4).**
+  `runLoop` gained `fallbackAgentId`/`fallbackAgentDisplayName`/`autoSwitchOnLimit`
+  (from run-bin's resolved `fallback.*`, threaded through `runWatch` too). The
+  active runtime is a **mutable** `activeAgentId`/`activeAgentDisplayName` (starts
+  at the primary `agentId`); EVERY downstream seam that used `agentId`/
+  `agentDisplayName` now reads the `active*` vars (stage banner, executeStage +
+  panel `agentId`, failure `stageLogPath`, summary) so they track the live runtime
+  after a switch. The switch happens **inside the existing rate-limit catch** in
+  `loop.ts`, AFTER the accounting rollback to `accountingSnapshot` (so budget/token
+  totals survive) and BEFORE the wait/halt path: `if (autoSwitchOnLimit &&
+  fallbackAgentId && activeAgentId !== fallbackAgentId)` → reassign `activeAgentId`
+  to the fallback, set `switched=true`, print `↪ auto-switch on rate limit: <from>
+  → <to> for iteration N <stage>`, `persist(i,"running")`, `continue` the `for(;;)`
+  retry loop (runOnce closes over the mutable `activeAgentId`, so the retry runs on
+  the fallback). **Only ONE switch** — once `activeAgentId === fallbackAgentId` the
+  guard is false, so a fallback that ALSO limits falls through to the normal
+  wait/halt (no ping-pong, matches the "switched once" summary). `RunState.agent`
+  (new optional field, `state.ts`) persists the active runtime each `persist()`;
+  on resume, `if (resuming && prior.agent && prior.agent !== agentId)` restores it
+  (`switched=true`, display from `AGENT_DISPLAY_NAMES`) so a resumed run keeps the
+  fallback — `--fresh` clears state → back to primary. Summary shows `runtime:
+  <primary> -> <active> (switched once: rate limit)` when switched, else `<active>`.
+  Pinned by `loop.test.ts` "auto-switch on limit" (claude→codex, codex→claude,
+  off→wait, fallback-also-limits→wait, resume-keeps-fallback); the test reads the
+  retry's runtime via `runStage.mock.calls[n][6].runtime.id` (the mocked
+  `getAgentRuntime` returns `{id}`). **End-to-end cross-provider switching is still
+  gated on the BLOCKED Codex adapter** — a real switch to codex hits
+  `getAgentRuntime`'s "not implemented" throw; the orchestration is provider-neutral
+  and fully unit-tested with mocks, and becomes runnable when the codex adapter lands.
+- **Fallback-on-limit config is parsed + reported but inert (issue #24 P4,
+  config slice).** `agent-runtime.ts` adds `resolveFallback({flagAgent, envAgent,
+  configAgent, flagAutoSwitch, envAutoSwitch, configAutoSwitch})` →
+  `{agent?: ResolvedAgentRuntime, autoSwitch}` and `readFallbackConfig(workspaceDir)`
+  → `{agent?, autoSwitch?}` (reads `.otto/config.json` `fallbackAgent` string +
+  `autoSwitchOnLimit` boolean; wrong-typed dropped). **Two deliberate asymmetries
+  vs. `resolveAgentRuntime`:** (1) the fallback agent has **NO default** — unset =
+  no fallback (returns `{autoSwitch}` with no `agent`), because switching
+  providers must be explicit; (2) auto-switch is a boolean with precedence
+  flag(true)→env-truthy→config→false, where env-truthy = `1|true|yes|on`
+  (case-insensitive, via `isTruthyEnv`) and an explicit falsy env (`0`/`false`)
+  WINS over a `true` config (blank env falls through). The fallback agent reuses
+  `parseAgentId` so an invalid `OTTO_FALLBACK_AGENT`/config `fallbackAgent` throws
+  (named for `--print-config` reporting). Wiring **mirrors the `agent` block in
+  run-bin exactly**: resolved into `fallback`/`fallbackError`, reported by
+  `--print-config` (exit 0), **fatal (exit 1) on a real run** right after the
+  agentError guard. `--print-config` shows one `fallback` line:
+  `<id> (<name>, <source>) · auto-switch on|off` when an agent is set, else
+  `auto-switch on · no fallback agent set` (misconfig warning) when only switch is
+  on, else `off`, else `invalid (<err>)`. This slice resolved config only; the
+  actual switch-on-limit at the retry/stage boundary now lives in `loop.ts` (see
+  the switch-on-limit bullet above). Default-off keeps Claude behavior unchanged.
+  Pinned by `agent-runtime.test.ts`
+  (resolveFallback precedence/truthy/no-default/throw + readFallbackConfig),
+  `cli-help.test.ts` (`--fallback-agent`/`--auto-switch-on-limit` parse +
+  print-config fallback line incl. the no-agent warning), `run-bin.test.ts`
+  (env selection + invalid-reported + invalid-fatal).
+- **Provider-specific model env is runtime-aware via `resolveModelSelection`
+  (issue #24 P3).** `runner.ts`'s `resolveModelSelection(runtimeId, env)` picks
+  `OTTO_<RUNTIME>_MODEL` (e.g. `OTTO_CLAUDE_MODEL` / `OTTO_CODEX_MODEL`) over the
+  provider-neutral `OTTO_MODEL`; an empty/whitespace override falls THROUGH to
+  the generic value (so an unset-but-present var doesn't suppress `OTTO_MODEL`).
+  It returns `{spec, source}` — `source` is the literal env var name, used by
+  `--print-config`'s model line (`<value> (<source>)`, else
+  `<runtime> CLI default (OTTO_<RUNTIME>_MODEL / OTTO_MODEL unset)`). `runStage`
+  feeds `resolveModelSelection(runtime.id)?.spec` into the EXISTING
+  `resolveModelArgs` (kept as the single `--model` arg builder; not duplicated),
+  so the per-runtime override reaches the spawned CLI — `runStage`'s old
+  `resolveModelArgs(process.env.OTTO_MODEL)` call is the only wiring that
+  changed. `cli-help.ts` imports `resolveModelSelection` from `runner.js` (no
+  cycle: runner doesn't import cli-help). Pinned by `runner.test.ts`
+  (precedence/leak/empty/trim) + `cli-help.test.ts` (print-config model line).
+  Comprehensive README/CLI.md/CONFIG.md docs deferred to P5 (help text +
+  print-config touched here, mirroring the scope-flag commits).
+- **Runtime-aware preflight: `runPreflight(opts.agentId)` shows the SELECTED
+  runtime's CLI/auth rows, not both (issue #24 P3).** `runPreflight` takes an
+  optional `agentId`; default/`claude` → `claude CLI`+`claude auth` rows
+  (unchanged), `codex` → `codex CLI`+`codex auth` rows INSTEAD (Claude-specific
+  checks are not shown blindly for a codex run). The git/gh/linear rows are
+  per-bin and runtime-independent. Threaded from `printConfig`'s `agentId` into
+  the `runPreflight` call. **The codex CLI row probes runnability, not PATH
+  presence:** it requires `codex --version` to exit 0 via a new injectable
+  `probeVersion` probe (default `probeVersionBin` = `spawnSync(name,["--version"])
+  .status===0`, never throws) — because the `@openai/codex` npm shim sits on PATH
+  while its vendored native binary can be missing/broken, so `which codex`
+  succeeds but the binary is unusable (spike gap #5). New `PreflightProbes`
+  fields: `probeVersion(name)` and `env` (for `OPENAI_API_KEY`); the
+  `allPresentProbes` test helper must supply both. Codex auth = `~/.codex/auth.json`
+  OR `OPENAI_API_KEY`. Pinned by `preflight.test.ts` (injected probes: usable /
+  shim-broken / missing / auth-file / api-key / none) + `cli-help.test.ts`
+  (host-independent: match preflight rows by the `[✓✗] <label>` glyph prefix, NOT
+  bare `claude CLI` — the model line `"claude CLI default (OTTO_MODEL unset)"`
+  also contains that substring). The full codex `AgentRuntime` adapter
+  (`parseResultEvent`) stays BLOCKED until the `exec --json` schema is verified on
+  a host that can run codex — see the gotcha below.
+- **Codex spike lives in `scripts/`, not `src/` (issue #24 P2).** The Codex CLI
+  adapter spike is a *throwaway harness* + findings doc, NOT production code:
+  `scripts/codex-spike.mjs` (candidate `parseCodexEvents`/`detectCodexRateLimit`/
+  `codexPreflight`/`buildCodexArgs` + a runnable smoke) pinned by
+  `scripts/codex-spike.test.mjs` (auto-globbed by `pnpm test`), findings in
+  `docs/spikes/codex-runtime-spike.md`. Deliberately OUTSIDE `packages/core/src/`
+  so (a) the unverified Codex parsing doesn't pollute the runner hot path (honours
+  the P0 "stays generic until the spike reveals the shape" call) and (b) it ships
+  in no tarball (`scripts/` isn't in core's package `files`). **P3 promotes** the
+  verified pieces into a real `codexRuntime` `AgentRuntime` adapter + preflight
+  rows. Key spike findings the P3 adapter must act on: Codex is driven by
+  `codex exec --json` (JSONL thread/item events — **schema UNVERIFIED**, the live
+  smoke was BLOCKED because Codex 0.104.0's vendored native binary is missing here,
+  ENOENT/empty `vendor/`); Codex emits **no USD cost** (only token counts → budget
+  reports $0 until cost is derived); it has **no `--settings` sandbox** (uses its
+  own `--sandbox <mode> --ask-for-approval never`, so codex's adapter sets
+  `supportsSandboxSettings:false`); auth is `~/.codex/auth.json` OR `OPENAI_API_KEY`;
+  and preflight must check `codex --version` succeeds, not just PATH presence (the
+  npm shim is on PATH even when its native binary is broken).
+- **`AgentRuntime` adapter boundary (issue #24 P0 step 3)** — the runner no
+  longer hardcodes `claude`; everything Claude-specific lives behind an
+  `AgentRuntime` object in `runner.ts`: `{ id, displayName, command,
+  supportsSandboxSettings, buildArgs(stage,promptRel,modelArgs,settings?),
+  parseResultEvent(ev) }`. `claudeRuntime` is the sole adapter (delegates
+  `buildArgs`→`buildClaudeArgs`, `parseResultEvent`→`resultFromEvent(ev,"claude")`);
+  `getAgentRuntime(id)` selects it from a `Partial<Record<AgentRuntimeId,…>>`
+  registry and **throws a clean "not implemented" for `codex`** (defensive
+  backstop — real codex runs are already blocked upstream in run-bin, so this is
+  belt-and-suspenders, NOT the primary guard). `streamClaude`→`streamRuntime`
+  gained a `runtime` param and routes the final result through
+  `runtime.parseResultEvent`, stamping the new **`StageResult.runtimeId`** (the
+  contract's "StageResult identifies the runtime that produced it"); all
+  `claude`-literal log/error strings now use `runtime.command` so claude output
+  is byte-for-byte identical. `runStage` takes the adapter via a new optional
+  `RunStageOptions.runtime` (defaults `claudeRuntime`, so old callers/test mocks
+  are unchanged); `stage-exec` selects it with `getAgentRuntime(opts.agentId ??
+  DEFAULT_AGENT)`. **Test gotcha:** any test that `vi.mock("../runner.js")` must
+  now also stub `getAgentRuntime` (loop.test.ts + stage-exec.test.ts both mock
+  the module) or `executeStage` throws on the undefined import; a `(id)=>({id})`
+  stub suffices since the mocked `runStage` ignores it. **Scope call:** rate-limit
+  detection (`isLimitResult`/`resetsAtFromEvent` in `rate-limit.ts`) was NOT moved
+  behind the adapter — it stays generic until the P2 Codex spike reveals Codex's
+  signal shape (YAGNI; the plan bullet listed it but P0 acceptance doesn't).
+  `supportsSandboxSettings` gates writing the `--settings` file (claude=true →
+  unchanged). Pinned by `runner.test.ts` (`getAgentRuntime` selection + throw,
+  `claudeRuntime` adapter output, `resultFromEvent` runtimeId stamp). The next
+  P0/P2 task is the throwaway Codex spike.
+- **Runtime visibility threading (issue #24 P1 step 2)** — the resolved
+  `{id,displayName}` reaches `runLoop` via two new `LoopOptions`
+  (`agentId`/`agentDisplayName`, default `claude`/`Claude Code`) wired from
+  run-bin's `agent.id`/`agent.displayName`, surfacing on FOUR seams: the version
+  banner (`… (core x) · runtime: <displayName>`), the per-stage banner
+  (`… (stage n/m) · <displayName>`, both color + plain), the NDJSON log filename
+  (`stageLogPath` gained an optional 4th `runtimeId` arg → `-<id>` suffix; passed
+  by `stage-exec.ts` via a new `ExecuteStageOptions.agentId` and by loop's
+  failure-marker call), and the summary line (`· runtime: <id>`). The panel
+  threads it too (`RunPanelOptions.agentId` → each `executeStage`), so lens/synth
+  logs are runtime-labelled. `runWatch` carries `agentId`/`agentDisplayName`
+  through to its inner `runLoop`. **The log suffix is ALWAYS applied on a real
+  run** (claude → `-claude.ndjson`); the "Claude behavior byte-for-byte" rule is
+  about the spawned CLI args/output, not internal artifact filenames, and the
+  roadmap explicitly wants the runtime in the log path. `stageLogPath`'s param is
+  optional so test mocks/older callers stay back-compatible (no suffix when
+  omitted). Pinned by `runner.test.ts` (suffix present/absent), `loop.test.ts`
+  (banner+summary show runtime; claude default), `stage-exec.test.ts` (agentId →
+  filename). The runner still spawns `claude` — adapter extraction is the next
+  plan task (P0 boundary).
+- **Agent runtime selection (`--agent`/`OTTO_AGENT`/config `agent`, issue #24
+  P0/P1 step 1)** is config-parsing + visibility ONLY — the runner still spawns
+  `claude` (no adapter yet). Pure module `agent-runtime.ts`: `AgentRuntimeId =
+  "claude"|"codex"`, `DEFAULT_AGENT="claude"`, `AGENT_DISPLAY_NAMES`,
+  `parseAgentId(raw,source)` (throws clean `… must be one of claude|codex`),
+  `resolveAgentRuntime({flag,env,config})` → `{id,displayName,source}` with
+  precedence **flag → env → config → default** (blank env/config skipped, not an
+  error), and `readAgentConfig(workspaceDir)` reading the `.otto/config.json`
+  `agent` string (never throws; kept separate from `readBranchConfig` to
+  decouple). Wiring **mirrors the OTTO_TOKEN_MODE pattern exactly**: the
+  `--agent` flag is validated in `parseFlags` (throws → clean); an invalid
+  `OTTO_AGENT`/config value is caught in run-bin into `agentError`, **reported by
+  `--print-config` without a stack trace (exit 0) but fatal (exit 1) on a real
+  run**. `--print-config` shows `runtime <id> (<displayName>)` + `runtime source
+  <source>`. Crux: a real run whose resolved `id !== "claude"` **exits 1 with a
+  "not implemented yet" message** rather than silently running Claude — this
+  preserves the issue's "user always knows the active runtime" contract before
+  the Codex adapter exists; `--print-config` still reports the codex selection
+  (read-only diagnostic, no guard). Default stays Claude → behavior unchanged.
+  Pinned by `agent-runtime.test.ts` (parse/resolve/read), `cli-help.test.ts`
+  (`parseFlags --agent` + print-config runtime lines), `run-bin.test.ts`
+  (env-selection + invalid-reported + not-implemented-fatal; the fatal test
+  spies on `console.error` and mocks `process.exit` to throw — `process.stderr.write`
+  spy does NOT capture `console.error`). Spec/plan: `.otto/tasks/issue-24/`.
+
 - **Branch convention vs. branch prefix (`--branch-convention`, issue #21 P2)** —
   there are now TWO branch-namespace flags and the newer one is canonical. The
   pre-existing `--branch-prefix`/`OTTO_BRANCH_PREFIX`/`config.branchPrefix` is a
@@ -348,6 +556,20 @@
 
 ## Gotchas
 
+- **This dev host cannot execute the Codex CLI — live `codex exec --json`
+  verification is impossible here (issue #24 P3).** Two independent failures: (1)
+  the installed `@openai/codex` 0.104.0 npm shim is on PATH but its vendored
+  native binary is missing (`vendor/.../codex` ENOENT, empty dir); (2) a
+  freshly-downloaded official release binary
+  (`gh release download rust-v0.104.0 --repo openai/codex --pattern
+  codex-aarch64-apple-darwin.tar.gz`) — `codesign --verify` reports "valid on
+  disk / satisfies its Designated Requirement" — is still **SIGKILL'd (rc 137)**
+  on every invocation, even with the command sandbox disabled and after `xattr
+  -c`. So it is NOT a Gatekeeper/signature issue; the environment itself kills
+  it. Consequence: the P3 codex *adapter* (whose `parseResultEvent` needs the
+  UNVERIFIED `exec --json` event schema) cannot be verified here — only the
+  schema-independent pieces (preflight, and later the argv builder) are
+  shippable on this host. Re-attempt the adapter where `codex exec --json` runs.
 - Linear's GraphQL API authenticates a **personal API key** with a bare
   `Authorization: <key>` header — **no `Bearer` prefix** (that prefix is for
   OAuth access tokens only). `createLinearClient` in `linear-api.ts` sets the

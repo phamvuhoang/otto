@@ -1,9 +1,15 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
+import { DEFAULT_AGENT, type AgentRuntimeId } from "./agent-runtime.js";
 import { applyPromptReduction } from "./prompt-reduction.js";
 import { renderTemplate } from "./render.js";
 import { DEFAULT_BACKOFF_MS, backoffFor, withRetries } from "./retry.js";
-import { runStage, stageLogPath, type StageResult } from "./runner.js";
+import {
+  getAgentRuntime,
+  runStage,
+  stageLogPath,
+  type StageResult,
+} from "./runner.js";
 import { USE_COLOR, dim } from "./stream-render.js";
 import type { Stage } from "./stages.js";
 import type { TokenMode } from "./tokens.js";
@@ -19,6 +25,8 @@ export type ExecuteStageOptions = {
   signal?: AbortSignal;
   /** Disambiguates spill/log paths when multiple sub-stages share an iteration (panel lenses). */
   logLabel?: string;
+  /** Active runtime id; suffixes the NDJSON log filename so logs are runtime-labelled. */
+  agentId?: AgentRuntimeId;
 };
 
 /** Render a stage's template (inside the retry, so flaky shell tags retry) and run it. */
@@ -39,8 +47,9 @@ export async function executeStage(
   const spillRel = `spill-${process.pid}-${iteration}-${label}-${Date.now()}`;
   const spillHostDir = join(workspaceDir, ".otto-tmp", spillRel);
   const spillRefPath = posix.join(".otto-tmp", spillRel);
-  const stageLog = stageLogPath(workspaceDir, iteration, label);
+  const stageLog = stageLogPath(workspaceDir, iteration, label, opts.agentId);
   mkdirSync(dirname(stageLog), { recursive: true });
+  const runtime = getAgentRuntime(opts.agentId ?? DEFAULT_AGENT);
 
   return withRetries(
     () => {
@@ -64,7 +73,7 @@ export async function executeStage(
         iteration,
         spillHostDir,
         stageLog,
-        { signal }
+        { signal, runtime }
       );
     },
     {

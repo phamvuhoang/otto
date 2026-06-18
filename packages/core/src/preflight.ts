@@ -1,7 +1,9 @@
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 
+import type { AgentRuntimeId } from "./agent-runtime.js";
 import { resolveLinearAuth, type LinearAuth } from "./linear-api.js";
 
 /** One prerequisite check rendered by `--print-config`. */
@@ -20,6 +22,14 @@ export type PreflightProbes = {
   home: string;
   /** Resolve the stored/env Linear credential (for otto-linear-afk), or null. */
   linearAuth: () => LinearAuth | null;
+  /**
+   * Does `<name> --version` exit 0? A bin can sit on PATH while its native
+   * binary is missing/broken (the Codex npm shim — issue #24 P2 gap #5), so the
+   * Codex CLI check probes runnability, not just PATH presence.
+   */
+  probeVersion: (name: string) => boolean;
+  /** Environment to read credential vars from (e.g. CODEX_API_KEY). */
+  env: NodeJS.ProcessEnv;
 };
 
 /**
@@ -45,11 +55,26 @@ export function whichBin(
   return null;
 }
 
+/** Spawn `<name> --version`; true only if it exits 0. Never throws. */
+export function probeVersionBin(name: string): boolean {
+  try {
+    const r = spawnSync(name, ["--version"], {
+      stdio: "ignore",
+      timeout: 10_000,
+    });
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
 const defaultProbes: PreflightProbes = {
   resolveBin: (name) => whichBin(name),
   pathExists: existsSync,
   home: homedir(),
   linearAuth: () => resolveLinearAuth(),
+  probeVersion: probeVersionBin,
+  env: process.env,
 };
 
 /**
@@ -58,26 +83,66 @@ const defaultProbes: PreflightProbes = {
  * otto-ghafk — the `gh` CLI and its credentials. Reports only; never throws.
  */
 export function runPreflight(
-  opts: { bin: string; workspaceDir: string },
+  opts: { bin: string; workspaceDir: string; agentId?: AgentRuntimeId },
   probes: PreflightProbes = defaultProbes
 ): PreflightResult[] {
-  const { resolveBin, pathExists, home, linearAuth } = probes;
+  const { resolveBin, pathExists, home, linearAuth, probeVersion, env } =
+    probes;
   const results: PreflightResult[] = [];
 
-  const claude = resolveBin("claude");
-  results.push({
-    label: "claude CLI",
-    ok: claude != null,
-    detail: claude ?? "not found on PATH — install Claude Code",
-  });
+  // Report prerequisites for the SELECTED runtime only — Claude-specific checks
+  // are not shown blindly for a codex run, and vice versa (issue #24 P3).
+  if (opts.agentId === "codex") {
+    const codex = resolveBin("codex");
+    // The npm shim can be on PATH while its vendored native binary is missing,
+    // so presence alone is not enough — require `codex --version` to succeed.
+    const codexUsable = codex != null && probeVersion("codex");
+    results.push({
+      label: "codex CLI",
+      ok: codexUsable,
+      detail:
+        codex == null
+          ? "not found on PATH — install @openai/codex"
+          : codexUsable
+            ? codex
+            : `found at ${codex} but \`codex --version\` failed — native binary may be missing or broken`,
+    });
 
-  const claudeAuth =
-    pathExists(join(home, ".claude.json")) || pathExists(join(home, ".claude"));
-  results.push({
-    label: "claude auth",
-    ok: claudeAuth,
-    detail: claudeAuth ? "credentials found" : "run `claude /login`",
-  });
+    const codexAuthFile = pathExists(join(home, ".codex", "auth.json"));
+    const codexApiKey =
+      typeof env.CODEX_API_KEY === "string" && env.CODEX_API_KEY.trim() !== "";
+    const openAiApiKey =
+      typeof env.OPENAI_API_KEY === "string" &&
+      env.OPENAI_API_KEY.trim() !== "";
+    const codexAuthed = codexAuthFile || codexApiKey || openAiApiKey;
+    results.push({
+      label: "codex auth",
+      ok: codexAuthed,
+      detail: codexAuthed
+        ? codexAuthFile
+          ? "credentials found (~/.codex/auth.json)"
+          : codexApiKey
+            ? "credentials found (CODEX_API_KEY)"
+            : "credentials found (OPENAI_API_KEY; Otto maps it to CODEX_API_KEY for codex exec)"
+        : "run `codex login` or set CODEX_API_KEY (OPENAI_API_KEY also accepted)",
+    });
+  } else {
+    const claude = resolveBin("claude");
+    results.push({
+      label: "claude CLI",
+      ok: claude != null,
+      detail: claude ?? "not found on PATH — install Claude Code",
+    });
+
+    const claudeAuth =
+      pathExists(join(home, ".claude.json")) ||
+      pathExists(join(home, ".claude"));
+    results.push({
+      label: "claude auth",
+      ok: claudeAuth,
+      detail: claudeAuth ? "credentials found" : "run `claude /login`",
+    });
+  }
 
   const git = pathExists(join(opts.workspaceDir, ".git"));
   results.push({

@@ -133,6 +133,158 @@ describe("parseFlags --token-mode", () => {
   });
 });
 
+describe("parseFlags --agent", () => {
+  it.each(["claude", "codex"] as const)("parses %s", (id) => {
+    const f = parseFlags(["--agent", id, "5"]);
+    expect(f.agent).toBe(id);
+    expect(f.rest).toEqual(["5"]);
+  });
+
+  it("errors when --agent has no value", () => {
+    expect(() => parseFlags(["--agent"])).toThrow(/--agent requires a value/);
+  });
+
+  it("errors on an invalid --agent value", () => {
+    expect(() => parseFlags(["--agent", "gpt"])).toThrow(
+      /--agent must be one of claude\|codex/
+    );
+  });
+
+  it("defaults agent to undefined when absent", () => {
+    expect(parseFlags(["5"]).agent).toBeUndefined();
+  });
+});
+
+describe("parseFlags --fallback-agent / --auto-switch-on-limit", () => {
+  it.each(["claude", "codex"] as const)("parses --fallback-agent %s", (id) => {
+    const f = parseFlags(["--fallback-agent", id, "5"]);
+    expect(f.fallbackAgent).toBe(id);
+    expect(f.rest).toEqual(["5"]);
+  });
+
+  it("errors when --fallback-agent has no value", () => {
+    expect(() => parseFlags(["--fallback-agent"])).toThrow(
+      /--fallback-agent requires a value/
+    );
+  });
+
+  it("errors on an invalid --fallback-agent value", () => {
+    expect(() => parseFlags(["--fallback-agent", "gpt"])).toThrow(
+      /--fallback-agent must be one of claude\|codex/
+    );
+  });
+
+  it("parses --auto-switch-on-limit as a boolean toggle", () => {
+    expect(parseFlags(["--auto-switch-on-limit", "5"]).autoSwitchOnLimit).toBe(
+      true
+    );
+    expect(parseFlags(["5"]).autoSwitchOnLimit).toBe(false);
+  });
+
+  it("defaults fallbackAgent to undefined when absent", () => {
+    expect(parseFlags(["5"]).fallbackAgent).toBeUndefined();
+  });
+});
+
+describe("printConfig fallback", () => {
+  it("shows off when no fallback is configured", () => {
+    const out = configOutput({});
+    expect(out).toMatch(/fallback\s+off/);
+  });
+
+  it("shows the fallback runtime, source, and auto-switch state", () => {
+    const out = configOutput({
+      fallbackAgentId: "codex",
+      fallbackAgentDisplayName: "Codex CLI",
+      fallbackSource: "flag",
+      autoSwitchOnLimit: true,
+    });
+    expect(out).toMatch(/fallback\s+codex \(Codex CLI, flag\) · auto-switch on/);
+  });
+
+  it("warns when auto-switch is on but no fallback agent is set", () => {
+    const out = configOutput({ autoSwitchOnLimit: true });
+    expect(out).toMatch(/fallback\s+auto-switch on · no fallback agent set/);
+  });
+
+  it("reports an invalid fallback selection without throwing", () => {
+    const out = configOutput({
+      fallbackError: 'OTTO_FALLBACK_AGENT must be one of claude|codex, got: "gpt"',
+    });
+    expect(out).toMatch(/fallback\s+invalid/);
+  });
+});
+
+describe("printConfig runtime", () => {
+  it("shows the active runtime, display name, and selection source", () => {
+    const out = configOutput({
+      agentId: "codex",
+      agentDisplayName: "Codex CLI",
+      agentSource: "env",
+    });
+    expect(out).toMatch(/runtime\s+codex \(Codex CLI\)/);
+    expect(out).toMatch(/runtime source\s+env/);
+  });
+
+  it("reports an invalid runtime selection without throwing", () => {
+    const out = configOutput({ agentError: 'OTTO_AGENT must be one of claude|codex, got: "gpt"' });
+    expect(out).toMatch(/runtime\s+invalid/);
+  });
+
+  it("shows a runtime-aware model line using the provider-specific override", () => {
+    const prev = {
+      OTTO_MODEL: process.env.OTTO_MODEL,
+      OTTO_CODEX_MODEL: process.env.OTTO_CODEX_MODEL,
+    };
+    process.env.OTTO_MODEL = "opus";
+    process.env.OTTO_CODEX_MODEL = "gpt-5";
+    try {
+      const out = configOutput({ agentId: "codex", agentDisplayName: "Codex CLI" });
+      expect(out).toMatch(/model\s+gpt-5 \(OTTO_CODEX_MODEL\)/);
+    } finally {
+      if (prev.OTTO_MODEL == null) delete process.env.OTTO_MODEL;
+      else process.env.OTTO_MODEL = prev.OTTO_MODEL;
+      if (prev.OTTO_CODEX_MODEL == null) delete process.env.OTTO_CODEX_MODEL;
+      else process.env.OTTO_CODEX_MODEL = prev.OTTO_CODEX_MODEL;
+    }
+  });
+
+  it("names the active runtime in the model-default line when no model env is set", () => {
+    const prev = {
+      OTTO_MODEL: process.env.OTTO_MODEL,
+      OTTO_CODEX_MODEL: process.env.OTTO_CODEX_MODEL,
+      OTTO_CLAUDE_MODEL: process.env.OTTO_CLAUDE_MODEL,
+    };
+    delete process.env.OTTO_MODEL;
+    delete process.env.OTTO_CODEX_MODEL;
+    delete process.env.OTTO_CLAUDE_MODEL;
+    try {
+      const out = configOutput({ agentId: "codex", agentDisplayName: "Codex CLI" });
+      expect(out).toMatch(/model\s+codex CLI default \(OTTO_CODEX_MODEL \/ OTTO_MODEL unset\)/);
+    } finally {
+      for (const [k, v] of Object.entries(prev)) {
+        if (v == null) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+
+  it("shows codex preflight rows (not claude) when codex is the active runtime", () => {
+    // Host-independent: the preflight row LABELS track the selected runtime even
+    // though ok/detail depend on the host (issue #24 P3).
+    // Match preflight ROWS (prefixed with a ✓/✗ status glyph), not the model
+    // line which always mentions "claude CLI default".
+    const claudeOut = configOutput({ agentId: "claude" });
+    expect(claudeOut).toMatch(/[✓✗] claude CLI/);
+    expect(claudeOut).not.toMatch(/[✓✗] codex CLI/);
+
+    const codexOut = configOutput({ agentId: "codex", agentDisplayName: "Codex CLI" });
+    expect(codexOut).toMatch(/[✓✗] codex CLI/);
+    expect(codexOut).toMatch(/[✓✗] codex auth/);
+    expect(codexOut).not.toMatch(/[✓✗] claude CLI/);
+  });
+});
+
 describe("parseFlags --branch / --branch-prefix", () => {
   it("parses --branch and --branch-prefix", () => {
     const f = parseFlags([

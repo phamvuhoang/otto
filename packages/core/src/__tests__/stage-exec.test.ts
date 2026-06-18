@@ -12,8 +12,16 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../runner.js", () => ({
   runStage: mocks.runStage,
-  stageLogPath: (workspaceDir: string, iteration: number, stageName: string) =>
-    `${workspaceDir}/.otto-tmp/logs/iter${iteration}-${stageName}.ndjson`,
+  getAgentRuntime: (id: string) => ({ id }),
+  stageLogPath: (
+    workspaceDir: string,
+    iteration: number,
+    stageName: string,
+    runtimeId?: string
+  ) =>
+    `${workspaceDir}/.otto-tmp/logs/iter${iteration}-${stageName}${
+      runtimeId ? `-${runtimeId}` : ""
+    }.ndjson`,
 }));
 
 import { executeStage } from "../stage-exec.js";
@@ -25,6 +33,7 @@ const ok = {
   isError: false,
   apiErrorStatus: null,
   usage: emptyTokenUsage(),
+  runtimeId: "claude" as const,
 };
 
 describe("executeStage token mode", () => {
@@ -94,6 +103,22 @@ describe("executeStage token mode", () => {
     });
     expect(mocks.runStage.mock.calls[0][1]).toBe(
       "hello plan\n\n\nread ./full.txt\n"
+    );
+  });
+
+  it("threads agentId into the stage log filename", async () => {
+    await executeStage({
+      stage,
+      vars: { INPUTS: "plan" },
+      workspaceDir,
+      packageDir,
+      iteration: 3,
+      maxRetries: 0,
+      agentId: "codex",
+    });
+    // runStage(stage, prompt, ws, iteration, spillHostDir, logPathOverride, opts)
+    expect(mocks.runStage.mock.calls[0][5]).toContain(
+      "iter3-implementer-codex.ndjson"
     );
   });
 });

@@ -278,6 +278,28 @@ The reviewer reviews only the latest commit; emits `<review>OK</review>` / `<rev
 
 [`runner.ts`](../packages/core/src/runner.ts).
 
+### Agent runtime abstraction
+
+The runner does not hardcode `claude`. Everything provider-specific lives behind an `AgentRuntime` object:
+
+```ts
+type AgentRuntime = {
+  id: AgentRuntimeId; // "claude" | "codex"
+  displayName: string; // "Claude Code" | "Codex CLI"
+  command: string;
+  supportsSandboxSettings: boolean;
+  buildArgs(stage, promptRel, modelArgs, settings?): string[];
+  parseResultEvent(ev): StageResult; // stamps StageResult.runtimeId
+  createStreamParser?(): (ev) => StageResult | undefined;
+  resetsAtFromEvent?(ev): number | null;
+  buildEnv?(env): NodeJS.ProcessEnv;
+};
+```
+
+Runtime **selection** is pure config in [`agent-runtime.ts`](../packages/core/src/agent-runtime.ts) (`parseAgentId`, `resolveAgentRuntime` with precedence flag → env → config → default, `readAgentConfig`, `AGENT_DISPLAY_NAMES`, `DEFAULT_AGENT`, plus `resolveFallback`/`readFallbackConfig` for the fallback-on-limit config). The runner's `getAgentRuntime(id)` selects the **adapter**. `claudeRuntime` delegates `buildArgs`→`buildClaudeArgs` and `parseResultEvent`→`resultFromEvent`. `codexRuntime` delegates `buildArgs`→`buildCodexArgs`, uses `createCodexStreamParser()` because Codex's final text and terminal turn event are separate JSONL records, and maps `OPENAI_API_KEY` to `CODEX_API_KEY` for the child process when needed. `streamRuntime(runtime, …)` routes the spawn, stream parse, reset-time extraction, and final-result mapping through the adapter; `supportsSandboxSettings` gates whether the `--settings` sandbox file is written (Claude=`true`, Codex=`false`).
+
+Rate-limit auto-switch orchestration lives in [`loop.ts`](../packages/core/src/loop.ts) and is provider-neutral: it switches the mutable active runtime at the rate-limit boundary only when a fallback adapter is available, persists it to `RunState.agent`, and restores it on resume. Codex reset-time fields are opportunistic; if a Codex limit has no reset hint, the loop uses the standard fallback wait.
+
 ### `claude` argv shape
 
 `runStage` writes the rendered prompt to `<workspace>/.otto-tmp/.run-<pid>-<iter>-<ts>.md`, then assembles:
@@ -291,6 +313,20 @@ claude --verbose --print --output-format stream-json
 ```
 
 Spawned with `cwd = workspaceDir`. `--permission-mode` is always `bypassPermissions` (from the stage). `--settings` is included only when `OTTO_RUNNER=sandbox` (the default).
+
+### `codex` argv shape
+
+Codex stages use Codex's non-interactive mode and its own sandbox flags:
+
+```
+codex exec --json --skip-git-repo-check
+       --sandbox workspace-write|danger-full-access
+       --ask-for-approval never
+       [--model <OTTO_MODEL>]
+       "Read the full instructions from the file ./.otto-tmp/<run-file> in the current workspace and execute them."
+```
+
+`OTTO_RUNNER=sandbox` maps to `--sandbox workspace-write`; `OTTO_RUNNER=host` maps to `--sandbox danger-full-access`. Claude-only `--permission-mode` and `--settings` flags are never passed to Codex.
 
 ### Sandbox settings (`OTTO_RUNNER=sandbox`)
 
@@ -310,17 +346,18 @@ Spawned with `cwd = workspaceDir`. `--permission-mode` is always `bypassPermissi
 
 The settings file is written to `.otto-tmp/` and deleted in `finally`.
 
-### NDJSON streaming — `streamClaude`
+### NDJSON streaming — `streamRuntime`
 
-`spawn("claude", args, { cwd, stdio: ["ignore","pipe","pipe"] })`. stdout is read line-by-line; lines starting with `{` are appended to the NDJSON log and `JSON.parse`d:
+`spawn(runtime.command, args, { cwd, stdio: ["ignore","pipe","pipe"] })`. stdout is read line-by-line; lines starting with `{` are appended to the NDJSON log and `JSON.parse`d:
 
 - **assistant `text`** → printed to **stdout** with a `●` bullet (the visible answer stream).
 - **`tool_use` / `tool_result` / `thinking` / `system:init`** → rendered to **stderr** (tool name + truncated input/result preview + elapsed ms).
 - **`result`** event → its `result` string is captured as the stage's return value. `total_cost_usd`, error fields, and `usage` token fields are parsed into `StageResult`.
+- **Codex `item.completed` agent_message + `turn.completed`** → the last agent message becomes `StageResult.result`; the terminal turn event supplies token usage. `turn.failed` / `error` becomes an errored `StageResult` so the same retry/rate-limit path applies.
 
 Color is **TTY-gated and stream-split**: `USE_COLOR` (stderr) and `USE_COLOR_STDOUT` (stdout) are independent, so `otto-ghafk 1 > out.txt` stays clean even on a TTY. ANSI is disabled when `NO_COLOR` is set or `TERM=dumb`.
 
-**Post-result grace timer:** when the `result` event arrives, a one-shot timer (`OTTO_RESULT_GRACE_MS`, default **30000 ms**; `0` disables) is armed. If the `claude` child emits its final NDJSON but never exits (a known claude-CLI self-deadlock), the timer kills the child and resolves with the captured result so the loop is not hung. On non-zero exit, `streamClaude` rejects with the last ~40 stderr lines.
+**Post-result grace timer:** when the runtime emits its final event (`result` for Claude, `turn.completed` / `turn.failed` / `error` for Codex), a one-shot timer (`OTTO_RESULT_GRACE_MS`, default **30000 ms**; `0` disables) is armed. If the child emits its final NDJSON but never exits, the timer kills it and resolves with the captured result so the loop is not hung. On non-zero exit, `streamRuntime` rejects with the last ~40 stderr lines.
 
 ### Token accounting and reduction
 
@@ -404,7 +441,8 @@ Release/publishing (release-please → tag-driven npm workflows) is the single-s
 | `OTTO_RUNNER`            | `sandbox`        | `sandbox` — native OS sandbox (Seatbelt on macOS), writes confined to the workspace. `host` — unsandboxed.                                                                        |
 | `OTTO_SANDBOX_NET`       | — (unrestricted) | Comma-separated domain allowlist for sandbox network egress. Unset = unrestricted (filesystem is the blast-radius control).                                                       |
 | `OTTO_RESULT_GRACE_MS`   | `30000`          | Post-result kill timer; `0` disables. Invalid/negative → default.                                                                                                                 |
-| `OTTO_MODEL`             | — (CLI default)  | `--model <value>` pass-through to `claude` for every stage. Empty/whitespace = unset.                                                                                             |
+| `OTTO_AGENT`             | `claude`         | Agent CLI runtime (`claude` \| `codex`); selects the `AgentRuntime` adapter. Precedence `--agent` → env → `.otto/config.json` → default. See the runtime abstraction above.       |
+| `OTTO_MODEL`             | — (CLI default)  | `--model <value>` pass-through to the active runtime for every stage. Empty/whitespace = unset. `OTTO_CLAUDE_MODEL` / `OTTO_CODEX_MODEL` override it per runtime.                 |
 | `OTTO_MAX_WAIT`          | `6h`             | Maximum time to wait for a Claude rate-limit to clear before halting and saving resume state. Accepts bare seconds or duration strings (`90m`, `6h`). Equivalent to `--max-wait`. |
 | `OTTO_BRANCH`            | — (`current`)    | Branch isolation strategy: `current`, `branch`, or `worktree`. Overrides `.otto/config.json`; overridden by `--branch`.                                                           |
 | `OTTO_BRANCH_PREFIX`     | `otto/`          | Prefix for the generated branch/worktree name. Overrides `.otto/config.json`; overridden by `--branch-prefix`.                                                                    |

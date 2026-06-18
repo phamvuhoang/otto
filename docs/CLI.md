@@ -3,6 +3,7 @@
 Commands, flags, and modes for the two Otto bins. For environment variables, runner/sandbox behavior, and branch strategy see **[CONFIG.md](./CONFIG.md)**.
 
 - [Choosing a mode](#choosing-a-mode)
+- [Agent runtime (`--agent`)](#agent-runtime---agent)
 - [`otto-afk` — plan/PRD loop](#otto-afk--planprd-loop)
 - [`otto-ghafk` — GitHub-issue loop](#otto-ghafk--github-issue-loop)
 - [`otto-linear-afk` — Linear-issue loop](#otto-linear-afk--linear-issue-loop)
@@ -18,7 +19,7 @@ Commands, flags, and modes for the two Otto bins. For environment variables, run
 - [Customizing the pipeline](#customizing-the-pipeline)
 - [Source map](#source-map)
 
-Every command also supports `--help` / `-h`, `--version` / `-V`, and `--print-config` (print the resolved config plus a preflight check of run prerequisites — `claude`/`gh` CLIs, credentials, git workspace — then exit). See [CONFIG.md → Prerequisites](./CONFIG.md#prerequisites) for the preflight block.
+Every command also supports `--help` / `-h`, `--version` / `-V`, and `--print-config` (print the resolved config plus a preflight check of run prerequisites — the selected agent CLI/auth, git workspace, and provider CLIs such as `gh` — then exit). See [CONFIG.md → Prerequisites](./CONFIG.md#prerequisites) for the preflight block.
 
 ---
 
@@ -35,6 +36,46 @@ Otto has one build loop with several entry points. They share the same resilienc
 | `otto-afk --apply-review <doc> <n>`  | An external code-review document + iteration count              | `apply-review-implementer` | Fix the actionable findings of an external review, one per iteration; deferred ones tracked in git.       |
 
 `--verify` and `--apply-review` are `otto-afk` modes that swap the gate stage; they are mutually exclusive with each other and with `--issue` / `--watch`. `--review-panel` is orthogonal — it upgrades the **reviewer** stage in any of the above (it reviews Otto's _own_ diff), not the gate. Full per-mode detail follows.
+
+---
+
+## Agent runtime (`--agent`)
+
+Every mode above runs against an **agent runtime** — the underlying agent CLI Otto drives. Otto is **Claude-first by default**; the runtime is provider-neutral so other CLIs can share the same loop, stages, templates, logs, budget, and watch behavior.
+
+| Flag                         | Default  | What it does                                                                                                                            |
+| ---------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `--agent <runtime>`          | `claude` | Select the agent CLI runtime: `claude` or `codex`. Also via `OTTO_AGENT` or `.otto/config.json` `"agent"`.                              |
+| `--fallback-agent <runtime>` | none     | Runtime to switch to when the active one hits a usage/rate limit: `claude` or `codex`. Also via `OTTO_FALLBACK_AGENT` / config.         |
+| `--auto-switch-on-limit`     | off      | Switch to `--fallback-agent` on a limit instead of waiting it out. Also via `OTTO_AUTO_SWITCH_ON_LIMIT=1` / config `autoSwitchOnLimit`. |
+
+**Selection precedence:** `--agent` flag → `OTTO_AGENT` env → `.otto/config.json` `"agent"` → default `claude`. A blank env/config value is skipped, not an error. An invalid value is **reported** by `--print-config` (exit 0) but **fatal** on a real run (exit 1) — so you always know the runtime before spending tokens.
+
+```bash
+# default — Claude Code
+otto-afk "./docs/plans/feature.md" 10
+
+# inspect Codex selection/preflight before any paid invocation
+otto-afk --agent codex --print-config
+OTTO_AGENT=codex otto-ghafk --print-config
+
+# run with Codex
+otto-afk --agent codex "./docs/plans/feature.md" 5
+```
+
+`--print-config` shows the resolved `runtime` (`<id> (<display name>)`), its `runtime source` (default/flag/env/config), the runtime-aware `model` line, and the `fallback` setting. The run banner echoes it (`otto-afk 0.x (core 0.x) · runtime: Claude Code`), each stage banner appends it (`iteration 2/10 · implementer · Claude Code`), the per-stage NDJSON log path carries a `-<id>` suffix (`…-iter2-implementer-claude.ndjson`), and the final summary prints `runtime: <id>` — or `runtime: claude -> codex (switched once: rate limit)` after an auto-switch.
+
+**Runtime status today:** `claude` (Claude Code) is the default. `codex` (Codex CLI) is executable via `codex exec --json` and can be the primary runtime or the fallback runtime. Claude uses Otto's transient `--settings` sandbox file; Codex uses its own `--sandbox workspace-write --ask-for-approval never` flags when `OTTO_RUNNER=sandbox` and `--sandbox danger-full-access` when `OTTO_RUNNER=host`. Codex auth is normally `codex login`; API-key runs can use `CODEX_API_KEY`, and Otto also accepts `OPENAI_API_KEY` by mapping it to `CODEX_API_KEY` for the Codex child process.
+
+### Provider-specific model (`OTTO_CLAUDE_MODEL` / `OTTO_CODEX_MODEL`)
+
+`OTTO_MODEL` pins the model for whichever runtime is active. To pin a different model per runtime when you switch between them, set the provider-specific override — it wins over `OTTO_MODEL` for that runtime only:
+
+```bash
+OTTO_CLAUDE_MODEL=<claude-model> OTTO_CODEX_MODEL=<codex-model> otto-afk --agent codex --print-config
+```
+
+Precedence per runtime: `OTTO_<RUNTIME>_MODEL` → `OTTO_MODEL` → the CLI's own default (an empty/whitespace override falls through). `--print-config`'s `model` line shows the resolved value and which env var supplied it.
 
 ---
 
@@ -170,7 +211,7 @@ Both bins are designed to chew through long runs unattended.
 | `--detach`          | off                                                    | Fork the loop into a background process, print pid + log path, and exit.                                                |
 | `--log <path>`      | `<workspace>/.otto-tmp/logs/detached-<parent-pid>.log` | Override the detached log target. Only meaningful with `--detach`.                                                      |
 | `--notify`          | off                                                    | OS toast + terminal bell on loop completion or unrecoverable failure.                                                   |
-| `--max-wait <dur>`  | `6h`                                                   | Maximum time to wait out a Claude rate-limit before halting. Accepts seconds (`90`) or a duration string (`90m`, `6h`). |
+| `--max-wait <dur>`  | `6h`                                                   | Maximum time to wait out an agent rate-limit before halting. Accepts seconds (`90`) or a duration string (`90m`, `6h`). |
 | `--fresh`           | off                                                    | Ignore any saved `.otto/state.json` and restart from iteration 1.                                                       |
 
 Canonical overnight recipe:

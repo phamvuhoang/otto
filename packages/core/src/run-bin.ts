@@ -2,6 +2,14 @@ import { existsSync, readFileSync, appendFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  readAgentConfig,
+  readFallbackConfig,
+  resolveAgentRuntime,
+  resolveFallback,
+  type ResolvedAgentRuntime,
+  type ResolvedFallback,
+} from "./agent-runtime.js";
 import { dirtyTreeWarning, ensureTmpIgnored, resolveBranch } from "./branch.js";
 import {
   parseFlags,
@@ -12,6 +20,7 @@ import {
 } from "./cli-help.js";
 import { detachAndExit } from "./detach.js";
 import { runLoop } from "./loop.js";
+import { getAgentRuntime } from "./runner.js";
 import type { Stage } from "./stages.js";
 import { parseGithubRepo, describeScope, type WorkScope } from "./task-key.js";
 import type { TokenMode } from "./tokens.js";
@@ -135,6 +144,46 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     } catch (err) {
       tokenModeError = (err as Error).message;
     }
+  }
+
+  // Resolve the active agent runtime: --agent flag → OTTO_AGENT → .otto/config.json
+  // "agent" → claude default. Mirror the token-mode handling: an invalid env/config
+  // value is reported by --print-config (no stack trace) and is fatal on a real run.
+  let agent: ResolvedAgentRuntime = {
+    id: "claude",
+    displayName: "Claude Code",
+    source: "default",
+  };
+  let agentError: string | undefined;
+  try {
+    agent = resolveAgentRuntime({
+      flag: flags.agent,
+      env: process.env.OTTO_AGENT,
+      config: readAgentConfig(workspaceDir),
+    });
+  } catch (err) {
+    agentError = (err as Error).message;
+  }
+
+  // Resolve fallback-on-limit config (--fallback-agent / OTTO_FALLBACK_AGENT /
+  // config "fallbackAgent" + --auto-switch-on-limit / OTTO_AUTO_SWITCH_ON_LIMIT /
+  // config "autoSwitchOnLimit"). Default OFF — switching providers is opt-in.
+  // An invalid value is reported by --print-config and fatal on a real run,
+  // mirroring the agent handling.
+  let fallback: ResolvedFallback = { autoSwitch: false };
+  let fallbackError: string | undefined;
+  try {
+    const fbCfg = readFallbackConfig(workspaceDir);
+    fallback = resolveFallback({
+      flagAgent: flags.fallbackAgent,
+      envAgent: process.env.OTTO_FALLBACK_AGENT,
+      configAgent: fbCfg.agent,
+      flagAutoSwitch: flags.autoSwitchOnLimit,
+      envAutoSwitch: process.env.OTTO_AUTO_SWITCH_ON_LIMIT,
+      configAutoSwitch: fbCfg.autoSwitch,
+    });
+  } catch (err) {
+    fallbackError = (err as Error).message;
   }
 
   const envBranch = process.env.OTTO_BRANCH?.trim();
@@ -292,6 +341,15 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
         ? (process.env.OTTO_TOKEN_MODE?.trim() ?? "")
         : tokenMode,
       tokenModeError,
+      agentId: agent.id,
+      agentDisplayName: agent.displayName,
+      agentSource: agent.source,
+      agentError,
+      fallbackAgentId: fallback.agent?.id,
+      fallbackAgentDisplayName: fallback.agent?.displayName,
+      fallbackSource: fallback.agent?.source,
+      autoSwitchOnLimit: fallback.autoSwitch,
+      fallbackError,
       reviewLenses: reviewLenses ?? [],
       watch: flags.watch,
       watchIntervalSec: flags.watchIntervalSec,
@@ -309,6 +367,31 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   if (tokenModeError) {
     console.error(tokenModeError);
     process.exit(1);
+  }
+
+  // An invalid OTTO_AGENT / config "agent" is fatal for a real run (it would
+  // otherwise silently fall back to claude); --print-config only reported it.
+  if (agentError) {
+    console.error(agentError);
+    process.exit(1);
+  }
+  // An invalid OTTO_FALLBACK_AGENT / config value is likewise fatal on a real
+  // run (it would otherwise silently disable the fallback); --print-config only
+  // reported it.
+  if (fallbackError) {
+    console.error(fallbackError);
+    process.exit(1);
+  }
+  // A configured fallback is harmless while auto-switch is off, but an enabled
+  // switch must not defer an unavailable-adapter crash until a paid run hits a
+  // limit. Validate the fallback adapter before branch setup or stage execution.
+  if (fallback.autoSwitch && fallback.agent) {
+    try {
+      getAgentRuntime(fallback.agent.id);
+    } catch (err) {
+      console.error(`fallback runtime unavailable: ${(err as Error).message}`);
+      process.exit(1);
+    }
   }
 
   if (flags.issue != null && !cfg.issueStage) {
@@ -466,6 +549,11 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       provider: cfg.watchProvider,
       scope,
       scopes,
+      agentId: agent.id,
+      agentDisplayName: agent.displayName,
+      fallbackAgentId: fallback.agent?.id,
+      fallbackAgentDisplayName: fallback.agent?.displayName,
+      autoSwitchOnLimit: fallback.autoSwitch,
     });
     return;
   }
@@ -488,5 +576,10 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     mode: runMode,
     maxWaitMs,
     fresh: flags.fresh,
+    agentId: agent.id,
+    agentDisplayName: agent.displayName,
+    fallbackAgentId: fallback.agent?.id,
+    fallbackAgentDisplayName: fallback.agent?.displayName,
+    autoSwitchOnLimit: fallback.autoSwitch,
   });
 }

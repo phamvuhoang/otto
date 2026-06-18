@@ -8,10 +8,11 @@ import {
 import { emptyTokenUsage } from "../tokens.js";
 
 const stageResult = (
-  overrides: Omit<Parameters<typeof isLimitResult>[0], "usage">
+  overrides: Omit<Parameters<typeof isLimitResult>[0], "usage" | "runtimeId">
 ) => ({
   ...overrides,
   usage: emptyTokenUsage(),
+  runtimeId: "claude" as const,
 });
 
 describe("RateLimitError", () => {
@@ -44,6 +45,18 @@ describe("isLimitResult", () => {
           costUsd: 0,
           isError: true,
           apiErrorStatus: null,
+        })
+      )
+    ).toBe(true);
+  });
+  it("true on a Codex-style limit message in apiErrorStatus", () => {
+    expect(
+      isLimitResult(
+        stageResult({
+          result: "",
+          costUsd: 0,
+          isError: true,
+          apiErrorStatus: "usage limit reached",
         })
       )
     ).toBe(true);

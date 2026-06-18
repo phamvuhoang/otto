@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   release: vi.fn(),
   runPanel: vi.fn(),
   runStage: vi.fn(),
+  getAgentRuntime: vi.fn((id: string) => ({ id })),
   sleep: vi.fn(),
 }));
 
@@ -34,6 +35,7 @@ vi.mock("../notify.js", () => ({
 
 vi.mock("../runner.js", () => ({
   runStage: mocks.runStage,
+  getAgentRuntime: mocks.getAgentRuntime,
   stageLogPath: (workspaceDir: string, iteration: number, stageName: string) =>
     join(
       workspaceDir,
@@ -142,6 +144,7 @@ describe("runLoop", () => {
     vi.useRealTimers();
     for (const mock of Object.values(mocks)) mock.mockReset();
     mocks.acquire.mockReturnValue({ release: mocks.release });
+    mocks.getAgentRuntime.mockImplementation((id: string) => ({ id }));
     mocks.sleep.mockResolvedValue(undefined);
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -181,6 +184,41 @@ describe("runLoop", () => {
       .map((c) => String(c[0]))
       .join("");
     expect(stderr).toContain("otto-afk 9.9.9 (core ");
+  });
+
+  it("shows the active runtime in the version banner, stage banner, and summary", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    await runLoop(
+      loopOptions(dirs, {
+        bin: "otto-afk",
+        cliVersion: "9.9.9",
+        agentId: "codex",
+        agentDisplayName: "Codex CLI",
+      })
+    );
+
+    const stderr = stderrText();
+    // run banner
+    expect(stderr).toContain("otto-afk 9.9.9 (core ");
+    expect(stderr).toContain("runtime: Codex CLI");
+    // stage banner names the runtime
+    expect(stderr).toMatch(/iteration 1\/1 · implementer .*Codex CLI/);
+    // summary line names the runtime id
+    expect(stdoutText()).toContain("runtime: codex");
+  });
+
+  it("defaults the runtime to Claude when not provided", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    await runLoop(loopOptions(dirs, { bin: "otto-afk", cliVersion: "9.9.9" }));
+
+    expect(stderrText()).toContain("runtime: Claude Code");
+    expect(stdoutText()).toContain("runtime: claude");
   });
 
   it("uses the bin name in the wake-lock reason", async () => {
@@ -790,6 +828,227 @@ describe("runLoop", () => {
     const waited = Number(mocks.sleep.mock.calls.at(-1)?.[0]);
     expect(waited).toBeGreaterThan(0);
     expect(mocks.runStage).toHaveBeenCalledTimes(2);
+  });
+
+  describe("auto-switch on limit", () => {
+    const runtimeOf = (call: number) =>
+      (mocks.runStage.mock.calls[call][6] as { runtime: { id: string } })
+        .runtime.id;
+
+    it("switches to the fallback runtime on a rate limit instead of waiting", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      writeFileSync(
+        join(dirs.packageDir, "templates", stage.template),
+        "{{ RESUME }}\nrun {{ INPUTS }}",
+        "utf8"
+      );
+      const { RateLimitError } = await import("../rate-limit.js");
+      const future = Math.floor(Date.now() / 1000) + 600;
+      mocks.runStage
+        .mockRejectedValueOnce(new RateLimitError("session limit", future))
+        .mockResolvedValueOnce(ok(sentinel));
+
+      await runLoop(
+        loopOptions(dirs, {
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "claude",
+          agentDisplayName: "Claude Code",
+          fallbackAgentId: "codex",
+          fallbackAgentDisplayName: "Codex CLI",
+          autoSwitchOnLimit: true,
+        })
+      );
+
+      expect(mocks.runStage).toHaveBeenCalledTimes(2);
+      expect(runtimeOf(0)).toBe("claude");
+      expect(runtimeOf(1)).toBe("codex"); // retried on the fallback
+      expect(mocks.sleep).not.toHaveBeenCalled(); // switched, did not wait
+      expect(stderrText()).toContain("auto-switch");
+      expect(stdoutText()).toContain("runtime: claude -> codex");
+      expect(String(mocks.runStage.mock.calls[1][1])).toContain(
+        "Auto-switched from Claude Code to Codex CLI after a rate limit"
+      );
+      expect(String(mocks.runStage.mock.calls[1][1])).toContain(
+        "Reconcile against git history and the working tree"
+      );
+    });
+
+    it("passes the auto-switch reconciliation note into the review panel", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const reviewer: Stage = { name: "reviewer", template: "stage.md" };
+      const { RateLimitError } = await import("../rate-limit.js");
+      const future = Math.floor(Date.now() / 1000) + 600;
+      mocks.runStage
+        .mockRejectedValueOnce(new RateLimitError("session limit", future))
+        .mockResolvedValueOnce(ok("keep going"));
+      mocks.runPanel.mockResolvedValue(ok("<review>OK</review>"));
+
+      await runLoop(
+        loopOptions(dirs, {
+          stages: [stage, reviewer] as [Stage, Stage],
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "claude",
+          agentDisplayName: "Claude Code",
+          fallbackAgentId: "codex",
+          fallbackAgentDisplayName: "Codex CLI",
+          autoSwitchOnLimit: true,
+          reviewLenses: ["correctness"],
+        })
+      );
+
+      expect(mocks.runPanel).toHaveBeenCalledTimes(1);
+      expect(mocks.runPanel.mock.calls[0][0].resumeNote).toContain(
+        "Auto-switched from Claude Code to Codex CLI after a rate limit"
+      );
+    });
+
+    it("waits instead of switching when the fallback adapter is unavailable", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const { RateLimitError } = await import("../rate-limit.js");
+      const future = Math.floor(Date.now() / 1000) + 600;
+      mocks.getAgentRuntime.mockImplementation((id: string) => {
+        if (id === "codex") throw new Error("codex unavailable");
+        return { id };
+      });
+      mocks.runStage
+        .mockRejectedValueOnce(new RateLimitError("session limit", future))
+        .mockResolvedValueOnce(ok(sentinel));
+
+      await runLoop(
+        loopOptions(dirs, {
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "claude",
+          agentDisplayName: "Claude Code",
+          fallbackAgentId: "codex",
+          fallbackAgentDisplayName: "Codex CLI",
+          autoSwitchOnLimit: true,
+        })
+      );
+
+      expect(mocks.sleep).toHaveBeenCalled();
+      expect(runtimeOf(1)).toBe("claude");
+      expect(stderrText()).toContain("auto-switch skipped");
+      expect(stdoutText()).toContain("runtime: claude");
+      expect(stdoutText()).not.toContain("runtime: claude -> codex");
+    });
+
+    it("switches codex -> claude (reverse direction)", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const { RateLimitError } = await import("../rate-limit.js");
+      const future = Math.floor(Date.now() / 1000) + 600;
+      mocks.runStage
+        .mockRejectedValueOnce(new RateLimitError("session limit", future))
+        .mockResolvedValueOnce(ok(sentinel));
+
+      await runLoop(
+        loopOptions(dirs, {
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "codex",
+          agentDisplayName: "Codex CLI",
+          fallbackAgentId: "claude",
+          fallbackAgentDisplayName: "Claude Code",
+          autoSwitchOnLimit: true,
+        })
+      );
+
+      expect(runtimeOf(1)).toBe("claude");
+      expect(stdoutText()).toContain("runtime: codex -> claude");
+    });
+
+    it("waits instead of switching when auto-switch is off", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const { RateLimitError } = await import("../rate-limit.js");
+      const future = Math.floor(Date.now() / 1000) + 600;
+      mocks.runStage
+        .mockRejectedValueOnce(new RateLimitError("session limit", future))
+        .mockResolvedValueOnce(ok(sentinel));
+
+      await runLoop(
+        loopOptions(dirs, {
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "claude",
+          fallbackAgentId: "codex",
+          fallbackAgentDisplayName: "Codex CLI",
+          autoSwitchOnLimit: false,
+        })
+      );
+
+      expect(mocks.sleep).toHaveBeenCalled();
+      expect(runtimeOf(1)).toBe("claude"); // stayed on the primary
+      expect(stderrText()).not.toContain("auto-switch");
+    });
+
+    it("waits for reset when the fallback runtime also hits a limit", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const { RateLimitError } = await import("../rate-limit.js");
+      const future = Math.floor(Date.now() / 1000) + 600;
+      mocks.runStage
+        .mockRejectedValueOnce(new RateLimitError("session limit", future)) // claude → switch
+        .mockRejectedValueOnce(new RateLimitError("session limit", future)) // codex also limits
+        .mockResolvedValueOnce(ok(sentinel));
+
+      await runLoop(
+        loopOptions(dirs, {
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "claude",
+          fallbackAgentId: "codex",
+          fallbackAgentDisplayName: "Codex CLI",
+          autoSwitchOnLimit: true,
+        })
+      );
+
+      expect(mocks.runStage).toHaveBeenCalledTimes(3);
+      expect(mocks.sleep).toHaveBeenCalled(); // waited after the fallback limit
+      expect(runtimeOf(2)).toBe("codex"); // did not switch back
+      const switchCount = stderrText().split("auto-switch").length - 1;
+      expect(switchCount).toBe(1); // only one switch announced
+    });
+
+    it("resumes onto the persisted fallback runtime", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const { writeState } = await import("../state.js");
+      writeState(dirs.workspaceDir, {
+        bin: "otto-afk",
+        mode: "afk",
+        inputs: "plan",
+        iteration: 1,
+        of: 1,
+        status: "running",
+        agent: "codex",
+        startedAt: "x",
+        updatedAt: "x",
+      });
+      mocks.runStage.mockResolvedValue(ok(sentinel));
+
+      await runLoop(
+        loopOptions(dirs, {
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "claude",
+          agentDisplayName: "Claude Code",
+          fallbackAgentId: "codex",
+          fallbackAgentDisplayName: "Codex CLI",
+          autoSwitchOnLimit: true,
+        })
+      );
+
+      expect(runtimeOf(0)).toBe("codex"); // resumed on the fallback
+      expect(stderrText().split("\n")[0]).toContain("runtime: Codex CLI");
+      expect(stdoutText()).toContain("runtime: claude -> codex");
+    });
   });
 
   it("halts cleanly when the reset is beyond maxWaitMs", async () => {

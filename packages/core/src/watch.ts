@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import type { AgentRuntimeId } from "./agent-runtime.js";
 import { acquire, type Releaser } from "./keepalive.js";
 import {
   createLinearClient,
@@ -176,6 +177,16 @@ export type RunWatchOptions = {
    * watch never picks up issues from outside the scope.
    */
   scope?: WorkScope;
+  /** Active agent runtime id, threaded into each loop. Default "claude". */
+  agentId?: AgentRuntimeId;
+  /** Active runtime display name, shown in the per-run banner. Default "Claude Code". */
+  agentDisplayName?: string;
+  /** Fallback runtime for auto-switch-on-limit, threaded into each loop. */
+  fallbackAgentId?: AgentRuntimeId;
+  /** Display name for the fallback runtime. */
+  fallbackAgentDisplayName?: string;
+  /** Switch to the fallback runtime on a limit instead of waiting. Default false. */
+  autoSwitchOnLimit?: boolean;
   /**
    * Multi-target watch: several GitHub scopes the daemon rotates through. When
    * set, each cycle polls every scope, runs one loop for the first scope with
@@ -327,6 +338,11 @@ export async function runWatch(opts: RunWatchOptions): Promise<void> {
             signal: daemonAbort.signal,
             bin,
             cliVersion: opts.cliVersion,
+            agentId: opts.agentId,
+            agentDisplayName: opts.agentDisplayName,
+            fallbackAgentId: opts.fallbackAgentId,
+            fallbackAgentDisplayName: opts.fallbackAgentDisplayName,
+            autoSwitchOnLimit: opts.autoSwitchOnLimit,
           });
           cumulativeCost += outcome.costUsd;
           process.stderr.write(

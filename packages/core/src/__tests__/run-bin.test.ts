@@ -87,11 +87,9 @@ describe("runBin agent runtime", () => {
     vi.spyOn(console, "error").mockImplementation((...a: any[]) => {
       errs.push(a.join(" "));
     });
-    const exit = vi
-      .spyOn(process, "exit")
-      .mockImplementation(((): never => {
-        throw new Error("exit");
-      }) as any);
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("exit");
+    }) as any);
 
     await expect(runBin(["plan", "1"], cfg)).rejects.toThrow("exit");
     expect(exit).toHaveBeenCalledWith(1);
@@ -105,15 +103,13 @@ describe("runBin agent runtime", () => {
     vi.spyOn(console, "error").mockImplementation((...a: any[]) => {
       errs.push(a.join(" "));
     });
-    const exit = vi
-      .spyOn(process, "exit")
-      .mockImplementation(((): never => {
-        throw new Error("exit");
-      }) as any);
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("exit");
+    }) as any);
 
-    await expect(runBin(["--agent", "codex", "plan", "1"], cfg)).rejects.toThrow(
-      "exit"
-    );
+    await expect(
+      runBin(["--agent", "codex", "plan", "1"], cfg)
+    ).rejects.toThrow("exit");
     expect(exit).toHaveBeenCalledWith(1);
     expect(errs.join("")).toContain("Codex CLI");
   });
@@ -139,7 +135,9 @@ describe("runBin fallback runtime", () => {
     const stdout = captureStdout();
     await expect(runBin(["--print-config"], cfg)).resolves.toBeUndefined();
     const text = stdout.join("");
-    expect(text).toContain("fallback              codex (Codex CLI, env) · auto-switch on");
+    expect(text).toContain(
+      "fallback              codex (Codex CLI, env) · auto-switch on"
+    );
   });
 
   it("defaults fallback to off in --print-config", async () => {
@@ -167,14 +165,33 @@ describe("runBin fallback runtime", () => {
     vi.spyOn(console, "error").mockImplementation((...a: any[]) => {
       errs.push(a.join(" "));
     });
-    const exit = vi
-      .spyOn(process, "exit")
-      .mockImplementation(((): never => {
-        throw new Error("exit");
-      }) as any);
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("exit");
+    }) as any);
 
     await expect(runBin(["plan", "1"], cfg)).rejects.toThrow("exit");
     expect(exit).toHaveBeenCalledWith(1);
-    expect(errs.join("")).toContain("OTTO_FALLBACK_AGENT must be one of claude|codex");
+    expect(errs.join("")).toContain(
+      "OTTO_FALLBACK_AGENT must be one of claude|codex"
+    );
+  });
+
+  it("fails a real run when auto-switch targets an unavailable fallback runtime", async () => {
+    delete process.env.OTTO_AGENT;
+    process.env.OTTO_FALLBACK_AGENT = "codex";
+    process.env.OTTO_AUTO_SWITCH_ON_LIMIT = "1";
+    captureStdout();
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: any[]) => {
+      errs.push(a.join(" "));
+    });
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("exit");
+    }) as any);
+
+    await expect(runBin(["plan", "1"], cfg)).rejects.toThrow("exit");
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errs.join("")).toContain("fallback runtime unavailable");
+    expect(errs.join("")).toContain("Codex CLI");
   });
 });

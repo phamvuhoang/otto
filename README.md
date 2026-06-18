@@ -112,9 +112,9 @@ otto-ghafk --watch --watch-interval 300 5
 # Drive a repo other than the current directory; pin the model
 OTTO_WORKSPACE=~/code/other-repo OTTO_MODEL=opus otto-afk "./docs/plans/feature.md" 10
 
-# Pick the agent runtime (Claude is the default); verify it before spending tokens
+# Inspect Codex runtime selection/preflight (execution adapter not shipped yet)
 otto-afk --agent codex --print-config
-OTTO_AGENT=codex otto-ghafk 10
+OTTO_AGENT=codex otto-ghafk --print-config
 ```
 
 Full flag reference and more verify / apply-review recipes: **[docs/CLI.md](./docs/CLI.md)**.

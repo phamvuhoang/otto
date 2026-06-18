@@ -117,6 +117,23 @@ describe("runPanel", () => {
     expect(out.result).toBe("finding");
   });
 
+  it("threads the resume note into panel sub-stage vars", async () => {
+    mocks.executeStage.mockResolvedValue(ok("finding"));
+
+    await runPanel({
+      lenses: ["correctness"],
+      workspaceDir: ws,
+      packageDir: "/pkg",
+      iteration: 1,
+      maxRetries: 0,
+      cooldownMs: 0,
+      resumeNote: "Switch note",
+      onStage: () => ({ stop: true, cooldownFactor: 1 }),
+    });
+
+    expect(mocks.executeStage.mock.calls[0][0].vars.RESUME).toBe("Switch note");
+  });
+
   it("stops before synth when the budget is spent during adversarial verify", async () => {
     mocks.executeStage.mockImplementation(
       (opts: { stage: { template: string } }) =>

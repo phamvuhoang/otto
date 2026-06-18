@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   release: vi.fn(),
   runPanel: vi.fn(),
   runStage: vi.fn(),
+  getAgentRuntime: vi.fn((id: string) => ({ id })),
   sleep: vi.fn(),
 }));
 
@@ -34,7 +35,7 @@ vi.mock("../notify.js", () => ({
 
 vi.mock("../runner.js", () => ({
   runStage: mocks.runStage,
-  getAgentRuntime: (id: string) => ({ id }),
+  getAgentRuntime: mocks.getAgentRuntime,
   stageLogPath: (workspaceDir: string, iteration: number, stageName: string) =>
     join(
       workspaceDir,
@@ -143,6 +144,7 @@ describe("runLoop", () => {
     vi.useRealTimers();
     for (const mock of Object.values(mocks)) mock.mockReset();
     mocks.acquire.mockReturnValue({ release: mocks.release });
+    mocks.getAgentRuntime.mockImplementation((id: string) => ({ id }));
     mocks.sleep.mockResolvedValue(undefined);
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -830,13 +832,17 @@ describe("runLoop", () => {
 
   describe("auto-switch on limit", () => {
     const runtimeOf = (call: number) =>
-      (
-        mocks.runStage.mock.calls[call][6] as { runtime: { id: string } }
-      ).runtime.id;
+      (mocks.runStage.mock.calls[call][6] as { runtime: { id: string } })
+        .runtime.id;
 
     it("switches to the fallback runtime on a rate limit instead of waiting", async () => {
       const dirs = makeDirs();
       roots.push(dirs.root);
+      writeFileSync(
+        join(dirs.packageDir, "templates", stage.template),
+        "{{ RESUME }}\nrun {{ INPUTS }}",
+        "utf8"
+      );
       const { RateLimitError } = await import("../rate-limit.js");
       const future = Math.floor(Date.now() / 1000) + 600;
       mocks.runStage
@@ -861,6 +867,75 @@ describe("runLoop", () => {
       expect(mocks.sleep).not.toHaveBeenCalled(); // switched, did not wait
       expect(stderrText()).toContain("auto-switch");
       expect(stdoutText()).toContain("runtime: claude -> codex");
+      expect(String(mocks.runStage.mock.calls[1][1])).toContain(
+        "Auto-switched from Claude Code to Codex CLI after a rate limit"
+      );
+      expect(String(mocks.runStage.mock.calls[1][1])).toContain(
+        "Reconcile against git history and the working tree"
+      );
+    });
+
+    it("passes the auto-switch reconciliation note into the review panel", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const reviewer: Stage = { name: "reviewer", template: "stage.md" };
+      const { RateLimitError } = await import("../rate-limit.js");
+      const future = Math.floor(Date.now() / 1000) + 600;
+      mocks.runStage
+        .mockRejectedValueOnce(new RateLimitError("session limit", future))
+        .mockResolvedValueOnce(ok("keep going"));
+      mocks.runPanel.mockResolvedValue(ok("<review>OK</review>"));
+
+      await runLoop(
+        loopOptions(dirs, {
+          stages: [stage, reviewer] as [Stage, Stage],
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "claude",
+          agentDisplayName: "Claude Code",
+          fallbackAgentId: "codex",
+          fallbackAgentDisplayName: "Codex CLI",
+          autoSwitchOnLimit: true,
+          reviewLenses: ["correctness"],
+        })
+      );
+
+      expect(mocks.runPanel).toHaveBeenCalledTimes(1);
+      expect(mocks.runPanel.mock.calls[0][0].resumeNote).toContain(
+        "Auto-switched from Claude Code to Codex CLI after a rate limit"
+      );
+    });
+
+    it("waits instead of switching when the fallback adapter is unavailable", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const { RateLimitError } = await import("../rate-limit.js");
+      const future = Math.floor(Date.now() / 1000) + 600;
+      mocks.getAgentRuntime.mockImplementation((id: string) => {
+        if (id === "codex") throw new Error("codex unavailable");
+        return { id };
+      });
+      mocks.runStage
+        .mockRejectedValueOnce(new RateLimitError("session limit", future))
+        .mockResolvedValueOnce(ok(sentinel));
+
+      await runLoop(
+        loopOptions(dirs, {
+          bin: "otto-afk",
+          mode: "afk",
+          agentId: "claude",
+          agentDisplayName: "Claude Code",
+          fallbackAgentId: "codex",
+          fallbackAgentDisplayName: "Codex CLI",
+          autoSwitchOnLimit: true,
+        })
+      );
+
+      expect(mocks.sleep).toHaveBeenCalled();
+      expect(runtimeOf(1)).toBe("claude");
+      expect(stderrText()).toContain("auto-switch skipped");
+      expect(stdoutText()).toContain("runtime: claude");
+      expect(stdoutText()).not.toContain("runtime: claude -> codex");
     });
 
     it("switches codex -> claude (reverse direction)", async () => {
@@ -971,6 +1046,7 @@ describe("runLoop", () => {
       );
 
       expect(runtimeOf(0)).toBe("codex"); // resumed on the fallback
+      expect(stderrText().split("\n")[0]).toContain("runtime: Codex CLI");
       expect(stdoutText()).toContain("runtime: claude -> codex");
     });
   });

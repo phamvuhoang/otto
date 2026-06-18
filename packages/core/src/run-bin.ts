@@ -20,6 +20,7 @@ import {
 } from "./cli-help.js";
 import { detachAndExit } from "./detach.js";
 import { runLoop } from "./loop.js";
+import { getAgentRuntime } from "./runner.js";
 import type { Stage } from "./stages.js";
 import { parseGithubRepo, describeScope, type WorkScope } from "./task-key.js";
 import type { TokenMode } from "./tokens.js";
@@ -167,9 +168,8 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   // Resolve fallback-on-limit config (--fallback-agent / OTTO_FALLBACK_AGENT /
   // config "fallbackAgent" + --auto-switch-on-limit / OTTO_AUTO_SWITCH_ON_LIMIT /
   // config "autoSwitchOnLimit"). Default OFF — switching providers is opt-in.
-  // This slice resolves + reports config only; the actual switch lands in a
-  // later issue-24 slice. An invalid value is reported by --print-config and
-  // fatal on a real run, mirroring the agent handling.
+  // An invalid value is reported by --print-config and fatal on a real run,
+  // mirroring the agent handling.
   let fallback: ResolvedFallback = { autoSwitch: false };
   let fallbackError: string | undefined;
   try {
@@ -391,6 +391,17 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       `the ${agent.displayName} runtime is not implemented yet; only Claude Code is currently runnable (see issue #24). Selection source: ${agent.source}.`
     );
     process.exit(1);
+  }
+  // A configured fallback is harmless while auto-switch is off, but an enabled
+  // switch must not defer an unavailable-adapter crash until a paid run hits a
+  // limit. Validate the fallback adapter before branch setup or stage execution.
+  if (fallback.autoSwitch && fallback.agent) {
+    try {
+      getAgentRuntime(fallback.agent.id);
+    } catch (err) {
+      console.error(`fallback runtime unavailable: ${(err as Error).message}`);
+      process.exit(1);
+    }
   }
 
   if (flags.issue != null && !cfg.issueStage) {

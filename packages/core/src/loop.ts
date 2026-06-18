@@ -9,7 +9,7 @@ import { sleep, isThrottle, nextCooldownFactor } from "./pacing.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { cleanScratch } from "./scratch.js";
-import { stageLogPath, type StageResult } from "./runner.js";
+import { getAgentRuntime, stageLogPath, type StageResult } from "./runner.js";
 import { executeStage } from "./stage-exec.js";
 import {
   clearState,
@@ -212,7 +212,25 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   let switched = false;
   const switchFromId: AgentRuntimeId = agentId;
 
-  const versionLine = `${bin} ${cliVersion} (core ${readCoreVersion()}) · runtime: ${agentDisplayName}`;
+  const nowIso = () => new Date().toISOString();
+  if (fresh) clearState(workspaceDir);
+  const prior = fresh ? null : readState(workspaceDir);
+  const resuming = matchesResume(prior, { bin, mode, inputs });
+  const startIteration = resuming ? prior!.iteration : 1;
+  const total = resuming ? prior!.of : iterations;
+  let resumeNote = "";
+
+  // Resume keeps the fallback: if the prior run had switched runtimes, restore
+  // it before printing the run banner so the first visible runtime matches the
+  // runtime the resumed paid stage will actually use. `--fresh` clears state, so
+  // a fresh run always starts on the primary.
+  if (resuming && prior!.agent && prior!.agent !== agentId) {
+    activeAgentId = prior!.agent;
+    activeAgentDisplayName = AGENT_DISPLAY_NAMES[prior!.agent];
+    switched = true;
+  }
+
+  const versionLine = `${bin} ${cliVersion} (core ${readCoreVersion()}) · runtime: ${activeAgentDisplayName}`;
   process.stderr.write(
     `${USE_COLOR ? `${dim("━━━")} ${bold(versionLine)} ${dim("━━━")}` : `== ${versionLine} ==`}\n`
   );
@@ -323,15 +341,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   };
   let sawFailure = false;
 
-  const nowIso = () => new Date().toISOString();
-  if (fresh) clearState(workspaceDir);
-  const prior = fresh ? null : readState(workspaceDir);
-  const resuming = matchesResume(prior, { bin, mode, inputs });
-  const startIteration = resuming ? prior!.iteration : 1;
-  const total = resuming ? prior!.of : iterations;
-  let resumeNote = "";
   if (resuming) {
-    resumeNote = `Resumed run (iteration ${startIteration} of ${total}). Prior work is committed — reconcile against git history and the working tree before acting; do not redo completed tasks.`;
+    resumeNote = `Resumed run (iteration ${startIteration} of ${total}). Prior work may already be committed or partially applied. Reconcile against git history and the working tree before acting; do not redo completed tasks.`;
     process.stdout.write(
       `${greenOut(SYM_OUT.bullet)} ${boldOut("resuming")}${dimOut(` from iteration ${startIteration}/${total}`)}\n`
     );
@@ -353,15 +364,6 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       startedAt: prior?.startedAt ?? nowIso(),
       updatedAt: nowIso(),
     });
-
-  // Resume keeps the fallback: if the prior run had switched runtimes, restore
-  // it so the resumed run continues on the fallback. `--fresh` clears state, so
-  // a fresh run always starts on the primary.
-  if (resuming && prior!.agent && prior!.agent !== agentId) {
-    activeAgentId = prior!.agent;
-    activeAgentDisplayName = AGENT_DISPLAY_NAMES[prior!.agent];
-    switched = true;
-  }
 
   if (resuming && prior!.status === "waiting-rate-limit") {
     const waitMs = computeWaitMs(
@@ -412,6 +414,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               tokenMode,
               signal: activeSignal,
               agentId: activeAgentId,
+              resumeNote,
               onStage: accountStage,
             });
           }
@@ -470,10 +473,42 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
                 fallbackAgentId &&
                 activeAgentId !== fallbackAgentId
               ) {
+                try {
+                  getAgentRuntime(fallbackAgentId);
+                } catch (switchErr) {
+                  const fallbackName = fallbackDisplayName ?? fallbackAgentId;
+                  process.stderr.write(
+                    `${dim(`auto-switch skipped: ${fallbackName} is unavailable (${(switchErr as Error).message}); waiting for ${activeAgentDisplayName} reset`)}\n`
+                  );
+                  const waitMs = computeWaitMs(
+                    resetsAt,
+                    Date.now(),
+                    RATE_LIMIT_BUFFER_MS,
+                    RATE_LIMIT_FALLBACK_MS
+                  );
+                  if (waitMs > maxWaitMs) {
+                    persist(i, "interrupted", resetsAt);
+                    process.stderr.write(
+                      `${dim(`reset is beyond --max-wait; re-run to resume from iteration ${i}`)}\n`
+                    );
+                    summarize("halted (rate limit)", i - 1);
+                    return outcome();
+                  }
+                  persist(i, "waiting-rate-limit", resetsAt);
+                  const mins = Math.round(waitMs / 60000);
+                  process.stderr.write(
+                    `${dim(`⏸ rate limit — waiting ~${mins}m until reset, then resuming`)}\n`
+                  );
+                  await sleep(waitMs, activeSignal);
+                  persist(i, "running");
+                  continue;
+                }
+
                 const fromName = activeAgentDisplayName;
                 activeAgentId = fallbackAgentId;
                 activeAgentDisplayName = fallbackDisplayName ?? fallbackAgentId;
                 switched = true;
+                resumeNote = `Auto-switched from ${fromName} to ${activeAgentDisplayName} after a rate limit while rerunning iteration ${i} stage ${stage.name}. The previous attempt may have made partial workspace changes before it stopped. Reconcile against git history and the working tree before acting; do not redo completed tasks or partial edits.`;
                 process.stderr.write(
                   `${dim(`↪ auto-switch on rate limit: ${fromName} → ${activeAgentDisplayName} for iteration ${i} ${stage.name}`)}\n`
                 );
@@ -509,7 +544,12 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             summarize("aborted", i - 1);
             return outcome();
           }
-          const stageLog = stageLogPath(workspaceDir, i, stage.name, activeAgentId);
+          const stageLog = stageLogPath(
+            workspaceDir,
+            i,
+            stage.name,
+            activeAgentId
+          );
           const failureMarker = `[failure] iteration ${i} stage ${stage.name} failed after ${maxRetries} retries: ${(err as Error).message}`;
           try {
             appendFileSync(stageLog, failureMarker + "\n");

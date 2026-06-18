@@ -86,6 +86,8 @@ export type RunPanelOptions = {
   signal?: AbortSignal;
   /** Active runtime id; threaded into each sub-stage so panel logs are runtime-labelled. */
   agentId?: AgentRuntimeId;
+  /** Resume/switch note injected into each panel sub-stage prompt. */
+  resumeNote?: string;
   /**
    * Called after every panel sub-agent (each lens + synth) so the loop owns
    * budget + adaptive pacing for them too. Returns whether the budget is now
@@ -122,6 +124,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     tokenMode = "off",
     signal,
     agentId,
+    resumeNote = "",
     onStage,
   } = opts;
   const panelRel = `panel-${process.pid}-${iteration}-${Date.now()}`;
@@ -166,7 +169,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
       phaseLine(`${lens} lens (${i + 1}/${lenses.length})`);
       const sr = await executeStage({
         stage: LENS_STAGE,
-        vars: { LENS: lens },
+        vars: { LENS: lens, RESUME: resumeNote },
         workspaceDir,
         packageDir,
         iteration,
@@ -194,7 +197,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     phaseLine("adversarial verify");
     const verify = await executeStage({
       stage: VERIFY_STAGE,
-      vars: { FINDINGS_DIR: findingsDirRef },
+      vars: { FINDINGS_DIR: findingsDirRef, RESUME: resumeNote },
       workspaceDir,
       packageDir,
       iteration,
@@ -232,7 +235,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     phaseLine("synthesize & fix");
     const synth = await executeStage({
       stage: SYNTH_STAGE,
-      vars: { FINDINGS_DIR: findingsDirRef },
+      vars: { FINDINGS_DIR: findingsDirRef, RESUME: resumeNote },
       workspaceDir,
       packageDir,
       iteration,

@@ -55,26 +55,21 @@ Every mode above runs against an **agent runtime** — the underlying agent CLI 
 # default — Claude Code
 otto-afk "./docs/plans/feature.md" 10
 
-# select a runtime for one run
-otto-afk --agent codex "./docs/plans/feature.md" 10
-
-# select via environment (applies to every bin)
-OTTO_AGENT=codex otto-ghafk 10
-
-# verify the active runtime BEFORE any paid invocation
+# inspect Codex selection/preflight before any paid invocation
 otto-afk --agent codex --print-config
+OTTO_AGENT=codex otto-ghafk --print-config
 ```
 
 `--print-config` shows the resolved `runtime` (`<id> (<display name>)`), its `runtime source` (default/flag/env/config), the runtime-aware `model` line, and the `fallback` setting. The run banner echoes it (`otto-afk 0.x (core 0.x) · runtime: Claude Code`), each stage banner appends it (`iteration 2/10 · implementer · Claude Code`), the per-stage NDJSON log path carries a `-<id>` suffix (`…-iter2-implementer-claude.ndjson`), and the final summary prints `runtime: <id>` — or `runtime: claude -> codex (switched once: rate limit)` after an auto-switch.
 
-**Runtime status today:** `claude` (Claude Code) is fully supported and the default. `codex` (Codex CLI) is recognized end-to-end for **selection, model env, preflight, and fallback config**, but its execution adapter is **not yet implemented** — a real `--agent codex` run exits with a clear "not implemented yet" message rather than silently falling back to Claude. Auto-switch orchestration is implemented and unit-tested; cross-provider switching to `codex` becomes live when the Codex adapter lands.
+**Runtime status today:** `claude` (Claude Code) is fully supported and the default. `codex` (Codex CLI) is recognized end-to-end for **selection, model env, preflight, and fallback config**, but its execution adapter is **not yet implemented** — a real `--agent codex` run exits with a clear "not implemented yet" message rather than silently falling back to Claude. Auto-switch orchestration is implemented and unit-tested; a real switch into an unavailable runtime is rejected/skipped until that runtime's adapter lands.
 
 ### Provider-specific model (`OTTO_CLAUDE_MODEL` / `OTTO_CODEX_MODEL`)
 
 `OTTO_MODEL` pins the model for whichever runtime is active. To pin a different model per runtime when you switch between them, set the provider-specific override — it wins over `OTTO_MODEL` for that runtime only:
 
 ```bash
-OTTO_CLAUDE_MODEL=<claude-model> OTTO_CODEX_MODEL=<codex-model> otto-afk --agent codex "<plan-and-prd>" 10
+OTTO_CLAUDE_MODEL=<claude-model> OTTO_CODEX_MODEL=<codex-model> otto-afk --agent codex --print-config
 ```
 
 Precedence per runtime: `OTTO_<RUNTIME>_MODEL` → `OTTO_MODEL` → the CLI's own default (an empty/whitespace override falls through). `--print-config`'s `model` line shows the resolved value and which env var supplied it.

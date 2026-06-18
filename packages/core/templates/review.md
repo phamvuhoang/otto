@@ -1,3 +1,5 @@
+{{ RESUME }}
+
 <head>
 
 !?`git rev-parse HEAD|||(no commits)`

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.8.0...otto-core-v0.8.1) (2026-06-18)
+
+
+### Bug Fixes
+
+* **agent:** pass Codex approval flag before exec ([#35](https://github.com/phamvuhoang/otto/issues/35)) ([bf105f9](https://github.com/phamvuhoang/otto/commit/bf105f942261c5fd7526fd6021ebc7ec092180fc))
+
 ## [0.8.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.7.0...otto-core-v0.8.0) (2026-06-18)
 
 

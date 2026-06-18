@@ -411,13 +411,13 @@ export function buildCodexArgs(
 ): string[] {
   return [
     "codex",
+    "--ask-for-approval",
+    "never",
     "exec",
     "--json",
     "--skip-git-repo-check",
     "--sandbox",
     sandboxMode,
-    "--ask-for-approval",
-    "never",
     ...modelArgs,
     `Read the full instructions from the file ./${promptRelPath} in the current workspace and execute them.`,
   ];

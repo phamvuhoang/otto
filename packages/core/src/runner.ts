@@ -432,6 +432,8 @@ export function buildCodexEnv(
   env: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
   const next: NodeJS.ProcessEnv = { ...env };
+  // Keep the compatibility mapping scoped to the child so Otto's own process
+  // does not mutate the user's shell-level credential environment.
   if (!next.CODEX_API_KEY && next.OPENAI_API_KEY) {
     next.CODEX_API_KEY = next.OPENAI_API_KEY;
   }

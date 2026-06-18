@@ -16,7 +16,10 @@ export class RateLimitError extends Error {
 export function isLimitResult(r: StageResult): boolean {
   if (!r.isError) return false;
   if (r.apiErrorStatus != null && /429/.test(r.apiErrorStatus)) return true;
-  return /session limit|usage limit|rate.?limit/i.test(r.result);
+  const text = `${r.apiErrorStatus ?? ""}\n${r.result}`;
+  return /session limit|usage limit|rate.?limit|quota|too many requests/i.test(
+    text
+  );
 }
 
 /** resetsAt (unix seconds) from a `rate_limit_event`, else null. */

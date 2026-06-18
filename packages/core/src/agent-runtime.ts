@@ -1,11 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/**
- * The agent CLI Otto drives a stage with. `claude` is the only runtime that is
- * currently runnable end-to-end; `codex` is a known id (so its selection is
- * visible in --print-config) whose adapter lands in a later issue-24 slice.
- */
+/** The agent CLI Otto drives a stage with. */
 export type AgentRuntimeId = "claude" | "codex";
 
 /** Where the resolved runtime came from, for --print-config transparency. */
@@ -66,7 +62,8 @@ export function resolveAgentRuntime(opts: {
   const envRaw = opts.env?.trim();
   if (envRaw) return mk(parseAgentId(envRaw, "OTTO_AGENT"), "env");
   const cfgRaw = opts.config?.trim();
-  if (cfgRaw) return mk(parseAgentId(cfgRaw, '.otto/config.json "agent"'), "config");
+  if (cfgRaw)
+    return mk(parseAgentId(cfgRaw, '.otto/config.json "agent"'), "config");
   return mk(DEFAULT_AGENT, "default");
 }
 
@@ -121,7 +118,10 @@ export function resolveFallback(opts: {
     const cfgRaw = opts.configAgent?.trim();
     if (envRaw) agent = mk(parseAgentId(envRaw, "OTTO_FALLBACK_AGENT"), "env");
     else if (cfgRaw)
-      agent = mk(parseAgentId(cfgRaw, '.otto/config.json "fallbackAgent"'), "config");
+      agent = mk(
+        parseAgentId(cfgRaw, '.otto/config.json "fallbackAgent"'),
+        "config"
+      );
   }
 
   let autoSwitch = false;

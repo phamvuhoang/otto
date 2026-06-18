@@ -7,7 +7,9 @@ import { describe, expect, it } from "vitest";
 import { runPreflight, whichBin, type PreflightProbes } from "../preflight.js";
 
 /** Probes where everything is present; tests flip individual pieces off. */
-function allPresentProbes(overrides: Partial<PreflightProbes> = {}): PreflightProbes {
+function allPresentProbes(
+  overrides: Partial<PreflightProbes> = {}
+): PreflightProbes {
   return {
     resolveBin: () => "/usr/local/bin/found",
     pathExists: () => true,
@@ -50,7 +52,9 @@ describe("runPreflight", () => {
   it("flags a missing claude CLI with a remediation hint", () => {
     const results = runPreflight(
       { bin: "otto-afk", workspaceDir: "/repo" },
-      allPresentProbes({ resolveBin: (n) => (n === "claude" ? null : "/bin/x") })
+      allPresentProbes({
+        resolveBin: (n) => (n === "claude" ? null : "/bin/x"),
+      })
     );
     const claude = byLabel(results)["claude CLI"];
     expect(claude.ok).toBe(false);
@@ -203,7 +207,20 @@ describe("runPreflight codex runtime (issue #24 P3)", () => {
     expect(auth.detail).toMatch(/auth\.json/);
   });
 
-  it("accepts OPENAI_API_KEY as codex auth when no auth file exists", () => {
+  it("accepts CODEX_API_KEY as codex auth when no auth file exists", () => {
+    const results = runPreflight(
+      { bin: "otto-afk", workspaceDir: "/repo", agentId: "codex" },
+      allPresentProbes({
+        pathExists: () => false,
+        env: { CODEX_API_KEY: "sk-live" },
+      })
+    );
+    const auth = byLabel(results)["codex auth"];
+    expect(auth.ok).toBe(true);
+    expect(auth.detail).toMatch(/CODEX_API_KEY/);
+  });
+
+  it("accepts OPENAI_API_KEY as compatibility codex auth when no auth file exists", () => {
     const results = runPreflight(
       { bin: "otto-afk", workspaceDir: "/repo", agentId: "codex" },
       allPresentProbes({
@@ -214,6 +231,7 @@ describe("runPreflight codex runtime (issue #24 P3)", () => {
     const auth = byLabel(results)["codex auth"];
     expect(auth.ok).toBe(true);
     expect(auth.detail).toMatch(/OPENAI_API_KEY/);
+    expect(auth.detail).toMatch(/CODEX_API_KEY/);
   });
 
   it("flags missing codex auth with a remediation hint", () => {
@@ -224,6 +242,7 @@ describe("runPreflight codex runtime (issue #24 P3)", () => {
     const auth = byLabel(results)["codex auth"];
     expect(auth.ok).toBe(false);
     expect(auth.detail).toMatch(/codex login/);
+    expect(auth.detail).toMatch(/CODEX_API_KEY/);
     expect(auth.detail).toMatch(/OPENAI_API_KEY/);
   });
 

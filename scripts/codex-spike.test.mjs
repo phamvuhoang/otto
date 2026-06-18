@@ -1,7 +1,7 @@
 // Tests for the Codex CLI adapter SPIKE harness (issue #24, P2). Pins the
 // candidate Codex-event → StageResult mapping, rate-limit detection, preflight
-// detection, and argv builder against sample fixtures so the P3 adapter starts
-// from a verified contract. Run via `pnpm test` (node --test, auto-globbed).
+// detection, and argv builder against sample fixtures. Run via `pnpm test`
+// (node --test, auto-globbed).
 // No build / network / real codex binary needed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -117,7 +117,17 @@ test("codexPreflight detects CLI + auth distinctly", () => {
   assert.equal(noCli.cli.ok, false);
   assert.match(noCli.cli.detail, /not found/);
 
-  // Auth via OPENAI_API_KEY when no auth.json.
+  // Auth via CODEX_API_KEY when no auth.json.
+  const viaCodexEnv = codexPreflight({
+    resolveBin: () => "/usr/local/bin/codex",
+    pathExists: () => false,
+    home: "/home/u",
+    env: { CODEX_API_KEY: "sk-test" },
+  });
+  assert.equal(viaCodexEnv.auth.ok, true);
+  assert.match(viaCodexEnv.auth.detail, /CODEX_API_KEY/);
+
+  // Auth via OPENAI_API_KEY compatibility when no auth.json.
   const viaEnv = codexPreflight({
     resolveBin: () => "/usr/local/bin/codex",
     pathExists: () => false,
@@ -126,6 +136,7 @@ test("codexPreflight detects CLI + auth distinctly", () => {
   });
   assert.equal(viaEnv.auth.ok, true);
   assert.match(viaEnv.auth.detail, /OPENAI_API_KEY/);
+  assert.match(viaEnv.auth.detail, /CODEX_API_KEY/);
 
   // No auth at all.
   const noAuth = codexPreflight({

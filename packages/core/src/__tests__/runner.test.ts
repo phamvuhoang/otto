@@ -2,10 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildClaudeArgs,
+  buildCodexArgs,
+  buildCodexEnv,
   buildSandboxSettings,
   claudeRuntime,
+  codexRuntime,
+  createCodexStreamParser,
   getAgentRuntime,
   parseGraceMs,
+  resetsAtFromCodexEvent,
+  resolveCodexSandboxMode,
   resolveModelArgs,
   resolveModelSelection,
   resolveRunner,
@@ -164,6 +170,18 @@ describe("resolveRunner", () => {
   });
 });
 
+describe("resolveCodexSandboxMode", () => {
+  it("defaults Codex to workspace-write", () => {
+    expect(resolveCodexSandboxMode(undefined)).toBe("workspace-write");
+    expect(resolveCodexSandboxMode("sandbox")).toBe("workspace-write");
+    expect(resolveCodexSandboxMode("weird")).toBe("workspace-write");
+  });
+
+  it("maps OTTO_RUNNER=host to Codex danger-full-access", () => {
+    expect(resolveCodexSandboxMode("host")).toBe("danger-full-access");
+  });
+});
+
 describe("resolveSandboxNet", () => {
   it("returns [] when unset or empty", () => {
     expect(resolveSandboxNet(undefined)).toEqual([]);
@@ -268,8 +286,13 @@ describe("getAgentRuntime", () => {
     expect(rt.supportsSandboxSettings).toBe(true);
   });
 
-  it("throws a clean 'not implemented' error for codex (no adapter yet)", () => {
-    expect(() => getAgentRuntime("codex")).toThrow(/not implemented/i);
+  it("returns the codex adapter for the codex id", () => {
+    const rt = getAgentRuntime("codex");
+    expect(rt).toBe(codexRuntime);
+    expect(rt.id).toBe("codex");
+    expect(rt.displayName).toBe("Codex CLI");
+    expect(rt.command).toBe("codex");
+    expect(rt.supportsSandboxSettings).toBe(false);
   });
 });
 
@@ -278,9 +301,9 @@ describe("claudeRuntime adapter", () => {
   const promptPath = ".otto-tmp/prompt.md";
 
   it("buildArgs matches buildClaudeArgs (claude invocation, byte-for-byte)", () => {
-    expect(claudeRuntime.buildArgs(stage, promptPath, [], "/ws/s.json")).toEqual(
-      buildClaudeArgs(stage, promptPath, [], "/ws/s.json")
-    );
+    expect(
+      claudeRuntime.buildArgs(stage, promptPath, [], "/ws/s.json")
+    ).toEqual(buildClaudeArgs(stage, promptPath, [], "/ws/s.json"));
   });
 
   it("parseResultEvent stamps runtimeId claude alongside the parsed fields", () => {
@@ -357,5 +380,128 @@ describe("buildClaudeArgs", () => {
   it("omits --settings when no settings path is given", () => {
     const args = buildClaudeArgs(stage, promptPath, []);
     expect(args).not.toContain("--settings");
+  });
+});
+
+describe("codexRuntime adapter", () => {
+  const stage = { name: "test", template: "test.md" };
+  const promptPath = ".otto-tmp/prompt.md";
+
+  it("builds a non-interactive codex exec argv without Claude-only flags", () => {
+    const args = buildCodexArgs(
+      stage,
+      promptPath,
+      ["--model", "gpt-5"],
+      "/ws/.otto-tmp/s.json",
+      "workspace-write"
+    );
+
+    expect(args.slice(0, 2)).toEqual(["codex", "exec"]);
+    expect(args).toContain("--json");
+    expect(args).toContain("--skip-git-repo-check");
+    expect(args).toContain("--sandbox");
+    expect(args[args.indexOf("--sandbox") + 1]).toBe("workspace-write");
+    expect(args).toContain("--ask-for-approval");
+    expect(args[args.indexOf("--ask-for-approval") + 1]).toBe("never");
+    expect(args).toContain("--model");
+    expect(args[args.indexOf("--model") + 1]).toBe("gpt-5");
+    expect(args).not.toContain("--settings");
+    expect(args).not.toContain("--permission-mode");
+    expect(args).not.toContain("bypassPermissions");
+    expect(args.at(-1)).toContain(promptPath);
+  });
+
+  it("buildEnv preserves CODEX_API_KEY and maps OPENAI_API_KEY only when needed", () => {
+    expect(
+      buildCodexEnv({ CODEX_API_KEY: "codex", OPENAI_API_KEY: "openai" })
+    ).toMatchObject({
+      CODEX_API_KEY: "codex",
+      OPENAI_API_KEY: "openai",
+    });
+    expect(buildCodexEnv({ OPENAI_API_KEY: "openai" })).toMatchObject({
+      CODEX_API_KEY: "openai",
+      OPENAI_API_KEY: "openai",
+    });
+  });
+
+  it("parses Codex JSONL events into a StageResult", () => {
+    const parse = createCodexStreamParser();
+    expect(
+      parse({ type: "thread.started", thread_id: "th_123" })
+    ).toBeUndefined();
+    expect(
+      parse({
+        type: "item.completed",
+        item: {
+          id: "i_2",
+          type: "agent_message",
+          text: "Done: README summarized.",
+        },
+      })
+    ).toBeUndefined();
+
+    expect(
+      parse({
+        type: "turn.completed",
+        usage: {
+          input_tokens: 1200,
+          cached_input_tokens: 300,
+          output_tokens: 80,
+        },
+      })
+    ).toEqual({
+      result: "Done: README summarized.",
+      costUsd: 0,
+      isError: false,
+      apiErrorStatus: null,
+      usage: {
+        inputTokens: 1200,
+        outputTokens: 80,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 300,
+      },
+      runtimeId: "codex",
+    });
+  });
+
+  it("parses Codex failed turns as errored StageResults", () => {
+    const parse = createCodexStreamParser();
+    expect(
+      parse({
+        type: "turn.failed",
+        error: { message: "429 rate limit exceeded" },
+      })
+    ).toMatchObject({
+      result: "429 rate limit exceeded",
+      isError: true,
+      apiErrorStatus: "429 rate limit exceeded",
+      runtimeId: "codex",
+    });
+  });
+
+  it("extracts Codex reset hints when the CLI supplies them", () => {
+    expect(
+      resetsAtFromCodexEvent(
+        {
+          type: "turn.failed",
+          error: { message: "rate limit", resets_in_seconds: 120 },
+        },
+        1000
+      )
+    ).toBe(1120);
+    expect(
+      resetsAtFromCodexEvent({
+        type: "error",
+        error: { message: "rate limit", resets_at: 1_781_517_000 },
+      })
+    ).toBe(1_781_517_000);
+    expect(resetsAtFromCodexEvent({ type: "turn.completed" })).toBeNull();
+  });
+
+  it("exposes the parser and env builder on codexRuntime", () => {
+    expect(codexRuntime.createStreamParser).toBe(createCodexStreamParser);
+    expect(codexRuntime.buildEnv).toBe(buildCodexEnv);
+    const r = codexRuntime.parseResultEvent({ result: "legacy" });
+    expect(r.runtimeId).toBe("codex");
   });
 });

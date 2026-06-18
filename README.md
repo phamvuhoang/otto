@@ -112,9 +112,9 @@ otto-ghafk --watch --watch-interval 300 5
 # Drive a repo other than the current directory; pin the model
 OTTO_WORKSPACE=~/code/other-repo OTTO_MODEL=opus otto-afk "./docs/plans/feature.md" 10
 
-# Inspect Codex runtime selection/preflight (execution adapter not shipped yet)
+# Run with Codex after `codex login` (or CODEX_API_KEY / OPENAI_API_KEY)
 otto-afk --agent codex --print-config
-OTTO_AGENT=codex otto-ghafk --print-config
+OTTO_AGENT=codex otto-ghafk 5
 ```
 
 Full flag reference and more verify / apply-review recipes: **[docs/CLI.md](./docs/CLI.md)**.
@@ -138,12 +138,12 @@ The [architecture diagram](#otto) above maps the full stack: CLI + template laye
 
 Otto is configured by flags and environment variables. The essentials:
 
-| Variable          | Default         | Purpose                                                              |
-| ----------------- | --------------- | -------------------------------------------------------------------- |
-| `OTTO_WORKSPACE`  | `cwd`           | Host repo Claude runs against; also where `.otto-tmp/` is written.   |
-| `OTTO_RUNNER`     | `sandbox`       | `sandbox` confines writes to the workspace; `host` runs unsandboxed. |
-| `OTTO_MODEL`      | _(CLI default)_ | Pin the Claude model (`--model` pass-through).                       |
-| `OTTO_TOKEN_MODE` | `off`           | `off`, `measure`, or `reduce`; overridden by `--token-mode`.         |
+| Variable          | Default         | Purpose                                                                                 |
+| ----------------- | --------------- | --------------------------------------------------------------------------------------- |
+| `OTTO_WORKSPACE`  | `cwd`           | Host repo the selected agent runs against; also where `.otto-tmp/` is written.          |
+| `OTTO_RUNNER`     | `sandbox`       | `sandbox` confines writes to the workspace; `host` runs the selected agent unsandboxed. |
+| `OTTO_MODEL`      | _(CLI default)_ | Pin the active runtime's model (`--model` pass-through).                                |
+| `OTTO_TOKEN_MODE` | `off`           | `off`, `measure`, or `reduce`; overridden by `--token-mode`.                            |
 
 ### How to set config values
 
@@ -197,7 +197,7 @@ npm i -D @phamvuhoang/otto              # per-repo — ./node_modules/.bin/otto-
 npx -y @phamvuhoang/otto otto-afk …     # no install — bootstrap on demand
 ```
 
-Requires **Node 20+**, an authenticated **Claude Code** (`claude /login`), and — for `otto-ghafk` — an authenticated **`gh`** (for `otto-linear-afk`, a Linear personal API key via `otto-linear-auth login`). See [docs/CONFIG.md → Prerequisites](./docs/CONFIG.md#prerequisites).
+Requires **Node 20+** and an authenticated agent runtime: **Claude Code** (`claude /login`) by default, or **Codex CLI** (`codex login`, `CODEX_API_KEY`, or `OPENAI_API_KEY`) when selected with `--agent codex`. `otto-ghafk` also needs authenticated **`gh`**; `otto-linear-afk` needs a Linear personal API key via `otto-linear-auth login`. See [docs/CONFIG.md → Prerequisites](./docs/CONFIG.md#prerequisites).
 
 ---
 

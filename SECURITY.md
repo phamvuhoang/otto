@@ -31,21 +31,20 @@ may act on. The trust boundary is:
   native OS sandbox (Seatbelt on macOS) to confine writes to the workspace tree, which is
   git-recoverable. `OTTO_RUNNER=host` runs unsandboxed — only safe in a throwaway tree.
 
-- **Host credentials are accessible.** `claude` and `gh` on the host read `~/.claude`,
-  `~/.claude.json`, and `~/.config/gh` directly. An agent running with `bypassPermissions`
-  can read and overwrite those files. Use a scoped, short-lived `gh` token for untrusted inputs.
+- **Host credentials are accessible.** `claude`, `codex`, and `gh` on the host read
+  `~/.claude`, `~/.claude.json`, `~/.codex/auth.json`, and `~/.config/gh` directly.
+  An agent running non-interactively can read and overwrite those files. Use a scoped,
+  short-lived `gh` token for untrusted inputs.
 
 - **Per-runtime credentials and sandbox differ.** Otto is Claude-first by default, but the
   agent runtime is selectable (`--agent` / `OTTO_AGENT`; see [docs/CLI.md](./docs/CLI.md#agent-runtime---agent)).
   The default **Claude Code** runtime authenticates from `~/.claude` and is confined by the
   `--settings` native OS sandbox under `OTTO_RUNNER=sandbox` (below). The **Codex CLI** runtime
-  authenticates from `~/.codex/auth.json` or the `OPENAI_API_KEY` environment variable, and does
-  **not** use Claude's `--settings` sandbox — it has its own `--sandbox <mode> --ask-for-approval never`
-  confinement, so the blast-radius controls are runtime-specific. Each runtime exposes only its
-  own provider's credentials to the agent; review the active runtime with `--print-config` before
-  a run. (The Codex execution adapter is not yet shipped — a real `--agent codex` run exits with a
-  "not implemented yet" message — but its credential/sandbox surface is documented here so the
-  threat model is complete when it lands.)
+  authenticates from `~/.codex/auth.json`, `CODEX_API_KEY`, or the compatibility
+  `OPENAI_API_KEY` environment variable, and does **not** use Claude's `--settings` sandbox — it
+  has its own `--sandbox <mode> --ask-for-approval never` confinement, so the blast-radius
+  controls are runtime-specific. Each runtime exposes only its own provider's credentials to the
+  agent; review the active runtime with `--print-config` before a run.
 
 ### Reducing blast radius
 

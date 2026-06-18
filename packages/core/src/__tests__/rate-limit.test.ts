@@ -49,6 +49,18 @@ describe("isLimitResult", () => {
       )
     ).toBe(true);
   });
+  it("true on a Codex-style limit message in apiErrorStatus", () => {
+    expect(
+      isLimitResult(
+        stageResult({
+          result: "",
+          costUsd: 0,
+          isError: true,
+          apiErrorStatus: "usage limit reached",
+        })
+      )
+    ).toBe(true);
+  });
   it("false for a normal successful result", () => {
     expect(
       isLimitResult(

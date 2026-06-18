@@ -2,13 +2,13 @@
 //
 // Purpose: prove how Codex CLI (`@openai/codex`) can satisfy Otto's
 // non-interactive loop contract, and pin a candidate Codex-event → StageResult
-// mapping so the P3 adapter starts from verified shapes instead of guesses.
+// mapping used by the production Codex adapter.
 //
 // Why it lives in scripts/ and not packages/core/src/: the repo's P0 learning
 // keeps Codex-specific parsing OUT of the runner until the spike reveals the
 // signal shape (YAGNI). scripts/ is not in core's package `files`, so nothing
-// here ships in the tarball. P3 promotes the verified pieces into a real
-// `codexRuntime` AgentRuntime adapter + preflight rows.
+// here ships in the tarball. The production adapter lives in
+// packages/core/src/runner.ts + preflight.ts.
 //
 // The candidate parser/preflight/argv builder below are unit-pinned by
 // scripts/codex-spike.test.mjs against sample fixtures. Schemas marked
@@ -45,7 +45,7 @@ function usageNumber(value) {
  *   - result   ← text of the last `item.completed` agent_message item.
  *   - usage    ← `turn.completed.usage` (input/cached_input/output tokens).
  *   - costUsd  ← 0. Codex emits TOKEN COUNTS, not a USD total like Claude's
- *                `total_cost_usd`; deriving cost is a P3 gap (tokens × pricing).
+ *                `total_cost_usd`; deriving cost is still a gap (tokens × pricing).
  *   - isError / apiErrorStatus ← from a `turn.failed`/`error` event; the message
  *                is carried so isLimitResult()'s regex can classify rate limits.
  *
@@ -166,9 +166,9 @@ function whichBin(name, env = process.env) {
 
 /**
  * Candidate Codex preflight: detect the CLI on PATH and an auth source
- * distinctly (Codex stores ChatGPT login at ~/.codex/auth.json, or accepts
- * OPENAI_API_KEY). Returns two PreflightResult-shaped rows so P3 can drop them
- * straight into runPreflight under an `otto-*` bin that selected codex.
+ * distinctly (Codex stores ChatGPT login at ~/.codex/auth.json, accepts
+ * CODEX_API_KEY for `codex exec`, and Otto maps OPENAI_API_KEY as a
+ * compatibility source). Returns two PreflightResult-shaped rows.
  */
 export function codexPreflight(probes = {}) {
   const {
@@ -180,9 +180,11 @@ export function codexPreflight(probes = {}) {
 
   const cli = resolveBin("codex");
   const authFile = pathExists(join(home, ".codex", "auth.json"));
-  const apiKey =
+  const codexKey =
+    typeof env.CODEX_API_KEY === "string" && env.CODEX_API_KEY !== "";
+  const openAiKey =
     typeof env.OPENAI_API_KEY === "string" && env.OPENAI_API_KEY !== "";
-  const authed = authFile || apiKey;
+  const authed = authFile || codexKey || openAiKey;
 
   return {
     cli: {
@@ -196,8 +198,10 @@ export function codexPreflight(probes = {}) {
       detail: authed
         ? authFile
           ? "credentials found (~/.codex/auth.json)"
-          : "credentials found (OPENAI_API_KEY)"
-        : "run `codex login` or set OPENAI_API_KEY",
+          : codexKey
+            ? "credentials found (CODEX_API_KEY)"
+            : "credentials found (OPENAI_API_KEY; mapped to CODEX_API_KEY)"
+        : "run `codex login` or set CODEX_API_KEY (OPENAI_API_KEY also accepted)",
     },
   };
 }

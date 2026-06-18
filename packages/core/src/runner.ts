@@ -13,8 +13,10 @@ import { join, posix } from "node:path";
 import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
 import type { Stage } from "./stages.js";
 import {
+  boldOut,
   dim,
   renderEvent,
+  SYM_OUT,
   type StreamJson,
   type ToolTrack,
 } from "./stream-render.js";
@@ -60,6 +62,169 @@ export function resultFromEvent(
     usage: parseTokenUsage(e),
     runtimeId,
   };
+}
+
+function usageNumber(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return 0;
+  }
+  return Math.floor(value);
+}
+
+function codexUsageFromEvent(ev: unknown): TokenUsage {
+  const e = (ev ?? {}) as Record<string, unknown>;
+  const u = (e.usage ?? {}) as Record<string, unknown>;
+  return {
+    inputTokens: usageNumber(u.input_tokens),
+    outputTokens: usageNumber(u.output_tokens),
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: usageNumber(u.cached_input_tokens),
+  };
+}
+
+function codexErrorMessage(ev: unknown): string | null {
+  const e = (ev ?? {}) as Record<string, unknown>;
+  const err = (e.error ?? {}) as Record<string, unknown>;
+  if (typeof err.message === "string") return err.message;
+  if (typeof e.message === "string") return e.message;
+  return null;
+}
+
+function codexAgentMessage(ev: unknown): string | null {
+  const e = (ev ?? {}) as Record<string, unknown>;
+  if (e.type !== "item.completed") return null;
+  const item = (e.item ?? {}) as Record<string, unknown>;
+  if (typeof item.text !== "string") return null;
+  return item.type === "agent_message" || typeof item.text === "string"
+    ? item.text
+    : null;
+}
+
+function renderCodexEvent(ev: unknown): void {
+  const text = codexAgentMessage(ev);
+  if (text == null) return;
+  const lines = text.split("\n");
+  const formatted = lines
+    .map((line, idx) =>
+      idx === 0 ? `${boldOut(SYM_OUT.bullet)} ${line}` : `  ${line}`
+    )
+    .join("\r\n");
+  process.stdout.write(formatted + "\r\n\n");
+}
+
+export type CodexStreamParser = (ev: unknown) => StageResult | undefined;
+
+/**
+ * Create a per-run parser for `codex exec --json` JSONL. Codex reports the
+ * final assistant text as the last `item.completed` agent_message and emits the
+ * terminal status on `turn.completed` / `turn.failed` / `error`.
+ */
+export function createCodexStreamParser(): CodexStreamParser {
+  let result = "";
+  let usage = emptyTokenUsage();
+  let isError = false;
+  let apiErrorStatus: string | null = null;
+
+  const finish = (): StageResult => ({
+    result,
+    costUsd: 0,
+    isError,
+    apiErrorStatus,
+    usage,
+    runtimeId: "codex",
+  });
+
+  return (ev: unknown): StageResult | undefined => {
+    const e = (ev ?? {}) as Record<string, unknown>;
+    const type = e.type;
+
+    const text = codexAgentMessage(ev);
+    if (text != null) {
+      result = text;
+      return undefined;
+    }
+
+    if (type === "turn.completed") {
+      usage = codexUsageFromEvent(ev);
+      return finish();
+    }
+
+    if (type === "turn.failed" || type === "error") {
+      isError = true;
+      const msg = codexErrorMessage(ev);
+      if (msg) {
+        apiErrorStatus = msg;
+        if (!result) result = msg;
+      }
+      return finish();
+    }
+
+    return undefined;
+  };
+}
+
+function numericUnixSeconds(value: number): number {
+  return Math.floor(value > 10_000_000_000 ? value / 1000 : value);
+}
+
+function valueFromObject(
+  obj: Record<string, unknown>,
+  keys: string[]
+): unknown {
+  for (const key of keys) {
+    if (obj[key] != null) return obj[key];
+  }
+  return undefined;
+}
+
+/**
+ * Opportunistically read a Codex reset hint from failed-turn/error events. The
+ * CLI does not currently promise a single stable reset field, so absent or
+ * unknown shapes return null and the loop falls back to its default wait.
+ */
+export function resetsAtFromCodexEvent(
+  ev: unknown,
+  nowSeconds = Math.floor(Date.now() / 1000)
+): number | null {
+  const e = (ev ?? {}) as Record<string, unknown>;
+  if (e.type !== "turn.failed" && e.type !== "error") return null;
+  const err = (e.error ?? e ?? {}) as Record<string, unknown>;
+  const rateLimits = (err.rate_limits ?? e.rate_limits) as
+    | Record<string, unknown>
+    | undefined;
+
+  const seconds = valueFromObject(err, [
+    "resets_in_seconds",
+    "reset_in_seconds",
+    "retry_after_seconds",
+  ]);
+  if (typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0) {
+    return nowSeconds + Math.floor(seconds);
+  }
+
+  const retryAfterMs = valueFromObject(err, ["retry_after_ms"]);
+  if (
+    typeof retryAfterMs === "number" &&
+    Number.isFinite(retryAfterMs) &&
+    retryAfterMs >= 0
+  ) {
+    return nowSeconds + Math.ceil(retryAfterMs / 1000);
+  }
+
+  const resetAt =
+    valueFromObject(err, ["resets_at", "reset_at", "resetsAt"]) ??
+    (rateLimits
+      ? valueFromObject(rateLimits, ["resets_at", "reset_at", "resetsAt"])
+      : undefined);
+  if (typeof resetAt === "number" && Number.isFinite(resetAt) && resetAt >= 0) {
+    return numericUnixSeconds(resetAt);
+  }
+  if (typeof resetAt === "string") {
+    const parsed = Date.parse(resetAt);
+    if (Number.isFinite(parsed)) return Math.floor(parsed / 1000);
+  }
+
+  return null;
 }
 
 const STDERR_TAIL_LINES = 40;
@@ -220,12 +385,64 @@ export function buildClaudeArgs(
   return args;
 }
 
+export type CodexSandboxMode = "workspace-write" | "danger-full-access";
+
+/** Map Otto's runner mode to Codex's own sandbox vocabulary. */
+export function resolveCodexSandboxMode(
+  raw: string | undefined
+): CodexSandboxMode {
+  return resolveRunner(raw) === "host"
+    ? "danger-full-access"
+    : "workspace-write";
+}
+
+/**
+ * Build the `codex exec` argv. Codex owns sandboxing itself, so Otto never
+ * passes Claude's transient `--settings` file here.
+ */
+export function buildCodexArgs(
+  _stage: Stage,
+  promptRelPath: string,
+  modelArgs: string[],
+  _settingsPath?: string,
+  sandboxMode: CodexSandboxMode = resolveCodexSandboxMode(
+    process.env.OTTO_RUNNER
+  )
+): string[] {
+  return [
+    "codex",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "--sandbox",
+    sandboxMode,
+    "--ask-for-approval",
+    "never",
+    ...modelArgs,
+    `Read the full instructions from the file ./${promptRelPath} in the current workspace and execute them.`,
+  ];
+}
+
+/**
+ * Codex's current CLI docs call out CODEX_API_KEY for `codex exec`; issue #31's
+ * acceptance criteria also mention OPENAI_API_KEY. Preserve both by mapping the
+ * OpenAI key into Codex's expected env var for this child process only.
+ */
+export function buildCodexEnv(
+  env: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  const next: NodeJS.ProcessEnv = { ...env };
+  if (!next.CODEX_API_KEY && next.OPENAI_API_KEY) {
+    next.CODEX_API_KEY = next.OPENAI_API_KEY;
+  }
+  return next;
+}
+
 /**
  * Provider-neutral boundary between the loop and the agent CLI it drives
  * (issue #24 P0). Everything above this contract — stages, templates, retries,
  * logs, budget — is runtime-agnostic; everything Claude-specific (argv flags,
- * result-event shape) lives behind an adapter. Claude is the only implemented
- * runtime today; Codex's adapter lands in a later slice.
+ * result-event shape) lives behind an adapter.
  */
 export type AgentRuntime = {
   id: AgentRuntimeId;
@@ -243,6 +460,12 @@ export type AgentRuntime = {
   ): string[];
   /** Map one final result event into a provider-neutral {@link StageResult}. */
   parseResultEvent(ev: unknown): StageResult;
+  /** Optional per-run parser for runtimes whose final result spans events. */
+  createStreamParser?: () => (ev: unknown) => StageResult | undefined;
+  /** Optional runtime-specific reset-time extraction. */
+  resetsAtFromEvent?: (ev: unknown) => number | null;
+  /** Optional child env override. */
+  buildEnv?: (env?: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
 };
 
 /** The Claude Code adapter — Otto's default and historically-hardcoded runtime. */
@@ -255,21 +478,32 @@ export const claudeRuntime: AgentRuntime = {
   parseResultEvent: (ev) => resultFromEvent(ev, "claude"),
 };
 
+/** The Codex CLI adapter, powered by `codex exec --json`. */
+export const codexRuntime: AgentRuntime = {
+  id: "codex",
+  displayName: AGENT_DISPLAY_NAMES.codex,
+  command: "codex",
+  supportsSandboxSettings: false,
+  buildArgs: buildCodexArgs,
+  parseResultEvent: (ev) => resultFromEvent(ev, "codex"),
+  createStreamParser: createCodexStreamParser,
+  resetsAtFromEvent: resetsAtFromCodexEvent,
+  buildEnv: buildCodexEnv,
+};
+
 const AGENT_RUNTIMES: Partial<Record<AgentRuntimeId, AgentRuntime>> = {
   claude: claudeRuntime,
+  codex: codexRuntime,
 };
 
 /**
- * Select the adapter for a resolved runtime id. Only `claude` is implemented;
- * `codex` throws a clean "not implemented" error (real codex runs are already
- * blocked upstream in run-bin, so this is a defensive backstop with a
- * consistent message).
+ * Select the adapter for a resolved runtime id.
  */
 export function getAgentRuntime(id: AgentRuntimeId): AgentRuntime {
   const runtime = AGENT_RUNTIMES[id];
   if (!runtime) {
     throw new Error(
-      `the ${AGENT_DISPLAY_NAMES[id]} runtime is not implemented yet; only Claude Code is currently runnable (see issue #24).`
+      `the ${AGENT_DISPLAY_NAMES[id]} runtime is not available in this build.`
     );
   }
   return runtime;
@@ -347,11 +581,38 @@ function streamRuntime(
     const logFd = openSync(logPath, "a");
     const toolMap = new Map<string, ToolTrack>();
     const graceMs = parseGraceMs(process.env.OTTO_RESULT_GRACE_MS);
+    const parseStreamEvent = runtime.createStreamParser?.();
 
-    // Spawn claude (argv[0]) on the host instead of docker.
+    const settleFinalAfterGrace = (): void => {
+      // Arm one-shot post-result grace timer to recover from CLI self-deadlocks
+      // where the child emits its final NDJSON but never exits.
+      if (graceTimer || graceMs <= 0) return;
+      graceTimer = setTimeout(() => {
+        if (settled) return;
+        process.stderr.write(
+          `${dim(`grace timer fired after ${graceMs}ms post-result — killing ${runtime.command} child`)}\n`
+        );
+        try {
+          child.kill();
+        } catch {
+          // Already dead; close handler will be a no-op via settle guard.
+        }
+        if (final && isLimitResult(final)) {
+          rejectOnce(
+            new RateLimitError(final.result || "rate limit", lastResetsAt)
+          );
+        } else {
+          resolveOnce(final);
+        }
+      }, graceMs);
+      graceTimer.unref?.();
+    };
+
+    // Spawn the selected agent CLI on the host instead of docker.
     const child = spawn(argv[0], argv.slice(1), {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
+      env: runtime.buildEnv?.(process.env) ?? process.env,
     });
 
     let final: StageResult = {
@@ -422,37 +683,23 @@ function streamRuntime(
       } catch {
         return;
       }
-      renderEvent(parsed, toolMap);
-      if (parsed.type === "rate_limit_event") {
-        const r = resetsAtFromEvent(parsed);
-        if (r != null) lastResetsAt = r;
+      if (runtime.id === "codex") renderCodexEvent(parsed);
+      else renderEvent(parsed, toolMap);
+
+      const runtimeReset = runtime.resetsAtFromEvent?.(parsed);
+      if (runtimeReset != null) lastResetsAt = runtimeReset;
+      else if (parsed.type === "rate_limit_event") {
+        const claudeReset = resetsAtFromEvent(parsed);
+        if (claudeReset != null) lastResetsAt = claudeReset;
       }
-      if (parsed.type === "result") {
+
+      const streamResult = parseStreamEvent?.(parsed);
+      if (streamResult) {
+        final = streamResult;
+        settleFinalAfterGrace();
+      } else if (parsed.type === "result") {
         final = runtime.parseResultEvent(parsed);
-        // Arm one-shot post-result grace timer to recover from claude-CLI
-        // self-deadlocks where the child emits its final NDJSON but never
-        // exits. See docs/prd/result-grace-timer.md.
-        if (!graceTimer && graceMs > 0) {
-          graceTimer = setTimeout(() => {
-            if (settled) return;
-            process.stderr.write(
-              `${dim(`grace timer fired after ${graceMs}ms post-result — killing ${runtime.command} child`)}\n`
-            );
-            try {
-              child.kill();
-            } catch {
-              // Already dead; close handler will be a no-op via settle guard.
-            }
-            if (final && isLimitResult(final)) {
-              rejectOnce(
-                new RateLimitError(final.result || "rate limit", lastResetsAt)
-              );
-            } else {
-              resolveOnce(final);
-            }
-          }, graceMs);
-          graceTimer.unref?.();
-        }
+        settleFinalAfterGrace();
       }
     });
 

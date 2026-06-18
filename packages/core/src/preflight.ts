@@ -28,7 +28,7 @@ export type PreflightProbes = {
    * Codex CLI check probes runnability, not just PATH presence.
    */
   probeVersion: (name: string) => boolean;
-  /** Environment to read credential vars from (e.g. OPENAI_API_KEY). */
+  /** Environment to read credential vars from (e.g. CODEX_API_KEY). */
   env: NodeJS.ProcessEnv;
 };
 
@@ -110,16 +110,21 @@ export function runPreflight(
 
     const codexAuthFile = pathExists(join(home, ".codex", "auth.json"));
     const codexApiKey =
-      typeof env.OPENAI_API_KEY === "string" && env.OPENAI_API_KEY !== "";
-    const codexAuthed = codexAuthFile || codexApiKey;
+      typeof env.CODEX_API_KEY === "string" && env.CODEX_API_KEY.trim() !== "";
+    const openAiApiKey =
+      typeof env.OPENAI_API_KEY === "string" &&
+      env.OPENAI_API_KEY.trim() !== "";
+    const codexAuthed = codexAuthFile || codexApiKey || openAiApiKey;
     results.push({
       label: "codex auth",
       ok: codexAuthed,
       detail: codexAuthed
         ? codexAuthFile
           ? "credentials found (~/.codex/auth.json)"
-          : "credentials found (OPENAI_API_KEY)"
-        : "run `codex login` or set OPENAI_API_KEY",
+          : codexApiKey
+            ? "credentials found (CODEX_API_KEY)"
+            : "credentials found (OPENAI_API_KEY; Otto maps it to CODEX_API_KEY for codex exec)"
+        : "run `codex login` or set CODEX_API_KEY (OPENAI_API_KEY also accepted)",
     });
   } else {
     const claude = resolveBin("claude");

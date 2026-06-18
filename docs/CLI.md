@@ -19,7 +19,7 @@ Commands, flags, and modes for the two Otto bins. For environment variables, run
 - [Customizing the pipeline](#customizing-the-pipeline)
 - [Source map](#source-map)
 
-Every command also supports `--help` / `-h`, `--version` / `-V`, and `--print-config` (print the resolved config plus a preflight check of run prerequisites — `claude`/`gh` CLIs, credentials, git workspace — then exit). See [CONFIG.md → Prerequisites](./CONFIG.md#prerequisites) for the preflight block.
+Every command also supports `--help` / `-h`, `--version` / `-V`, and `--print-config` (print the resolved config plus a preflight check of run prerequisites — the selected agent CLI/auth, git workspace, and provider CLIs such as `gh` — then exit). See [CONFIG.md → Prerequisites](./CONFIG.md#prerequisites) for the preflight block.
 
 ---
 
@@ -58,11 +58,14 @@ otto-afk "./docs/plans/feature.md" 10
 # inspect Codex selection/preflight before any paid invocation
 otto-afk --agent codex --print-config
 OTTO_AGENT=codex otto-ghafk --print-config
+
+# run with Codex
+otto-afk --agent codex "./docs/plans/feature.md" 5
 ```
 
 `--print-config` shows the resolved `runtime` (`<id> (<display name>)`), its `runtime source` (default/flag/env/config), the runtime-aware `model` line, and the `fallback` setting. The run banner echoes it (`otto-afk 0.x (core 0.x) · runtime: Claude Code`), each stage banner appends it (`iteration 2/10 · implementer · Claude Code`), the per-stage NDJSON log path carries a `-<id>` suffix (`…-iter2-implementer-claude.ndjson`), and the final summary prints `runtime: <id>` — or `runtime: claude -> codex (switched once: rate limit)` after an auto-switch.
 
-**Runtime status today:** `claude` (Claude Code) is fully supported and the default. `codex` (Codex CLI) is recognized end-to-end for **selection, model env, preflight, and fallback config**, but its execution adapter is **not yet implemented** — a real `--agent codex` run exits with a clear "not implemented yet" message rather than silently falling back to Claude. Auto-switch orchestration is implemented and unit-tested; a real switch into an unavailable runtime is rejected/skipped until that runtime's adapter lands.
+**Runtime status today:** `claude` (Claude Code) is the default. `codex` (Codex CLI) is executable via `codex exec --json` and can be the primary runtime or the fallback runtime. Claude uses Otto's transient `--settings` sandbox file; Codex uses its own `--sandbox workspace-write --ask-for-approval never` flags when `OTTO_RUNNER=sandbox` and `--sandbox danger-full-access` when `OTTO_RUNNER=host`. Codex auth is normally `codex login`; API-key runs can use `CODEX_API_KEY`, and Otto also accepts `OPENAI_API_KEY` by mapping it to `CODEX_API_KEY` for the Codex child process.
 
 ### Provider-specific model (`OTTO_CLAUDE_MODEL` / `OTTO_CODEX_MODEL`)
 
@@ -208,7 +211,7 @@ Both bins are designed to chew through long runs unattended.
 | `--detach`          | off                                                    | Fork the loop into a background process, print pid + log path, and exit.                                                |
 | `--log <path>`      | `<workspace>/.otto-tmp/logs/detached-<parent-pid>.log` | Override the detached log target. Only meaningful with `--detach`.                                                      |
 | `--notify`          | off                                                    | OS toast + terminal bell on loop completion or unrecoverable failure.                                                   |
-| `--max-wait <dur>`  | `6h`                                                   | Maximum time to wait out a Claude rate-limit before halting. Accepts seconds (`90`) or a duration string (`90m`, `6h`). |
+| `--max-wait <dur>`  | `6h`                                                   | Maximum time to wait out an agent rate-limit before halting. Accepts seconds (`90`) or a duration string (`90m`, `6h`). |
 | `--fresh`           | off                                                    | Ignore any saved `.otto/state.json` and restart from iteration 1.                                                       |
 
 Canonical overnight recipe:

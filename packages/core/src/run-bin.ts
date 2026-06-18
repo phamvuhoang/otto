@@ -382,16 +382,6 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     console.error(fallbackError);
     process.exit(1);
   }
-  // Only Claude is runnable end-to-end today; selecting another runtime for a
-  // real run fails loudly rather than silently running Claude, preserving the
-  // "user always knows the active runtime" contract. The Codex adapter lands in
-  // a later issue-24 slice. --print-config still reports the selection above.
-  if (agent.id !== "claude") {
-    console.error(
-      `the ${agent.displayName} runtime is not implemented yet; only Claude Code is currently runnable (see issue #24). Selection source: ${agent.source}.`
-    );
-    process.exit(1);
-  }
   // A configured fallback is harmless while auto-switch is off, but an enabled
   // switch must not defer an unavailable-adapter crash until a paid run hits a
   // limit. Validate the fallback adapter before branch setup or stage execution.

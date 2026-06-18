@@ -48,20 +48,20 @@ preflight treats "`codex --version` exits non-zero" as not-usable, not just
 
 ## Seam map: Claude runner → Codex equivalent
 
-| Otto seam (Claude today)                                          | Codex equivalent                                                                                                                  | Confidence                                            |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `claude --print` (non-interactive)                                | `codex exec <prompt>` (alias `codex e`); prompt positional or via stdin                                                           | documented                                            |
-| `--output-format stream-json`                                     | `codex exec --json` (JSONL event stream on stdout)                                                                                | UNVERIFIED event schema                               |
-| `--permission-mode bypassPermissions`                             | no 1:1 — closest is `--sandbox <mode> --ask-for-approval never` (or `--full-auto` / `--dangerously-bypass-approvals-and-sandbox`) | documented                                            |
-| `--settings <file>` native sandbox (writes confined to workspace) | Codex has its OWN sandbox: `--sandbox read-only\|workspace-write\|danger-full-access`; no Claude-style settings JSON              | documented; `supportsSandboxSettings:false` for codex |
-| `--model <spec>` (`OTTO_MODEL`)                                   | `-m, --model <spec>`                                                                                                              | documented                                            |
-| `cwd = workspaceDir` on spawn                                     | same, or `-C, --cd <dir>`                                                                                                         | documented                                            |
-| result event `total_cost_usd`                                     | **none** — Codex emits token counts only; USD must be derived (tokens × pricing)                                                  | known gap                                             |
-| result event `result` text                                        | last `item.completed` agent_message `.text`                                                                                       | UNVERIFIED                                            |
-| `usage.{input,output,cache_*}_tokens`                             | `turn.completed.usage.{input_tokens,cached_input_tokens,output_tokens}` (no cache-creation concept)                               | UNVERIFIED                                            |
-| `rate_limit_event` + `is_error`/429 result                        | `turn.failed`/`error` event with a message; reset-time field shape unknown                                                        | UNVERIFIED                                            |
-| `~/.claude.json` / `~/.claude` auth                               | `~/.codex/auth.json` (ChatGPT login), `CODEX_API_KEY`, or Otto's compatibility mapping from `OPENAI_API_KEY`                      | documented                                            |
-| preflight: `claude` on PATH + auth file                           | `codex --version` succeeds + `~/.codex/auth.json`/`CODEX_API_KEY`/`OPENAI_API_KEY`                                                | implemented                                           |
+| Otto seam (Claude today)                                          | Codex equivalent                                                                                                                                     | Confidence                                            |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `claude --print` (non-interactive)                                | `codex exec <prompt>` (alias `codex e`); prompt positional or via stdin                                                                              | documented                                            |
+| `--output-format stream-json`                                     | `codex exec --json` (JSONL event stream on stdout)                                                                                                   | UNVERIFIED event schema                               |
+| `--permission-mode bypassPermissions`                             | no 1:1 — closest is global `--ask-for-approval never` plus `exec --sandbox <mode>` (or `--full-auto` / `--dangerously-bypass-approvals-and-sandbox`) | documented                                            |
+| `--settings <file>` native sandbox (writes confined to workspace) | Codex has its OWN sandbox: `--sandbox read-only\|workspace-write\|danger-full-access`; no Claude-style settings JSON                                 | documented; `supportsSandboxSettings:false` for codex |
+| `--model <spec>` (`OTTO_MODEL`)                                   | `-m, --model <spec>`                                                                                                                                 | documented                                            |
+| `cwd = workspaceDir` on spawn                                     | same, or `-C, --cd <dir>`                                                                                                                            | documented                                            |
+| result event `total_cost_usd`                                     | **none** — Codex emits token counts only; USD must be derived (tokens × pricing)                                                                     | known gap                                             |
+| result event `result` text                                        | last `item.completed` agent_message `.text`                                                                                                          | UNVERIFIED                                            |
+| `usage.{input,output,cache_*}_tokens`                             | `turn.completed.usage.{input_tokens,cached_input_tokens,output_tokens}` (no cache-creation concept)                                                  | UNVERIFIED                                            |
+| `rate_limit_event` + `is_error`/429 result                        | `turn.failed`/`error` event with a message; reset-time field shape unknown                                                                           | UNVERIFIED                                            |
+| `~/.claude.json` / `~/.claude` auth                               | `~/.codex/auth.json` (ChatGPT login), `CODEX_API_KEY`, or Otto's compatibility mapping from `OPENAI_API_KEY`                                         | documented                                            |
+| preflight: `claude` on PATH + auth file                           | `codex --version` succeeds + `~/.codex/auth.json`/`CODEX_API_KEY`/`OPENAI_API_KEY`                                                                   | implemented                                           |
 
 ## Candidate StageResult mapping
 
@@ -98,10 +98,11 @@ captured; falls back to `null`, which the retry path already tolerates).
 - **Result / errors / cost / rate-limit representation?** Result + tokens are in
   the event stream; **cost in USD is absent** (must be derived); rate-limit
   signal shape is unconfirmed.
-- **Permissions / sandbox?** Codex owns sandboxing via `--sandbox` +
-  `--ask-for-approval`; it does **not** accept Otto's `--settings` file, so the
-  codex adapter sets `supportsSandboxSettings: false` and the runner must skip
-  writing the transient settings JSON for it (the boundary already gates this).
+- **Permissions / sandbox?** Codex owns sandboxing via `exec --sandbox`, while
+  `--ask-for-approval` is emitted as a global Codex flag before `exec`; it does
+  **not** accept Otto's `--settings` file, so the codex adapter sets
+  `supportsSandboxSettings: false` and the runner must skip writing the
+  transient settings JSON for it (the boundary already gates this).
 - **Auth / preflight?** `~/.codex/auth.json`, `CODEX_API_KEY`, or compatibility
   `OPENAI_API_KEY`; detectable distinctly from Claude. Caveat: check
   `codex --version` succeeds, not just PATH presence (see blocker).

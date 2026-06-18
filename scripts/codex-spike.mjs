@@ -211,7 +211,7 @@ export function codexPreflight(probes = {}) {
  * starts with the command, ends with the prompt instruction. Non-interactive
  * automation needs the sandbox + never-approve flags Codex requires (Claude's
  * `--permission-mode bypassPermissions` has no 1:1 Codex equivalent — the pair
- * `--sandbox <mode> --ask-for-approval never` is the closest, see findings).
+ * `--ask-for-approval never ... --sandbox <mode>` is the closest, see findings).
  */
 export function buildCodexArgs(
   promptRelPath,
@@ -220,13 +220,13 @@ export function buildCodexArgs(
 ) {
   return [
     "codex",
+    "--ask-for-approval",
+    "never",
     "exec",
     "--json",
     "--skip-git-repo-check",
     "--sandbox",
     sandboxMode,
-    "--ask-for-approval",
-    "never",
     ...modelArgs,
     `Read the full instructions from the file ./${promptRelPath} in the current workspace and execute them.`,
   ];
@@ -237,13 +237,13 @@ async function main() {
   const prompt = process.argv[2] ?? "Reply with the single word: ok";
   const argv = [
     "codex",
+    "--ask-for-approval",
+    "never",
     "exec",
     "--json",
     "--skip-git-repo-check",
     "--sandbox",
     "read-only",
-    "--ask-for-approval",
-    "never",
     prompt,
   ];
   process.stderr.write(`spawning: ${argv.join(" ")}\n`);

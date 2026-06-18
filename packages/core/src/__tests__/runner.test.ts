@@ -396,13 +396,16 @@ describe("codexRuntime adapter", () => {
       "workspace-write"
     );
 
-    expect(args.slice(0, 2)).toEqual(["codex", "exec"]);
+    expect(args.slice(0, 4)).toEqual([
+      "codex",
+      "--ask-for-approval",
+      "never",
+      "exec",
+    ]);
     expect(args).toContain("--json");
     expect(args).toContain("--skip-git-repo-check");
     expect(args).toContain("--sandbox");
     expect(args[args.indexOf("--sandbox") + 1]).toBe("workspace-write");
-    expect(args).toContain("--ask-for-approval");
-    expect(args[args.indexOf("--ask-for-approval") + 1]).toBe("never");
     expect(args).toContain("--model");
     expect(args[args.indexOf("--model") + 1]).toBe("gpt-5");
     expect(args).not.toContain("--settings");

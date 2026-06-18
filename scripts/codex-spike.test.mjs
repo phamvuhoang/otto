@@ -152,14 +152,15 @@ test("codexPreflight detects CLI + auth distinctly", () => {
 test("buildCodexArgs builds a non-interactive argv ending in the prompt", () => {
   const argv = buildCodexArgs(".otto-tmp/.run-1.md", ["--model", "o3"]);
   assert.equal(argv[0], "codex");
-  assert.equal(argv[1], "exec");
+  const ai = argv.indexOf("--ask-for-approval");
+  assert.equal(argv[ai + 1], "never");
+  assert.ok(ai > 0 && ai < argv.indexOf("exec"));
+  assert.equal(argv[3], "exec");
   assert.ok(argv.includes("--json"));
   assert.ok(argv.includes("--skip-git-repo-check"));
   // Non-interactive needs sandbox + never-approve (no claude bypassPermissions 1:1).
   assert.ok(argv.includes("--sandbox"));
   assert.ok(argv.includes("workspace-write"));
-  const ai = argv.indexOf("--ask-for-approval");
-  assert.equal(argv[ai + 1], "never");
   assert.ok(argv.includes("--model"));
   assert.ok(argv.includes("o3"));
   assert.match(

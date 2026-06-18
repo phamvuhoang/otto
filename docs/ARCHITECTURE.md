@@ -319,14 +319,14 @@ Spawned with `cwd = workspaceDir`. `--permission-mode` is always `bypassPermissi
 Codex stages use Codex's non-interactive mode and its own sandbox flags:
 
 ```
-codex exec --json --skip-git-repo-check
+codex --ask-for-approval never
+      exec --json --skip-git-repo-check
        --sandbox workspace-write|danger-full-access
-       --ask-for-approval never
        [--model <OTTO_MODEL>]
        "Read the full instructions from the file ./.otto-tmp/<run-file> in the current workspace and execute them."
 ```
 
-`OTTO_RUNNER=sandbox` maps to `--sandbox workspace-write`; `OTTO_RUNNER=host` maps to `--sandbox danger-full-access`. Claude-only `--permission-mode` and `--settings` flags are never passed to Codex.
+`--ask-for-approval` is emitted before `exec` because it is a Codex global flag in current CLI builds; `OTTO_RUNNER=sandbox` maps to `exec --sandbox workspace-write`; `OTTO_RUNNER=host` maps to `exec --sandbox danger-full-access`. Claude-only `--permission-mode` and `--settings` flags are never passed to Codex.
 
 ### Sandbox settings (`OTTO_RUNNER=sandbox`)
 

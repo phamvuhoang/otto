@@ -102,10 +102,10 @@ Preflight is **runtime-aware**: it shows the rows for the **selected** runtime, 
 
 `OTTO_RUNNER` selects how the active runtime is spawned:
 
-- **`sandbox` (default)** — Filesystem **writes are confined to the workspace**. Claude receives a transient `--settings` JSON that enables its native OS sandbox (Seatbelt on macOS; `bubblewrap`+`socat` on Linux). Codex receives `--sandbox workspace-write --ask-for-approval never`. `OTTO_SANDBOX_NET` applies to Claude's native sandbox settings; Codex owns its own network behavior.
+- **`sandbox` (default)** — Filesystem **writes are confined to the workspace**. Claude receives a transient `--settings` JSON that enables its native OS sandbox (Seatbelt on macOS; `bubblewrap`+`socat` on Linux). Codex receives global `--ask-for-approval never` plus `exec --sandbox workspace-write`. `OTTO_SANDBOX_NET` applies to Claude's native sandbox settings; Codex owns its own network behavior.
 - **`host`** — The active runtime runs unsandboxed with full host access. Claude omits the sandbox settings file; Codex receives `--sandbox danger-full-access`. Only safe when the workspace is a git-recoverable, throwaway tree.
 
-Claude stages run with `--permission-mode bypassPermissions`; Codex stages run with `--ask-for-approval never`. AFK is non-interactive, so bash/edit approval must be automatic. The sandbox runner and the git-recoverable workspace are what bound the blast radius. See **[SECURITY.md](../SECURITY.md)** for the full threat model.
+Claude stages run with `--permission-mode bypassPermissions`; Codex stages run with global `--ask-for-approval never`. AFK is non-interactive, so bash/edit approval must be automatic. The sandbox runner and the git-recoverable workspace are what bound the blast radius. See **[SECURITY.md](../SECURITY.md)** for the full threat model.
 
 ---
 

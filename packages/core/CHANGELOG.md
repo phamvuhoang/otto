@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/phamvuhoang/otto/compare/otto-core-v0.8.1...otto-core-v0.8.2) (2026-06-19)
+
+
+### Bug Fixes
+
+* **agent:** isolate Codex exec from user config ([#37](https://github.com/phamvuhoang/otto/issues/37)) ([a0a1865](https://github.com/phamvuhoang/otto/commit/a0a18656a9e86585cc5417d1f88d7324ea80e9c7))
+
 ## [0.8.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.8.0...otto-core-v0.8.1) (2026-06-18)
 
 

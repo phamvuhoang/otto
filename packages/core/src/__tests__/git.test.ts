@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  changedFilesSince,
   git,
   hasUncommittedTrackedChanges,
+  headSha,
   isGitRepo,
   isPathIgnored,
   refExists,
@@ -54,5 +56,31 @@ describe("git helpers", () => {
 
   it("git() returns null on failure instead of throwing", () => {
     expect(git(["rev-parse", "HEAD"], tmpdir())).toBeNull();
+  });
+
+  it("headSha returns a sha in a repo and null outside one", () => {
+    const dir = tmpRepo();
+    expect(headSha(dir)).toMatch(/^[0-9a-f]{7,40}$/);
+    expect(headSha(tmpdir())).toBeNull();
+  });
+
+  it("changedFilesSince reports committed and uncommitted changes since a sha", () => {
+    const dir = tmpRepo();
+    const base = headSha(dir);
+
+    // Commit a new file, then leave a tracked edit uncommitted.
+    writeFileSync(join(dir, "committed.ts"), "x");
+    execFileSync("git", ["add", "."], { cwd: dir });
+    execFileSync("git", ["commit", "-qm", "add committed"], { cwd: dir });
+    writeFileSync(join(dir, "a.txt"), "edited");
+
+    const changed = changedFilesSince(dir, base).sort();
+    expect(changed).toEqual(["a.txt", "committed.ts"]);
+  });
+
+  it("changedFilesSince with a null sha returns only the working-tree diff", () => {
+    const dir = tmpRepo();
+    writeFileSync(join(dir, "a.txt"), "edited");
+    expect(changedFilesSince(dir, null)).toEqual(["a.txt"]);
   });
 });

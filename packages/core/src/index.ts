@@ -40,6 +40,18 @@ export {
   type TokenUsage,
 } from "./tokens.js";
 export {
+  allocateRunId,
+  readManifest,
+  readStageRecords,
+  runReportDir,
+  runsDir,
+  writeManifest,
+  writeStageRecord,
+  type RunArtifact,
+  type RunManifest,
+  type StageRecord,
+} from "./run-report.js";
+export {
   runWatch,
   pollOpenIssues,
   pollLinearIssues,

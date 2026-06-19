@@ -2,6 +2,23 @@
 
 ## Conventions
 
+- **Run evidence bundle lives under `.otto/runs/<run-id>/` (issue #39 P0).** Pure
+  module `run-report.ts` mirrors `state.ts` (fs + JSON, absent/malformed → safe
+  null/`[]`, injectable `Date`/`pid`): `RunManifest` (manifest.json: bin/mode/
+  inputs/runtime/branchStrategy/iterations/cost/tokens/exitReason/nextAction/
+  artifacts/timestamps) + per-stage `StageRecord`s under `stages/`. **Key shape
+  decision: the `stages/` DIRECTORY is the stage list — the manifest does NOT
+  duplicate it** (`readStageRecords` discovers by sorted filename), so there's no
+  two-source sync. `allocateRunId(date?,pid?)` = ISO timestamp (`:`/`.`→`-`) +
+  `-<pid>` → lexicographically sortable (so "latest" is a plain string sort) and
+  collision-safe per host. Stage filenames are `<seq4>-iter<n>-<stage>.json` with
+  the stage segment sanitized to `[A-Za-z0-9_-]` (panel lens names from
+  `OTTO_REVIEW_LENSES` are free text → a filename). The module is **INERT** until
+  loop wiring (plan task 2+ in `.otto/tasks/issue-39/plan.md`): nothing imports it
+  from the loop yet, so it can't regress behavior — same "ship the substrate first,
+  inert" pattern as `task-key.ts`. Bundles go in `.otto/` (durable like
+  `state.json`), NOT `.otto-tmp/`; raw `.otto-tmp/logs` is untouched. Pinned by
+  `run-report.test.ts`.
 - **Agent-runtime docs span 5 surfaces, pinned by one doc-contract test, and
   document Codex HONESTLY (issue #24 P5).** The runtime feature is documented in
   README (flags/env lists + a `--print-config` example), `docs/CLI.md` (a

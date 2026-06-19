@@ -94,6 +94,23 @@ export function runReportDir(workspaceDir: string, runId: string): string {
   return join(runsDir(workspaceDir), runId);
 }
 
+/**
+ * List the run ids present under `.otto/runs/`, sorted ascending. Because run
+ * ids are lexicographically sortable (see {@link allocateRunId}), the last
+ * entry is the most recent run — so "latest" is `at(-1)`. Absent/unreadable
+ * dir → `[]` (never throws).
+ */
+export function listRunIds(workspaceDir: string): string[] {
+  try {
+    return readdirSync(runsDir(workspaceDir), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 function manifestPath(workspaceDir: string, runId: string): string {
   return join(runReportDir(workspaceDir, runId), "manifest.json");
 }

@@ -41,6 +41,7 @@ export {
 } from "./tokens.js";
 export {
   allocateRunId,
+  listRunIds,
   readManifest,
   readStageRecords,
   runReportDir,
@@ -51,6 +52,11 @@ export {
   type RunManifest,
   type StageRecord,
 } from "./run-report.js";
+export {
+  formatRunReport,
+  runInspect,
+  type InspectDeps,
+} from "./inspect.js";
 export {
   runWatch,
   pollOpenIssues,

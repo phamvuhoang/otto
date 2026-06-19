@@ -26,13 +26,16 @@ Ordered, bite-sized, testable tasks. One iteration implements one task.
       asserts the finalized fields per exit path. **Interrupt paths
       (SIGINT/SIGTERM/keyboard quit via `process.exit`) leave only the initial
       manifest — finalizing those is deferred (out of the summarize funnel).**
-- [ ] **5. Render a human summary (`otto-inspect <run-id>` / `latest`, or
+- [x] **5. Render a human summary (`otto-inspect <run-id>` / `latest`, or
       `--run-report`).** Read the manifest + stage records and print a compact
       report answering "what happened and why did Otto stop?". Verify: a unit
       test over a fixture bundle; a one-iteration integration smoke.
+      Shipped as a new `otto-inspect` bin → `runInspect` in `inspect.ts`
+      (pure `formatRunReport` + `listRunIds`). Verified by `inspect.test.ts`
+      and a manual bin smoke.
 - [ ] **6. Docs.** README + `docs/ARCHITECTURE.md`: the bundle layout, run-id
       format, and the inspect command. Verify: doc-contract test if a drift risk
       emerges; otherwise prose only.
 
-This iteration: **task 4**. Next: **task 5** (render a human summary via
-`otto-inspect` / `--run-report`).
+This iteration: **task 5**. Next: **task 6** (docs — README + ARCHITECTURE:
+bundle layout, run-id format, the `otto-inspect` command).

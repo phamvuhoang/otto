@@ -2,6 +2,26 @@
 
 ## Conventions
 
+- **The run bundle is rendered by a standalone `otto-inspect` bin, not a loop
+  flag (issue #39 P0 task 5).** `inspect.ts` splits into a PURE
+  `formatRunReport(manifest, stages)` → string (the testable core, no I/O) and
+  `runInspect(argv, deps)` → exit code (resolves `OTTO_WORKSPACE ?? cwd`, reads
+  the bundle, prints). Run-id resolution: an explicit id, else `latest`/no-arg →
+  `listRunIds(workspaceDir).at(-1)` (run ids are lexicographically sortable, so
+  the LAST of the ascending sort is newest — that's why `allocateRunId` is
+  timestamp-prefixed). `listRunIds` lives in `run-report.ts` (the I/O module,
+  beside the other `.otto/runs` helpers), filters to DIRECTORIES, absent →
+  `[]`. The report deliberately suppresses the `exit:`/`next:` lines when
+  `finishedAt` is absent (un-finalized/interrupted run — see the finalize
+  bullet's interrupt gap) rather than inventing an exit reason; it shows
+  `? / <planned>` iterations instead. `runInspect` follows the
+  `runLinearAuth` shape (injectable `{env,cwd,out,err}` deps,
+  returns an exit code the thin bin `process.exit`s) — NOT `runBin`, because
+  inspect is a read-only reader with no loop/stages/preflight. New bin wired in
+  `apps/cli/package.json` `bin` + `apps/cli/bin/otto-inspect.js`; exported from
+  `index.ts`. Pinned by `inspect.test.ts` (format finalized/un-finalized +
+  runInspect explicit/latest/unknown-id/no-runs) and `run-report.test.ts`
+  (`listRunIds`). **Remaining issue-39 work: task 6 (docs).**
 - **The run manifest is finalized inside `summarize`, NOT at each return site
   (issue #39 P0 task 4).** `runLoop` writes the initial manifest at loop start
   (task 2) and re-writes the WHOLE manifest on exit via a best-effort

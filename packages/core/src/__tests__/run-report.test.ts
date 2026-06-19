@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   allocateRunId,
+  listRunIds,
   readManifest,
   readStageRecords,
   runReportDir,
@@ -87,6 +88,21 @@ describe("manifest I/O", () => {
     mkdirSync(join(d, ".otto", "runs", "rid"), { recursive: true });
     writeFileSync(join(d, ".otto", "runs", "rid", "manifest.json"), "{ nope");
     expect(readManifest(d, "rid")).toBeNull();
+  });
+});
+
+describe("listRunIds", () => {
+  it("lists run-id dirs sorted ascending (latest last)", () => {
+    const d = tmp();
+    writeManifest(d, { ...manifest, runId: "2026-06-19T09-00-00-000Z-1" });
+    writeManifest(d, { ...manifest, runId: "2026-06-19T00-00-00-000Z-1" });
+    expect(listRunIds(d)).toEqual([
+      "2026-06-19T00-00-00-000Z-1",
+      "2026-06-19T09-00-00-000Z-1",
+    ]);
+  });
+  it("returns [] when .otto/runs is absent", () => {
+    expect(listRunIds(tmp())).toEqual([]);
   });
 });
 

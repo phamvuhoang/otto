@@ -860,6 +860,27 @@
   retry reuses the freed seqs. Any future inline-write-during-attempt artifact
   needs the same snapshot/rollback parity. Pinned by `loop.test.ts` "rolls back
   panel sub-stage records when a panel attempt is retried after a rate limit".
+- **Safety policy (issue #43 P4) starts as a PURE permissive substrate
+  `safety-policy.ts`, modelled on `state.ts`/`memory.ts`.** NOTE the name: the
+  existing `policy.ts` is the #41 adaptive-ROUTER policy — unrelated; #43's config
+  is `.otto/policy.json` and its module is `safety-policy.ts` to avoid the
+  collision. `SafetyPolicy` carries EXACTLY the six issue-scoped rule lists
+  (`allowedWriteRoots`, `blockedCommands`, `allowedNetworkDomains`,
+  `secretPatterns`, `highRiskGlobs`, `approvalRequiredActions`), all `string[]`.
+  **Crux: an EMPTY list means "no restriction" for that axis**, so `DEFAULT_POLICY`
+  (all empty, `Object.freeze`d) leaves today's trusted local plan/PRD workflows
+  unchanged (success metric #3) — a repo opts INTO governance by populating the
+  file. `parseSafetyPolicy(raw)` never throws: non-object/array/null → defaults,
+  non-array field → `[]`, non-string elements filtered; it always returns a FRESH
+  object (never the shared frozen default reference — tests assert `not.toBe`).
+  `readSafetyPolicy(workspaceDir)` reads `.otto/policy.json`, absent/malformed →
+  `DEFAULT_POLICY` (fails OPEN to unrestricted, same never-throw philosophy as
+  every reader here). INERT this slice (exported from `index.ts`, wired by no
+  bin/loop) so loading a policy can't regress a run; later slices add evaluation
+  predicates (2), a `taint.ts` source taxonomy + `wrapUntrusted` (3), taint
+  surfacing in templates (4), `SafetyEvent` in trajectories + eval (5), and the
+  boundary checks around shell/`@spill`/stage execution (6, first non-inert).
+  Spec/plan: `.otto/tasks/issue-43/`. Pinned by `safety-policy.test.ts`.
 
 ## Gotchas
 

@@ -415,6 +415,19 @@ describe("codexRuntime adapter", () => {
     expect(args.at(-1)).toContain(promptPath);
   });
 
+  it("adds .git to Codex writable roots under workspace-write so commits work", () => {
+    const args = buildCodexArgs(stage, promptPath, [], undefined, "workspace-write");
+    const ci = args.indexOf("-c");
+    expect(ci).toBeGreaterThan(-1);
+    expect(args[ci + 1]).toBe('sandbox_workspace_write.writable_roots=[".git"]');
+  });
+
+  it("omits the writable-roots override under danger-full-access", () => {
+    const args = buildCodexArgs(stage, promptPath, [], undefined, "danger-full-access");
+    expect(args).not.toContain("-c");
+    expect(args.join(" ")).not.toContain("writable_roots");
+  });
+
   it("buildEnv preserves CODEX_API_KEY and maps OPENAI_API_KEY only when needed", () => {
     expect(
       buildCodexEnv({ CODEX_API_KEY: "codex", OPENAI_API_KEY: "openai" })

@@ -171,6 +171,89 @@ export type LoopOutcome = {
   tokenUsage: TokenUsage;
 };
 
+type KeyboardControls = {
+  pauseIfRequested: () => Promise<void>;
+  cleanup: () => void;
+};
+
+function installKeyboardControls(opts: {
+  enabled: boolean;
+  quit: () => void;
+}): KeyboardControls {
+  const noopControls: KeyboardControls = {
+    pauseIfRequested: async () => {},
+    cleanup: () => {},
+  };
+  const input = process.stdin;
+  const canUseTty =
+    opts.enabled &&
+    Boolean(input.isTTY) &&
+    Boolean(process.stdout.isTTY) &&
+    Boolean(process.stderr.isTTY) &&
+    typeof input.setRawMode === "function";
+  if (!canUseTty) return noopControls;
+
+  let pauseRequested = false;
+  let paused = false;
+  let resumePaused: (() => void) | undefined;
+  let cleaned = false;
+  let wasRaw = false;
+  try {
+    wasRaw = Boolean(input.isRaw);
+  } catch {
+    wasRaw = false;
+  }
+
+  const resume = (): void => {
+    if (!paused) return;
+    paused = false;
+    const resolve = resumePaused;
+    resumePaused = undefined;
+    process.stderr.write("resuming\n");
+    resolve?.();
+  };
+
+  const onData = (chunk: Buffer | string): void => {
+    for (const key of String(chunk)) {
+      if (key === "p") {
+        pauseRequested = true;
+      } else if (key === "r") {
+        resume();
+      } else if (key === "q" || key === "\u0003") {
+        opts.quit();
+      }
+    }
+  };
+
+  input.setRawMode(true);
+  input.resume();
+  input.on("data", onData);
+  process.stderr.write(
+    "controls: [p] pause after current stage · [r] resume · [q] quit (save state & exit)\n"
+  );
+
+  const cleanup = (): void => {
+    if (cleaned) return;
+    cleaned = true;
+    input.off("data", onData);
+    input.setRawMode?.(wasRaw);
+    input.pause();
+  };
+
+  return {
+    pauseIfRequested: async () => {
+      if (!pauseRequested) return;
+      pauseRequested = false;
+      paused = true;
+      process.stderr.write("paused — press r to resume\n");
+      await new Promise<void>((resolve) => {
+        resumePaused = resolve;
+      });
+    },
+    cleanup,
+  };
+}
+
 export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   const {
     stages,
@@ -255,29 +338,31 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
   let onSigint: (() => void) | undefined;
   let onSigterm: (() => void) | undefined;
+  let keyboardControls: KeyboardControls | undefined;
+  const gracefulExit = (code: 130 | 143, message: string): never => {
+    if (!externalSignal && !stageAbort!.signal.aborted) stageAbort!.abort();
+    if (notify) notifyError(message);
+    keyboardControls?.cleanup();
+    releaseOnce();
+    cleanScratch(workspaceDir);
+    process.exit(code);
+  };
   if (!externalSignal) {
-    const abortActiveStage = (): void => {
-      if (!stageAbort!.signal.aborted) stageAbort!.abort();
-    };
     // process.exit() pre-empts the per-stage `finally` scratch cleanup, so the
     // interrupt path sweeps ephemeral .otto-tmp artifacts synchronously here.
     onSigint = (): void => {
-      abortActiveStage();
-      if (notify) notifyError("interrupted (SIGINT)");
-      releaseOnce();
-      cleanScratch(workspaceDir);
-      process.exit(130);
+      gracefulExit(130, "interrupted (SIGINT)");
     };
     onSigterm = (): void => {
-      abortActiveStage();
-      if (notify) notifyError("terminated (SIGTERM)");
-      releaseOnce();
-      cleanScratch(workspaceDir);
-      process.exit(143);
+      gracefulExit(143, "terminated (SIGTERM)");
     };
     process.on("SIGINT", onSigint);
     process.on("SIGTERM", onSigterm);
   }
+  keyboardControls = installKeyboardControls({
+    enabled: !externalSignal,
+    quit: () => gracefulExit(130, "interrupted (keyboard quit)"),
+  });
 
   let completedIterations = 0;
   let sentinelHit = false;
@@ -575,8 +660,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             return outcome();
           }
         }
+        await keyboardControls.pauseIfRequested();
       }
       completedIterations = i;
+      await keyboardControls.pauseIfRequested();
 
       // Cooldown between iterations.
       if (cooldownMs > 0 && i < total) {
@@ -603,6 +690,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   } finally {
     if (onSigint) process.off("SIGINT", onSigint);
     if (onSigterm) process.off("SIGTERM", onSigterm);
+    keyboardControls.cleanup();
     releaseOnce();
     if (notify && (sentinelHit || completedIterations === total)) {
       notifyComplete(completedIterations, sentinelHit);

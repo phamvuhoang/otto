@@ -399,6 +399,14 @@ export function resolveCodexSandboxMode(
 /**
  * Build the `codex exec` argv. Codex owns sandboxing itself, so Otto never
  * passes Claude's transient `--settings` file here.
+ *
+ * Codex's `workspace-write` sandbox makes the repo's `.git/` read-only even
+ * though it sits inside the writable workdir, so `git add`/`commit` fail with
+ * `Unable to create .git/index.lock: Operation not permitted`. Otto's loop is
+ * commit-driven — without writable `.git` the agent re-does the same uncommitted
+ * work every iteration and the run spins to max rounds. Re-add `.git` (resolved
+ * relative to the workdir Otto spawns Codex in) to Codex's writable roots.
+ * Unnecessary under `danger-full-access`, which has no filesystem confinement.
  */
 export function buildCodexArgs(
   _stage: Stage,
@@ -409,6 +417,10 @@ export function buildCodexArgs(
     process.env.OTTO_RUNNER
   )
 ): string[] {
+  const gitWritableArgs =
+    sandboxMode === "workspace-write"
+      ? ["-c", 'sandbox_workspace_write.writable_roots=[".git"]']
+      : [];
   return [
     "codex",
     "--ask-for-approval",
@@ -419,6 +431,7 @@ export function buildCodexArgs(
     "--skip-git-repo-check",
     "--sandbox",
     sandboxMode,
+    ...gitWritableArgs,
     ...modelArgs,
     `Read the full instructions from the file ./${promptRelPath} in the current workspace and execute them.`,
   ];

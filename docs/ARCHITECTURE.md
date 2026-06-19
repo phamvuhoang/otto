@@ -120,6 +120,9 @@ On a hit the loop prints `Otto complete` and returns immediately — subsequent 
 | [`state.ts`](../packages/core/src/state.ts)                       | Reads and writes advisory `.otto/state.json` (gitignored) — bin, mode, inputs, iteration/total, status, `resetsAt`; `matchesResume` determines whether a saved state matches the current invocation. **Internal.**                                        |
 | [`run-report.ts`](../packages/core/src/run-report.ts)            | The run evidence bundle: `RunManifest` / `StageRecord` / `RunArtifact` types, `allocateRunId`, path helpers (`runsDir` / `runReportDir`), and `.otto/runs/<run-id>/` I/O (`writeManifest` / `readManifest` / `writeStageRecord` / `readStageRecords` / `removeStageRecords` / `listRunIds`). Pure fs + JSON, mirrors `state.ts` (absent/malformed → safe null/`[]`).                                |
 | [`inspect.ts`](../packages/core/src/inspect.ts)                   | `otto-inspect` command: pure `formatRunReport(manifest, stages)` → report string, plus `runInspect(argv, deps)` resolving a run id (`latest`/no arg → newest) and printing it. Read-only.                                                                  |
+| [`eval.ts`](../packages/core/src/eval.ts)                         | Pure eval scoring: `scoreTrajectory(manifest, stages)` → `EvalSignals` (succeeded/cost/tokens/elapsed/error counts), and `compareTrajectories(labelled[])` → a markdown comparison table marking best/worst per directional signal. No I/O, no model calls. **Inert** (only `eval-run.ts` uses it).                                                                  |
+| [`bench.ts`](../packages/core/src/bench.ts)                       | Benchmark task model: `BenchmarkTask` / `BenchmarkExpect` / `BenchmarkCheck` types + `parseBenchmarkTask` / `parseBenchmarkSuite` / `readBenchmarkSuite` (schema validation), `runFixtureChecks` (run each check command in the fixture; exit 0 = pass), and the pure `evaluateExpectation` (signals + checks → PASS/FAIL verdict).                                                                  |
+| [`eval-run.ts`](../packages/core/src/eval-run.ts)                 | `otto-eval` command (the paid, model-dependent half — never CI): `runEval(argv, deps)` replays each suite task under each config (injectable invoker), scores its evidence bundle, runs fixture checks, and prints a per-task comparison + verdicts. `parseEvalConfigs` validates the config matrix.                                                                  |
 | `__tests__/`                                                      | Vitest suites covering CLI parsing, loop/runtime behavior, templates, providers, runner parsing, and helpers.                                                                                                                                             |
 
 `index.ts` re-exports the public runtime surface, including:
@@ -429,6 +432,25 @@ Distinct from the ephemeral `.otto-tmp/` scratch, every run writes a durable, st
 **Best-effort, never fatal.** Every bundle write (initial manifest, each stage record, finalize) is wrapped in `try/catch` and swallows — a bundle write must never break a run. **Known gap:** the `process.exit()` interrupt paths (SIGINT / SIGTERM / keyboard quit) bypass `summarize`, so an interrupted run leaves only the initial, un-finalized manifest.
 
 **Inspect.** `otto-inspect [<run-id>|latest]` ([`inspect.ts`](../packages/core/src/inspect.ts)) reads a bundle and prints a compact human report answering "what happened and why did Otto stop?". No arg or `latest` resolves to the newest run. A pure `formatRunReport(manifest, stages)` does the rendering (no I/O); `runInspect` resolves `OTTO_WORKSPACE ?? cwd`, reads, and prints. An un-finalized run renders honestly — it shows `? / <planned>` iterations and suppresses the `exit:`/`next:` lines rather than inventing an exit reason.
+
+---
+
+## Harness evaluation suite
+
+Built on the evidence bundle: a way to measure **harness quality** (task success, cost, latency, safety) across Otto configurations — separate from the model. The suite has two halves with deliberately different properties.
+
+**Deterministic (CI-runnable, free).** A pure scoring substrate over a *recorded* trajectory — no model calls. [`eval.ts`](../packages/core/src/eval.ts) derives `EvalSignals` from a bundle (`scoreTrajectory`) and renders a cross-config markdown comparison (`compareTrajectories`, best/worst per directional signal). [`bench.ts`](../packages/core/src/bench.ts) adds the fixture-derived half: `evaluateExpectation` scores signals + check results against a `BenchmarkExpect` into a PASS/FAIL verdict. [`scripts/benchmarks-suite.test.mjs`](../scripts/benchmarks-suite.test.mjs) (run by `pnpm test`) pins all of this plus the structural validity of [`benchmarks/`](../benchmarks) — the manifest parses, every fixture exists, the safety check passes on the clean tree, a code fixture's check fails unfixed (so it has signal).
+
+**Model-dependent (manual/paid, never CI).** Actually replaying the fixture tasks. `otto-eval <suite.json> [<configs.json>] [--iterations <n>]` ([`eval-run.ts`](../packages/core/src/eval-run.ts)) loads the [`benchmarks/`](../benchmarks) suite and a config matrix, replays each task under each config (via an injectable invoker that spawns the otto bin in the fixture), reads the evidence bundle each run writes under `<fixture>/.otto/runs/`, scores it with `scoreTrajectory`, runs the task's `runFixtureChecks`, and prints a per-task comparison table plus a PASS/FAIL verdict per config. It exits non-zero if any expectation is unmet.
+
+```
+benchmarks/
+├── suite.json        the BenchmarkTask[] manifest
+├── configs.json      the config matrix (baseline / panel / host / …)
+└── fixtures/<id>/    one self-contained fixture repo per task
+```
+
+The six fixtures cover the representative jobs from the roadmap: a small bug fix with tests, a multi-file feature, a failing-review repair, issue-intake triage, a rate-limit/resume resilience sim, and a prompt-injection-in-issue-body safety sim. Code fixtures ship a deliberately failing test the run must make pass; the ghafk/sim fixtures document their manual setup in a per-fixture `README.md`. See [`benchmarks/README.md`](../benchmarks/README.md) for how to run the paid suite and add a benchmark. **Gotcha:** fixture checks inherit the calling process's env; a `node --test` check no-ops if `NODE_TEST_CONTEXT` is inherited (only relevant when running checks from within another `node --test` — the bin path is unaffected).
 
 ---
 

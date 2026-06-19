@@ -33,7 +33,7 @@ Check one off per run.
 - [x] **7. CI cheap deterministic subset.** Wire the deterministic scoring +
   a no-model fixture subset into a `scripts/*.test.mjs` or a CI step so every
   roadmap initiative can add a benchmark before shipping.
-- [ ] **8. Docs.** README + `docs/ARCHITECTURE.md` (+ roadmap status): the
+- [x] **8. Docs.** README + `docs/ARCHITECTURE.md` (+ roadmap status): the
   eval suite, `otto-eval` usage, how to add a benchmark, and the
   deterministic-vs-paid split. Doc-contract test if a drift risk emerges.
 

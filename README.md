@@ -113,6 +113,9 @@ otto-ghafk --watch --watch-interval 300 5
 # Inspect the most recent run's evidence bundle (what happened, why it stopped)
 otto-inspect latest
 
+# Benchmark harness quality across configs (paid; replays the eval fixtures)
+otto-eval benchmarks/suite.json benchmarks/configs.json --iterations 3
+
 # Drive a repo other than the current directory; pin the model
 OTTO_WORKSPACE=~/code/other-repo OTTO_MODEL=opus otto-afk "./docs/plans/feature.md" 10
 
@@ -129,7 +132,7 @@ Full flag reference and more verify / apply-review recipes: **[docs/CLI.md](./do
 
 Otto ships as two npm packages:
 
-- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool). `otto-inspect` renders a past run's evidence bundle.
+- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool). `otto-inspect` renders a past run's evidence bundle; `otto-eval` benchmarks harness quality across configs (the [eval suite](./benchmarks)).
 - **[`@phamvuhoang/otto-core`](./packages/core)** — the library: iteration loop, native-sandbox runner, template renderer, stage registry. Importable from any Node project.
 
 Each iteration runs a **stage chain**: a **gate** stage (implement / verify / apply-review, depending on the bin and flags) followed by a **reviewer**. Before each stage, Otto renders a prompt template — expanding `@include`, `@spill`, `` !?`cmd` ``, `` !`cmd` ``, and `{{ INPUTS }}` tags — and injects the workspace's `.otto/LEARNINGS.md`. If the gate emits the sentinel `<promise>NO MORE TASKS</promise>`, the loop exits before the reviewer runs.

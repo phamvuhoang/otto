@@ -415,6 +415,7 @@ export function buildCodexArgs(
     "never",
     "exec",
     "--json",
+    "--ignore-user-config",
     "--skip-git-repo-check",
     "--sandbox",
     sandboxMode,

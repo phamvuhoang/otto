@@ -320,7 +320,7 @@ Codex stages use Codex's non-interactive mode and its own sandbox flags:
 
 ```
 codex --ask-for-approval never
-      exec --json --skip-git-repo-check
+      exec --json --ignore-user-config --skip-git-repo-check
        --sandbox workspace-write|danger-full-access
        [--model <OTTO_MODEL>]
        "Read the full instructions from the file ./.otto-tmp/<run-file> in the current workspace and execute them."
@@ -354,6 +354,8 @@ The settings file is written to `.otto-tmp/` and deleted in `finally`.
 - **`tool_use` / `tool_result` / `thinking` / `system:init`** → rendered to **stderr** (tool name + truncated input/result preview + elapsed ms).
 - **`result`** event → its `result` string is captured as the stage's return value. `total_cost_usd`, error fields, and `usage` token fields are parsed into `StageResult`.
 - **Codex `item.completed` agent_message + `turn.completed`** → the last agent message becomes `StageResult.result`; the terminal turn event supplies token usage. `turn.failed` / `error` becomes an errored `StageResult` so the same retry/rate-limit path applies.
+
+Codex stages pass `exec --ignore-user-config` so unattended Otto runs do not load a user's personal Codex MCP/plugin config. Auth still comes from Codex's normal auth sources (`~/.codex/auth.json`, `CODEX_API_KEY`, or Otto's `OPENAI_API_KEY` compatibility mapping).
 
 Color is **TTY-gated and stream-split**: `USE_COLOR` (stderr) and `USE_COLOR_STDOUT` (stdout) are independent, so `otto-ghafk 1 > out.txt` stays clean even on a TTY. ANSI is disabled when `NO_COLOR` is set or `TERM=dumb`.
 

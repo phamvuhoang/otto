@@ -30,7 +30,7 @@ Check one off per run.
   bug fix w/ tests, multi-file feature, failing review repair, issue-intake
   triage, rate-limit/resume sim, prompt-injection-in-issue-body sim. Each a
   self-contained fixture + a benchmark task entry.
-- [ ] **7. CI cheap deterministic subset.** Wire the deterministic scoring +
+- [x] **7. CI cheap deterministic subset.** Wire the deterministic scoring +
   a no-model fixture subset into a `scripts/*.test.mjs` or a CI step so every
   roadmap initiative can add a benchmark before shipping.
 - [ ] **8. Docs.** README + `docs/ARCHITECTURE.md` (+ roadmap status): the

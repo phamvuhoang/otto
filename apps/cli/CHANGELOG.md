@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0](https://github.com/phamvuhoang/otto/compare/otto-v0.4.1...otto-v0.5.0) (2026-06-19)
+
+
+### Features
+
+* **core:** governed memory ([#42](https://github.com/phamvuhoang/otto/issues/42)) + safety policy & taint ([#43](https://github.com/phamvuhoang/otto/issues/43)) ([#56](https://github.com/phamvuhoang/otto/issues/56)) ([795e4d1](https://github.com/phamvuhoang/otto/commit/795e4d1c428ca84113d3e896303a6cf423985806))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @phamvuhoang/otto-core bumped to 0.13.0
+
 ## [0.4.1](https://github.com/phamvuhoang/otto/compare/otto-v0.4.0...otto-v0.4.1) (2026-06-19)
 
 

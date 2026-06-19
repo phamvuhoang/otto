@@ -18,11 +18,14 @@ Ordered, bite-sized, testable tasks. One iteration implements one task.
       path (and inside `runPanel` substages), normalize the `StageResult` into a
       `StageRecord` and `writeStageRecord`. Verify: `loop.test.ts` asserts N
       stage records for N stages; panel substages recorded.
-- [ ] **4. Finalize the manifest on every terminal path.** On loop exit, update
+- [x] **4. Finalize the manifest on every terminal path.** On loop exit, update
       the manifest with `completedIterations`, cost/token totals, `exitReason`,
-      `nextAction`, `finishedAt`, and artifact links (rendered prompt, NDJSON
-      logs). Funnel through the existing `summarize` so every exit reason is
-      covered. Verify: `loop.test.ts` asserts the finalized fields per exit path.
+      `nextAction`, `finishedAt`, and artifact links (NDJSON logs dir, plus the
+      review-followups trail when present). Funnelled through the existing
+      `summarize` so every exit reason is covered. Verify: `loop.test.ts`
+      asserts the finalized fields per exit path. **Interrupt paths
+      (SIGINT/SIGTERM/keyboard quit via `process.exit`) leave only the initial
+      manifest — finalizing those is deferred (out of the summarize funnel).**
 - [ ] **5. Render a human summary (`otto-inspect <run-id>` / `latest`, or
       `--run-report`).** Read the manifest + stage records and print a compact
       report answering "what happened and why did Otto stop?". Verify: a unit
@@ -31,5 +34,5 @@ Ordered, bite-sized, testable tasks. One iteration implements one task.
       format, and the inspect command. Verify: doc-contract test if a drift risk
       emerges; otherwise prose only.
 
-This iteration: **task 3**. Next: **task 4** (finalize the manifest on every
-terminal path).
+This iteration: **task 4**. Next: **task 5** (render a human summary via
+`otto-inspect` / `--run-report`).

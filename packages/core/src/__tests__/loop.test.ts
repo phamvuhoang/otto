@@ -1416,7 +1416,6 @@ describe("runLoop", () => {
       iterations: 4,
     });
     expect(manifest?.startedAt).toBeTruthy();
-    expect(manifest?.artifacts).toEqual([]);
   });
 
   it("writes one stage record per executed stage", async () => {
@@ -1504,5 +1503,103 @@ describe("runLoop", () => {
     // the (mocked) panel records its own substages; the loop records only the
     // non-panel gate stage, never an umbrella record for the panel reviewer.
     expect(records.map((r) => r.stage)).toEqual(["implementer"]);
+  });
+
+  describe("finalizes the run manifest on terminal paths", () => {
+    const readOnlyManifest = async (workspaceDir: string) => {
+      const { runsDir, readManifest } = await import("../run-report.js");
+      const ids = (await import("node:fs")).readdirSync(runsDir(workspaceDir));
+      expect(ids).toHaveLength(1);
+      return readManifest(workspaceDir, ids[0]);
+    };
+
+    it("finalizes on sentinel completion", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(ok(sentinel, 0.25));
+
+      await runLoop(loopOptions(dirs, { iterations: 3 }));
+
+      const m = await readOnlyManifest(dirs.workspaceDir);
+      expect(m).toMatchObject({
+        exitReason: "complete",
+        completedIterations: 1,
+        costUsd: 0.25,
+        nextAction: "review the diff, then open a PR",
+      });
+      expect(m?.finishedAt).toBeTruthy();
+      // The raw NDJSON logs stay linked so raw debugging remains available.
+      expect(m?.artifacts.some((a) => a.kind === "ndjson-logs")).toBe(true);
+    });
+
+    it("finalizes a plain done exit when iterations exhaust", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(ok("keep going", 0.1)); // never sentinel
+
+      await runLoop(loopOptions(dirs, { iterations: 2, maxRetries: 0 }));
+
+      const m = await readOnlyManifest(dirs.workspaceDir);
+      expect(m).toMatchObject({
+        exitReason: "done",
+        completedIterations: 2,
+        costUsd: 0.2,
+      });
+    });
+
+    it("finalizes a budget stop with the exit reason and next action", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const reviewer: Stage = { name: "reviewer", template: "stage.md" };
+      mocks.runStage.mockImplementation((s) =>
+        Promise.resolve(ok(s.name === "implementer" ? "go" : "ok", 0.6))
+      );
+
+      await runLoop(
+        loopOptions(dirs, {
+          stages: [stage, reviewer] as [Stage, Stage],
+          iterations: 5,
+          budgetUsd: 1.0,
+          maxRetries: 0,
+        })
+      );
+
+      const m = await readOnlyManifest(dirs.workspaceDir);
+      expect(m).toMatchObject({
+        exitReason: "stopped (budget)",
+        completedIterations: 1,
+        costUsd: 1.2,
+        nextAction: "raise `--budget` and re-run to resume",
+      });
+    });
+
+    it("finalizes a done-with-failures exit", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockRejectedValue(new Error("boom"));
+
+      await runLoop(loopOptions(dirs, { iterations: 1, maxRetries: 0 }));
+
+      const m = await readOnlyManifest(dirs.workspaceDir);
+      expect(m?.exitReason).toBe("done with failures");
+      expect(m?.completedIterations).toBe(1);
+    });
+
+    it("links the review-followups trail as an artifact when present", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mkdirSync(join(dirs.workspaceDir, ".otto"), { recursive: true });
+      writeFileSync(
+        join(dirs.workspaceDir, ".otto", "review-followups.md"),
+        "- a (low) — deferred\n",
+        "utf8"
+      );
+      mocks.runStage.mockResolvedValue(ok(sentinel, 0.25));
+
+      await runLoop(loopOptions(dirs));
+
+      const m = await readOnlyManifest(dirs.workspaceDir);
+      expect(m?.artifacts.map((a) => a.kind)).toContain("review-followups");
+    });
   });
 });

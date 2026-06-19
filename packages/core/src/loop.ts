@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
@@ -15,6 +15,7 @@ import {
   removeStageRecords,
   writeManifest,
   writeStageRecord,
+  type RunArtifact,
 } from "./run-report.js";
 import { executeStage } from "./stage-exec.js";
 import {
@@ -333,6 +334,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // of what it was about to do. Later tasks finalize this manifest (cost/token
   // totals, exit reason, artifacts) and write per-stage records alongside.
   const runId = allocateRunId();
+  const manifestStartedAt = nowIso();
   writeManifest(workspaceDir, {
     runId,
     bin,
@@ -344,7 +346,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     costUsd: 0,
     tokenUsage: emptyTokenUsage(),
     artifacts: [],
-    startedAt: nowIso(),
+    startedAt: manifestStartedAt,
   });
 
   // Per-stage evidence records: `stageSeq` is a monotonic counter that orders
@@ -465,10 +467,64 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     };
   };
 
+  // Artifact links a finalized manifest carries. The raw NDJSON logs dir is
+  // always present (success metric: raw `.otto-tmp/logs` debugging stays
+  // available); the deferred-followups trail is linked only when it exists.
+  // Paths are workspace-relative so the bundle is portable.
+  const collectArtifacts = (): RunArtifact[] => {
+    const list: RunArtifact[] = [
+      {
+        kind: "ndjson-logs",
+        path: join(".otto-tmp", "logs"),
+        description: "raw per-stage NDJSON run logs",
+      },
+    ];
+    if (existsSync(join(workspaceDir, ".otto", "review-followups.md"))) {
+      list.push({
+        kind: "review-followups",
+        path: join(".otto", "review-followups.md"),
+        description: "deferred reviewer follow-ups",
+      });
+    }
+    return list;
+  };
+
+  // Finalize the run manifest on a terminal exit: stamp the completed-iteration
+  // count, cumulative cost/token totals, the exit reason + its next-action hint,
+  // the active runtime, artifact links, and finishedAt. Best-effort — a bundle
+  // write must NEVER break a run (mirrors the initial write + recordStage).
+  // Called once per terminal path through `summarize`, so every exit reason is
+  // covered without threading the manifest through each return site.
+  const finalizeManifest = (reason: string, completed: number): void => {
+    try {
+      writeManifest(workspaceDir, {
+        runId,
+        bin,
+        mode,
+        inputs,
+        runtime: { id: activeAgentId, displayName: activeAgentDisplayName },
+        branchStrategy,
+        iterations: total,
+        completedIterations: completed,
+        costUsd: runCostUsd,
+        tokenUsage: runTokenUsage,
+        exitReason: reason,
+        nextAction: nextActionFor(reason),
+        artifacts: collectArtifacts(),
+        startedAt: manifestStartedAt,
+        finishedAt: nowIso(),
+      });
+    } catch {
+      // Best-effort: never fail a run because the manifest could not be finalized.
+    }
+  };
+
   // One consistent end-of-run summary across every terminal path: the exit
   // reason, iterations run, and cumulative cost, then a next-action hint so a
   // maintainer reading the final line knows what to do next. Written to stdout
   // (like the other completion lines) so it survives `> out.txt` redirection.
+  // Also finalizes the run manifest here so the evidence bundle records the same
+  // exit reason on every terminal path the loop funnels through summarize.
   const summarize = (reason: string, iterations: number): void => {
     const iters = `${iterations} iteration${iterations === 1 ? "" : "s"}`;
     const tokens =
@@ -485,6 +541,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       line += `${dimOut(`  ⚑ ${deferred} deferred follow-up${deferred === 1 ? "" : "s"} in .otto/review-followups.md`)}\n`;
     }
     process.stdout.write(line);
+    finalizeManifest(reason, iterations);
   };
   let sawFailure = false;
 

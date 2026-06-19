@@ -2,6 +2,35 @@
 
 ## Conventions
 
+- **The run manifest is finalized inside `summarize`, NOT at each return site
+  (issue #39 P0 task 4).** `runLoop` writes the initial manifest at loop start
+  (task 2) and re-writes the WHOLE manifest on exit via a best-effort
+  `finalizeManifest(reason, completed)` closure (`writeManifest` overwrites, so
+  finalize reconstructs every field — there is no partial update). Crux: every
+  terminal path already funnels through the `summarize(reason, iterations)`
+  helper, so finalize is called from INSIDE `summarize` (one call site) rather
+  than threading it through all 8 `return outcome()` sites — `reason` →
+  `exitReason` + `nextActionFor(reason)` → `nextAction`, the `iterations` arg →
+  `completedIterations`, plus live `runCostUsd`/`runTokenUsage`, the ACTIVE
+  runtime (post-auto-switch), `collectArtifacts()`, and `finishedAt`.
+  `startedAt` is captured once into `manifestStartedAt` and reused by both the
+  initial write and finalize (so the bundle's span is honest). **Finalize is
+  `try/catch`-swallowed** like the initial write + `recordStage` (a bundle write
+  must never break a run). **`collectArtifacts()` always links the NDJSON logs
+  DIR** (`.otto-tmp/logs`, workspace-relative — durable, unlike the per-stage
+  rendered prompts which are cleaned in `finally` before finalize runs) and
+  conditionally `.otto/review-followups.md` when it exists. **Scope gap to know:
+  the `process.exit()` interrupt paths (SIGINT/SIGTERM/keyboard quit via
+  `gracefulExit`) do NOT call `summarize`, so an interrupted run leaves only the
+  INITIAL (un-finalized) manifest** — acceptable for "100% have a manifest", but
+  finalizing interrupts is deferred (would need a synchronous finalize in
+  `gracefulExit`). **Test interaction:** the task-2 "writes an initial run
+  manifest" test completes via the sentinel, so it now reads the FINALIZED
+  manifest — its `artifacts).toEqual([])` assertion was dropped (finalize
+  populates artifacts); the identity fields (bin/mode/inputs/runtime/
+  branchStrategy/iterations/startedAt) survive both writes unchanged. Pinned by
+  `loop.test.ts` "finalizes the run manifest on terminal paths" (complete / done
+  / budget / done-with-failures / review-followups artifact).
 - **Per-stage records are written by a `recordStage` closure in `runLoop`, with
   the panel recording its own substages (issue #39 P0 task 3).** `runLoop` holds
   a monotonic `stageSeq` counter + a `recordStage(iteration, stageName, sr,

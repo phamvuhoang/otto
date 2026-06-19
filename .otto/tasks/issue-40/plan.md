@@ -26,7 +26,7 @@ Check one off per run.
   configurations by invoking the otto bins, collecting each run's evidence
   bundle, scoring, and emitting the comparison report. Injectable deps like
   `runInspect`/`runLinearAuth`. Pinned by tests with mocked run execution.
-- [ ] **6. Fixture repos/tasks.** The representative jobs from the issue: small
+- [x] **6. Fixture repos/tasks.** The representative jobs from the issue: small
   bug fix w/ tests, multi-file feature, failing review repair, issue-intake
   triage, rate-limit/resume sim, prompt-injection-in-issue-body sim. Each a
   self-contained fixture + a benchmark task entry.

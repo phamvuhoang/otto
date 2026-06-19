@@ -58,6 +58,14 @@ export {
   type InspectDeps,
 } from "./inspect.js";
 export {
+  parseEvalConfigs,
+  runEval,
+  type EvalConfig,
+  type EvalDeps,
+  type EvalInvocation,
+  type EvalInvoker,
+} from "./eval-run.js";
+export {
   compareTrajectories,
   scoreTrajectory,
   type EvalSignals,

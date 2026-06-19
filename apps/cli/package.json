@@ -26,6 +26,7 @@
     "otto-afk": "./bin/otto-afk.js",
     "otto-ghafk": "./bin/otto-ghafk.js",
     "otto-inspect": "./bin/otto-inspect.js",
+    "otto-eval": "./bin/otto-eval.js",
     "otto-linear-afk": "./bin/otto-linear-afk.js",
     "otto-linear": "./bin/otto-linear.js",
     "otto-linear-auth": "./bin/otto-linear-auth.js"

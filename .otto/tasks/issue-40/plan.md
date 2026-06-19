@@ -22,7 +22,7 @@ Check one off per run.
   the fixture repo, not just the trajectory: tests-passed (run the fixture's
   test cmd), diff-correctness (compare against a golden/assertion). Pinned by
   tests against a tiny in-repo fixture.
-- [ ] **5. `otto-eval` runner bin.** New bin replaying tasks across
+- [x] **5. `otto-eval` runner bin.** New bin replaying tasks across
   configurations by invoking the otto bins, collecting each run's evidence
   bundle, scoring, and emitting the comparison report. Injectable deps like
   `runInspect`/`runLinearAuth`. Pinned by tests with mocked run execution.

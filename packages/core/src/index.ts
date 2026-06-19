@@ -66,6 +66,14 @@ export {
   type EvalInvoker,
 } from "./eval-run.js";
 export {
+  classifyRisk,
+  reviewDepthForLevel,
+  type ReviewDepth,
+  type RiskAssessment,
+  type RiskClass,
+  type RiskLevel,
+} from "./risk.js";
+export {
   compareTrajectories,
   scoreTrajectory,
   type EvalSignals,

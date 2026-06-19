@@ -10,6 +10,7 @@ import { RateLimitError, computeWaitMs } from "./rate-limit.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { cleanScratch } from "./scratch.js";
 import { getAgentRuntime, stageLogPath, type StageResult } from "./runner.js";
+import { allocateRunId, writeManifest } from "./run-report.js";
 import { executeStage } from "./stage-exec.js";
 import {
   clearState,
@@ -147,6 +148,9 @@ export type LoopOptions = {
   signal?: AbortSignal;
   /** Run mode for state.json identity (e.g. "afk" / "ghafk"). Default "afk". */
   mode?: string;
+  /** Branch strategy in effect (e.g. "branch" / "worktree" / "current"),
+   *  recorded in the run manifest. */
+  branchStrategy?: string;
   /** Cap on the rate-limit wait before halting. Default 6h. */
   maxWaitMs?: number;
   /** Force a fresh run, ignoring/clearing prior state. Default false. */
@@ -272,6 +276,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     reviewLenses,
     signal: externalSignal,
     mode = "afk",
+    branchStrategy,
     maxWaitMs = DEFAULT_MAX_WAIT_MS,
     fresh = false,
     agentId = "claude",
@@ -317,6 +322,25 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   process.stderr.write(
     `${USE_COLOR ? `${dim("━━━")} ${bold(versionLine)} ${dim("━━━")}` : `== ${versionLine} ==`}\n`
   );
+
+  // Allocate the run id and write an initial evidence-bundle manifest at loop
+  // start, so a run that crashes before any terminal path still leaves a record
+  // of what it was about to do. Later tasks finalize this manifest (cost/token
+  // totals, exit reason, artifacts) and write per-stage records alongside.
+  const runId = allocateRunId();
+  writeManifest(workspaceDir, {
+    runId,
+    bin,
+    mode,
+    inputs,
+    runtime: { id: activeAgentId, displayName: activeAgentDisplayName },
+    branchStrategy,
+    iterations: total,
+    costUsd: 0,
+    tokenUsage: emptyTokenUsage(),
+    artifacts: [],
+    startedAt: nowIso(),
+  });
 
   // When an external signal is injected (daemon/watch mode), the caller owns
   // wake-lock + process signal handlers. Skip both here.

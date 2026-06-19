@@ -13,12 +13,24 @@
   `-<pid>` → lexicographically sortable (so "latest" is a plain string sort) and
   collision-safe per host. Stage filenames are `<seq4>-iter<n>-<stage>.json` with
   the stage segment sanitized to `[A-Za-z0-9_-]` (panel lens names from
-  `OTTO_REVIEW_LENSES` are free text → a filename). The module is **INERT** until
-  loop wiring (plan task 2+ in `.otto/tasks/issue-39/plan.md`): nothing imports it
-  from the loop yet, so it can't regress behavior — same "ship the substrate first,
-  inert" pattern as `task-key.ts`. Bundles go in `.otto/` (durable like
-  `state.json`), NOT `.otto-tmp/`; raw `.otto-tmp/logs` is untouched. Pinned by
-  `run-report.test.ts`.
+  `OTTO_REVIEW_LENSES` are free text → a filename). Bundles go in `.otto/` (durable
+  like `state.json`), NOT `.otto-tmp/`; raw `.otto-tmp/logs` is untouched. Pinned by
+  `run-report.test.ts`. **Task 2 wired it into the loop:** `runLoop` calls
+  `allocateRunId()` + `writeManifest()` ONCE at loop start (right after the version
+  banner, after the resume/runtime-restore block so the manifest's `runtime` matches
+  the live `activeAgentId`/`activeAgentDisplayName`, incl. a fallback restored on
+  resume). `branchStrategy` is a new optional `LoopOptions` field threaded from
+  run-bin's `resolved.strategy`. The initial manifest seeds `costUsd:0`,
+  `tokenUsage:emptyTokenUsage()`, `artifacts:[]`, `iterations:total` (the planned/
+  resumed total, not the arg) + `startedAt` — later tasks (4) finalize the cost/token/
+  exit fields and (3) write stage records. **runId is allocated fresh per `runLoop`
+  invocation, NOT reused across resume** (RunState has no runId); a resumed run starts
+  a new bundle. `.otto/runs/` is added to the workspace `.gitignore` by
+  run-bin's `ensureStateGitignored` (now loops over `[".otto/state.json",
+  ".otto/runs/"]`, tracking `existing` so the second append sees the first). The
+  watch path's inner `runLoop` is NOT threaded `branchStrategy` (optional → undefined
+  in watch-run manifests; out of task-2 scope). Pinned by `loop.test.ts`
+  "writes an initial run manifest at loop start".
 - **Agent-runtime docs span 5 surfaces, pinned by one doc-contract test, and
   document Codex HONESTLY (issue #24 P5).** The runtime feature is documented in
   README (flags/env lists + a `--print-config` example), `docs/CLI.md` (a

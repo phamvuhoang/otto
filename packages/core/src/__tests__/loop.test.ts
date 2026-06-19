@@ -1338,4 +1338,36 @@ describe("runLoop", () => {
     const { readState } = await import("../state.js");
     expect(readState(dirs.workspaceDir)).toBeNull();
   });
+
+  it("writes an initial run manifest at loop start", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    await runLoop(
+      loopOptions(dirs, {
+        mode: "ghafk",
+        bin: "otto-ghafk",
+        inputs: "39",
+        iterations: 4,
+        branchStrategy: "branch",
+      })
+    );
+
+    const { runsDir, readManifest } = await import("../run-report.js");
+    const ids = (await import("node:fs")).readdirSync(runsDir(dirs.workspaceDir));
+    expect(ids).toHaveLength(1);
+    const manifest = readManifest(dirs.workspaceDir, ids[0]);
+    expect(manifest).toMatchObject({
+      runId: ids[0],
+      bin: "otto-ghafk",
+      mode: "ghafk",
+      inputs: "39",
+      runtime: { id: "claude", displayName: "Claude Code" },
+      branchStrategy: "branch",
+      iterations: 4,
+    });
+    expect(manifest?.startedAt).toBeTruthy();
+    expect(manifest?.artifacts).toEqual([]);
+  });
 });

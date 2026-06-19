@@ -8,7 +8,7 @@ Ordered, bite-sized, testable tasks. One iteration implements one task.
       stage records (`writeManifest` / `readManifest` / `writeStageRecord` /
       `readStageRecords`). Export from `index.ts`. Inert — no loop wiring yet.
       Verify: new `run-report.test.ts` green + typecheck.
-- [ ] **2. Allocate a run-id at loop start + write an initial manifest.**
+- [x] **2. Allocate a run-id at loop start + write an initial manifest.**
       `runLoop` allocates a `runId`, writes `.otto/runs/<run-id>/manifest.json`
       with bin, mode, inputs, runtime, branch strategy, planned iterations, and
       `startedAt`. Thread a `branchStrategy` into `LoopOptions` from run-bin.
@@ -31,4 +31,4 @@ Ordered, bite-sized, testable tasks. One iteration implements one task.
       format, and the inspect command. Verify: doc-contract test if a drift risk
       emerges; otherwise prose only.
 
-This iteration: **task 1**.
+This iteration: **task 2**. Next: **task 3** (write one stage record per stage).

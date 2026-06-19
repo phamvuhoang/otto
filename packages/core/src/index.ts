@@ -64,6 +64,15 @@ export {
   type LabelledSignals,
 } from "./eval.js";
 export {
+  parseBenchmarkSuite,
+  parseBenchmarkTask,
+  readBenchmarkSuite,
+  type BenchmarkBin,
+  type BenchmarkCheck,
+  type BenchmarkExpect,
+  type BenchmarkTask,
+} from "./bench.js";
+export {
   runWatch,
   pollOpenIssues,
   pollLinearIssues,

@@ -14,7 +14,7 @@ Check one off per run.
   signal). Pure. Pinned by tests.
   Verify: `pnpm -r typecheck && pnpm -r test` green; markdown table + best/worst
   markers + tie/single-run/null cases pinned in `eval.test.ts`.
-- [ ] **3. Benchmark task model.** A `BenchmarkTask` type + loader for a
+- [x] **3. Benchmark task model.** A `BenchmarkTask` type + loader for a
   fixture manifest (id, kind, fixture path, the otto bin/args + env config to
   run, and the deterministic expected-outcome checks). Pure parsing + schema
   validation. Pinned by tests. No fixtures run yet.

@@ -12,10 +12,15 @@ const mocks = vi.hoisted(() => ({
   runLoop: vi.fn(),
   resolveBranch: vi.fn(),
   ensureTmpIgnored: vi.fn(),
+  resolveSubIssueList: vi.fn(),
 }));
 
 vi.mock("../loop.js", () => ({
   runLoop: mocks.runLoop,
+}));
+
+vi.mock("../gh-sub-issues.js", () => ({
+  resolveSubIssueList: mocks.resolveSubIssueList,
 }));
 
 vi.mock("../branch.js", () => ({
@@ -254,5 +259,66 @@ describe("runBin fallback runtime", () => {
         autoSwitchOnLimit: true,
       })
     );
+  });
+});
+
+describe("runBin --include-sub-issues", () => {
+  const ghafkCfg: RunBinConfig = {
+    bin: "otto-ghafk",
+    usage: "<iterations>",
+    desc: "gh",
+    stages: [{ name: "ghafk-implementer", template: "ghafk.md" }],
+    takesInputArg: false,
+    mode: "ghafk",
+    supportsWatch: true,
+    supportsRepoScope: true,
+    issueStage: { name: "ghafk-issue-implementer", template: "ghafk-issue.md" },
+  };
+  const oldWorkspace = process.env.OTTO_WORKSPACE;
+  let workspace: string | undefined;
+
+  beforeEach(() => {
+    mocks.resolveSubIssueList.mockReset();
+    mocks.resolveSubIssueList.mockReturnValue([40, 41, 42]);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (workspace) rmSync(workspace, { recursive: true, force: true });
+    workspace = undefined;
+    if (oldWorkspace === undefined) delete process.env.OTTO_WORKSPACE;
+    else process.env.OTTO_WORKSPACE = oldWorkspace;
+    delete process.env.OTTO_ISSUE;
+    delete process.env.OTTO_INCLUDE_SUB_ISSUES;
+  });
+
+  it("runs runLoop once per resolved sub-issue with that issue's number", async () => {
+    workspace = makeWorkspace();
+    process.env.OTTO_WORKSPACE = workspace;
+    mockBranch(workspace);
+    captureStdout();
+
+    await expect(
+      runBin(["--issue", "38", "--include-sub-issues", "2"], ghafkCfg)
+    ).resolves.toBeUndefined();
+
+    expect(mocks.runLoop).toHaveBeenCalledTimes(3);
+    expect(mocks.runLoop.mock.calls.map((c) => c[0].inputs)).toEqual([
+      "40",
+      "41",
+      "42",
+    ]);
+  });
+
+  it("errors when --include-sub-issues is used without --issue", async () => {
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(() => undefined as never);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await runBin(["--include-sub-issues", "2"], ghafkCfg).catch(() => {});
+
+    expect(err).toHaveBeenCalledWith("--include-sub-issues requires --issue");
+    expect(exit).toHaveBeenCalledWith(1);
   });
 });

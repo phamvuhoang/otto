@@ -326,6 +326,14 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
         ? describeScope(scope)
         : undefined;
 
+  // Resolve --include-sub-issues from flag → OTTO_INCLUDE_SUB_ISSUES so
+  // --print-config can report it before any run starts. Validated below.
+  const includeSubIssues =
+    flags.includeSubIssues ||
+    ["1", "true", "yes"].includes(
+      (process.env.OTTO_INCLUDE_SUB_ISSUES ?? "").trim().toLowerCase()
+    );
+
   if (flags.printConfig) {
     printConfig(cfg.bin, workspaceDir, packageDir, {
       cliVersion: cfg.cliVersion,
@@ -356,6 +364,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       watchLabel,
       watchScope,
       issue: flags.issue,
+      includeSubIssues,
       maxWaitMs,
       branchStrategy: branchStrategyArg,
       branchPrefix: branchPrefixArg,
@@ -398,6 +407,17 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     console.error(
       "--issue is only supported by otto-ghafk and otto-linear-afk"
     );
+    process.exit(1);
+  }
+
+  // Sub-issue expansion is GitHub-only (resolveSubIssueList shells out to `gh`)
+  // and meaningless without a target issue to expand from.
+  if (includeSubIssues && !cfg.supportsRepoScope) {
+    console.error("--include-sub-issues is only supported by otto-ghafk");
+    process.exit(1);
+  }
+  if (includeSubIssues && flags.issue == null) {
+    console.error("--include-sub-issues requires --issue");
     process.exit(1);
   }
 
@@ -558,9 +578,9 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     return;
   }
 
-  await runLoop({
+  // Shared runLoop options; only `inputs` and `budgetUsd` vary per sub-issue.
+  const loopBase = {
     stages,
-    inputs: inputs ?? "",
     iterations,
     workspaceDir: effectiveWorkspaceDir,
     packageDir,
@@ -569,7 +589,6 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     notify: flags.notify,
     bin: cfg.bin,
     cliVersion: cfg.cliVersion,
-    budgetUsd: flags.budget,
     cooldownMs: flags.cooldownMs,
     tokenMode,
     reviewLenses,
@@ -581,5 +600,41 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     fallbackAgentId: fallback.agent?.id,
     fallbackAgentDisplayName: fallback.agent?.displayName,
     autoSwitchOnLimit: fallback.autoSwitch,
+  };
+
+  if (flags.issue != null && includeSubIssues) {
+    const { resolveSubIssueList } = await import("./gh-sub-issues.js");
+    const list = resolveSubIssueList(Number(flags.issue), {
+      repo: process.env.OTTO_GITHUB_REPO,
+      cwd: effectiveWorkspaceDir,
+    });
+    process.stderr.write(
+      `⊕ sub-issue expansion: ${list.length} issue(s)${list.length ? ` → ${list.join(", ")}` : " (nothing open to do)"}\n`
+    );
+    // Budget spans the whole invocation: each runLoop gets the remaining budget,
+    // and we stop launching children once it is exhausted.
+    let spent = 0;
+    for (const n of list) {
+      if (flags.budget != null && spent >= flags.budget) {
+        process.stderr.write(
+          `stopping: --budget $${flags.budget} reached before issue #${n}\n`
+        );
+        break;
+      }
+      process.env.OTTO_ISSUE = String(n);
+      const childOutcome = await runLoop({
+        ...loopBase,
+        inputs: String(n),
+        budgetUsd: flags.budget != null ? flags.budget - spent : undefined,
+      });
+      spent += childOutcome.costUsd;
+    }
+    return;
+  }
+
+  await runLoop({
+    ...loopBase,
+    inputs: inputs ?? "",
+    budgetUsd: flags.budget,
   });
 }

@@ -126,6 +126,63 @@ function stderrText(): string {
     .join("");
 }
 
+function withFakeTty(): {
+  setRawMode: ReturnType<typeof vi.fn>;
+  resume: ReturnType<typeof vi.fn>;
+  pause: ReturnType<typeof vi.fn>;
+  restore: () => void;
+} {
+  const descriptors = {
+    stdinIsTty: Object.getOwnPropertyDescriptor(process.stdin, "isTTY"),
+    stdoutIsTty: Object.getOwnPropertyDescriptor(process.stdout, "isTTY"),
+    stderrIsTty: Object.getOwnPropertyDescriptor(process.stderr, "isTTY"),
+    setRawMode: Object.getOwnPropertyDescriptor(process.stdin, "setRawMode"),
+    resume: Object.getOwnPropertyDescriptor(process.stdin, "resume"),
+    pause: Object.getOwnPropertyDescriptor(process.stdin, "pause"),
+  };
+  const setRawMode = vi.fn();
+  const resume = vi.fn();
+  const pause = vi.fn();
+  Object.defineProperty(process.stdin, "isTTY", {
+    configurable: true,
+    value: true,
+  });
+  Object.defineProperty(process.stdout, "isTTY", {
+    configurable: true,
+    value: true,
+  });
+  Object.defineProperty(process.stderr, "isTTY", {
+    configurable: true,
+    value: true,
+  });
+  Object.defineProperty(process.stdin, "setRawMode", {
+    configurable: true,
+    value: setRawMode,
+  });
+  Object.defineProperty(process.stdin, "resume", {
+    configurable: true,
+    value: resume,
+  });
+  Object.defineProperty(process.stdin, "pause", {
+    configurable: true,
+    value: pause,
+  });
+  const restore = () => {
+    for (const [target, key, descriptor] of [
+      [process.stdin, "isTTY", descriptors.stdinIsTty],
+      [process.stdout, "isTTY", descriptors.stdoutIsTty],
+      [process.stderr, "isTTY", descriptors.stderrIsTty],
+      [process.stdin, "setRawMode", descriptors.setRawMode],
+      [process.stdin, "resume", descriptors.resume],
+      [process.stdin, "pause", descriptors.pause],
+    ] as const) {
+      if (descriptor) Object.defineProperty(target, key, descriptor);
+      else delete (target as unknown as Record<string, unknown>)[key];
+    }
+  };
+  return { setRawMode, resume, pause, restore };
+}
+
 function loopOptions(dirs: LoopDirs, overrides = {}) {
   return {
     stages: [stage] as [Stage],
@@ -332,6 +389,184 @@ describe("runLoop", () => {
     await loop;
     expect(mocks.release).toHaveBeenCalledTimes(1);
     expect(exit).toHaveBeenCalledWith(130);
+  });
+
+  it("installs TTY keyboard controls and prints the hint", async () => {
+    const tty = withFakeTty();
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    try {
+      await runLoop(loopOptions(dirs));
+    } finally {
+      tty.restore();
+    }
+
+    expect(tty.setRawMode).toHaveBeenNthCalledWith(1, true);
+    expect(tty.resume).toHaveBeenCalled();
+    expect(stderrText()).toContain(
+      "controls: [p] pause after current stage · [r] resume · [q] quit (save state & exit)"
+    );
+    expect(tty.setRawMode).toHaveBeenLastCalledWith(false);
+    expect(tty.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not install keyboard controls for non-TTY runs", async () => {
+    const tty = withFakeTty();
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: false,
+    });
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    try {
+      await runLoop(loopOptions(dirs));
+    } finally {
+      tty.restore();
+    }
+
+    expect(tty.setRawMode).not.toHaveBeenCalled();
+    expect(stderrText()).not.toContain("controls: [p]");
+  });
+
+  it("does not install keyboard controls when output is not a TTY", async () => {
+    const tty = withFakeTty();
+    Object.defineProperty(process.stdout, "isTTY", {
+      configurable: true,
+      value: false,
+    });
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    try {
+      await runLoop(loopOptions(dirs));
+    } finally {
+      tty.restore();
+    }
+
+    expect(tty.setRawMode).not.toHaveBeenCalled();
+    expect(stderrText()).not.toContain("controls: [p]");
+  });
+
+  it("does not install keyboard controls when stderr is not a TTY", async () => {
+    const tty = withFakeTty();
+    Object.defineProperty(process.stderr, "isTTY", {
+      configurable: true,
+      value: false,
+    });
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    try {
+      await runLoop(loopOptions(dirs));
+    } finally {
+      tty.restore();
+    }
+
+    expect(tty.setRawMode).not.toHaveBeenCalled();
+    expect(stderrText()).not.toContain("controls: [p]");
+  });
+
+  it("does not install keyboard controls for externally signaled runs", async () => {
+    const tty = withFakeTty();
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+    const ac = new AbortController();
+
+    try {
+      await runLoop(loopOptions(dirs, { signal: ac.signal }));
+    } finally {
+      tty.restore();
+    }
+
+    expect(tty.setRawMode).not.toHaveBeenCalled();
+    expect(stderrText()).not.toContain("controls: [p]");
+  });
+
+  it("pauses after the current stage and resumes in the same process", async () => {
+    const tty = withFakeTty();
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const reviewer: Stage = { name: "reviewer", template: "stage.md" };
+    let finishImplementer!: () => void;
+    mocks.runStage.mockImplementation((s) => {
+      if (s.name === "implementer") {
+        return new Promise((resolve) => {
+          finishImplementer = () => resolve(ok("keep going"));
+        });
+      }
+      return Promise.resolve(ok(sentinel));
+    });
+
+    try {
+      const loop = runLoop(
+        loopOptions(dirs, { stages: [stage, reviewer] as [Stage, Stage] })
+      );
+      await Promise.resolve();
+      process.stdin.emit("data", Buffer.from("p"));
+      finishImplementer();
+
+      await vi.waitFor(() => {
+        expect(mocks.runStage).toHaveBeenCalledTimes(1);
+        expect(stderrText()).toContain("paused — press r to resume");
+      });
+
+      process.stdin.emit("data", Buffer.from("r"));
+      await loop;
+    } finally {
+      tty.restore();
+    }
+
+    expect(mocks.runStage).toHaveBeenCalledTimes(2);
+    expect(stderrText()).toContain("resuming");
+  });
+
+  it("quits cleanly from keyboard controls and restores the terminal", async () => {
+    const tty = withFakeTty();
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const exit = vi.spyOn(process, "exit").mockImplementation(((
+      code?: number
+    ) => {
+      throw new Error(`exit ${code}`);
+    }) as never);
+    let capturedSignal: AbortSignal | undefined;
+    mocks.runStage.mockImplementation(
+      (_stage, _prompt, _workspace, _iteration, _spill, _log, options) => {
+        capturedSignal = options.signal;
+        return new Promise((_resolve, reject) => {
+          capturedSignal!.addEventListener("abort", () =>
+            reject(new Error("aborted"))
+          );
+        });
+      }
+    );
+
+    try {
+      const loop = runLoop(loopOptions(dirs, { maxRetries: 0 }));
+      await vi.waitFor(() => {
+        expect(capturedSignal?.aborted).toBe(false);
+      });
+
+      expect(() => process.stdin.emit("data", Buffer.from("q"))).toThrow(
+        "exit 130"
+      );
+      expect(capturedSignal?.aborted).toBe(true);
+      await loop;
+    } finally {
+      tty.restore();
+    }
+
+    expect(mocks.release).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(130);
+    expect(tty.setRawMode).toHaveBeenLastCalledWith(false);
+    expect(tty.pause).toHaveBeenCalledTimes(1);
   });
 
   it("aborts the active stage and releases the wake-lock on SIGTERM", async () => {

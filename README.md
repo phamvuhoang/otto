@@ -66,6 +66,7 @@ More than a `while`-loop around `claude`:
 - 📊 **It can show token usage.** `--token-mode measure` prints per-stage and run-total input/output/cache token counts from Claude's `result` event. `--token-mode reduce` also applies conservative render-time prompt compaction; default `off` preserves current output and prompts.
 - 🔁 **It survives the night.** Holds an OS wake-lock, retries transient failures with backoff, waits out Claude rate limits and resumes the same iteration, and persists `.otto/state.json` so a restart picks up where it left off — never redoing committed work.
 - 🧾 **It leaves a paper trail.** Every run writes a durable **evidence bundle** to `.otto/runs/<run-id>/` — a manifest (inputs, runtime, iteration count, token/cost totals, exit reason, next action) plus one record per stage. `otto-inspect [latest]` renders it into a compact "what happened and why did Otto stop?" report, so you review the outcome instead of replaying `.otto-tmp/logs`.
+- 🗃️ **Its memory is governed, not a growing blob.** Underneath the flat `LEARNINGS.md`, Otto can keep structured memory records as one git-tracked JSON file each under `.otto/memory/<id>.json` — every record carrying provenance (source run, task key), scope (which files/modules it applies to), confidence, trust level, and a freshness policy (expiry / revalidate). Newer records supersede older ones. `otto-memory audit` reports stale, conflicting, and frequently-used entries _before_ they influence a run, and `otto-memory project` renders only the **active** records back into a bounded `LEARNINGS.md` — so prompt size from memory stays explainable instead of contaminating unrelated runs with stale assumptions.
 
 Beyond the build loop, two read/repair modes reuse all of the above:
 
@@ -114,6 +115,9 @@ otto-ghafk --watch --watch-interval 300 5
 # Inspect the most recent run's evidence bundle (what happened, why it stopped)
 otto-inspect latest
 
+# Audit governed memory: stale, conflicting, and frequently-used records
+otto-memory audit
+
 # Benchmark harness quality across configs (paid; replays the eval fixtures)
 otto-eval benchmarks/suite.json benchmarks/configs.json --iterations 3
 
@@ -133,7 +137,7 @@ Full flag reference and more verify / apply-review recipes: **[docs/CLI.md](./do
 
 Otto ships as two npm packages:
 
-- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool). `otto-inspect` renders a past run's evidence bundle; `otto-eval` benchmarks harness quality across configs (the [eval suite](./benchmarks)).
+- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool). `otto-inspect` renders a past run's evidence bundle; `otto-memory` audits the governed memory records; `otto-eval` benchmarks harness quality across configs (the [eval suite](./benchmarks)).
 - **[`@phamvuhoang/otto-core`](./packages/core)** — the library: iteration loop, native-sandbox runner, template renderer, stage registry. Importable from any Node project.
 
 Each iteration runs a **stage chain**: a **gate** stage (implement / verify / apply-review, depending on the bin and flags) followed by a **reviewer**. Before each stage, Otto renders a prompt template — expanding `@include`, `@spill`, `` !?`cmd` ``, `` !`cmd` ``, and `{{ INPUTS }}` tags — and injects the workspace's `.otto/LEARNINGS.md`. If the gate emits the sentinel `<promise>NO MORE TASKS</promise>`, the loop exits before the reviewer runs.

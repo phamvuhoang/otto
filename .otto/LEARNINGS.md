@@ -139,8 +139,17 @@
   (`.otto/memory/2026-06-19T17-12-11-548Z-6b.json`), verified via `otto-memory
   audit` (1 active) + `project` (renders into Conventions). Pinned at the
   render-contract level by `governed-memory.test.ts` (tiers / fields / commands /
-  both includes / afk+ghafk end-to-end). Only slice 7 (README + ARCHITECTURE
-  docs) remains on #42.
+  both includes / afk+ghafk end-to-end). **Issue #42 is COMPLETE — slice 7 (docs)
+  landed the governed-memory prose: a README "Why Otto" bullet + `otto-memory
+  audit` example + the bin in "How it works", and in `docs/ARCHITECTURE.md` the
+  `memory.ts`/`memory-cli.ts` module-map rows, the index re-export block entries,
+  and a `## Governed memory lifecycle` section (record layout / three orthogonal
+  axes / derived-freshness / supersede+conflict / audit asymmetry / projection +
+  compaction tiers / inert-on-read). Prose-only, NO doc-contract test — same call
+  as issue-39 task 6: a stable record layout + read-only `otto-memory` commands is
+  low drift risk, and the substrate is already pinned by `memory.test.ts`/
+  `memory-cli.test.ts`/`governed-memory.test.ts`; a doc-contract test would be
+  over-engineering. The additive prose tripped no existing doc-contract test.**
 - **The harness evaluation suite (issue #40 P1) starts as a PURE scoring
   substrate over the #39 evidence bundle, deterministic-first.** `eval.ts`
   exports `EvalSignals` + `scoreTrajectory(manifest, stages)` — derives ONLY the

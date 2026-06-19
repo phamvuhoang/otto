@@ -36,5 +36,5 @@ regress existing runs.
       Shipped as a shared fragment `templates/governed-memory.md`, `@include`d by
       both LEARNINGS sections (`prompt.md` + `ghprompt-workflow.md`); pinned by
       `governed-memory.test.ts`. *(this run)*
-- [ ] **7. Docs.** README feature bullet + `otto-memory audit` example;
-      ARCHITECTURE module rows + a "Governed memory lifecycle" section.
+- [x] **7. Docs.** README feature bullet + `otto-memory audit` example;
+      ARCHITECTURE module rows + a "Governed memory lifecycle" section. *(this run)*

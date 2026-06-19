@@ -120,6 +120,8 @@ On a hit the loop prints `Otto complete` and returns immediately — subsequent 
 | [`state.ts`](../packages/core/src/state.ts)                       | Reads and writes advisory `.otto/state.json` (gitignored) — bin, mode, inputs, iteration/total, status, `resetsAt`; `matchesResume` determines whether a saved state matches the current invocation. **Internal.**                                        |
 | [`run-report.ts`](../packages/core/src/run-report.ts)            | The run evidence bundle: `RunManifest` / `StageRecord` / `RunArtifact` types, `allocateRunId`, path helpers (`runsDir` / `runReportDir`), and `.otto/runs/<run-id>/` I/O (`writeManifest` / `readManifest` / `writeStageRecord` / `readStageRecords` / `removeStageRecords` / `listRunIds`). Pure fs + JSON, mirrors `state.ts` (absent/malformed → safe null/`[]`).                                |
 | [`inspect.ts`](../packages/core/src/inspect.ts)                   | `otto-inspect` command: pure `formatRunReport(manifest, stages)` → report string, plus `runInspect(argv, deps)` resolving a run id (`latest`/no arg → newest) and printing it. Read-only.                                                                  |
+| [`memory.ts`](../packages/core/src/memory.ts)                     | Governed memory substrate: `MemoryRecord` (provenance / `scope[]` / `confidence` / `trust` / `status` / freshness fields) + `.otto/memory/<id>.json` I/O (`allocateMemoryId`, `memoryDir` / `memoryRecordPath`, `writeMemoryRecord` / `readMemoryRecord` / `listMemoryIds` / `readMemoryRecords`, absent/malformed → safe `null`/`[]`). Pure lifecycle logic: `memoryStatus` (derived freshness) / `touchMemory`, `supersede` / `detectConflicts`, `auditMemory` → `AuditReport`, `projectLearnings` (active records → the `LEARNINGS.md` view). Mirrors `run-report.ts`; the directory **is** the list. |
+| [`memory-cli.ts`](../packages/core/src/memory-cli.ts)             | `otto-memory` command: pure `formatAuditReport(report)` → string, plus `runMemory(argv, deps)` with `audit` (stale / conflicting / frequently-used report) and `project` (render active records to a raw `LEARNINGS.md`) subcommands. Read-only, mirrors `runInspect`.                                                                  |
 | [`eval.ts`](../packages/core/src/eval.ts)                         | Pure eval scoring: `scoreTrajectory(manifest, stages)` → `EvalSignals` (succeeded/cost/tokens/elapsed/error counts), and `compareTrajectories(labelled[])` → a markdown comparison table marking best/worst per directional signal. No I/O, no model calls. **Inert** (only `eval-run.ts` uses it).                                                                  |
 | [`bench.ts`](../packages/core/src/bench.ts)                       | Benchmark task model: `BenchmarkTask` / `BenchmarkExpect` / `BenchmarkCheck` types + `parseBenchmarkTask` / `parseBenchmarkSuite` / `readBenchmarkSuite` (schema validation), `runFixtureChecks` (run each check command in the fixture; exit 0 = pass), and the pure `evaluateExpectation` (signals + checks → PASS/FAIL verdict).                                                                  |
 | [`eval-run.ts`](../packages/core/src/eval-run.ts)                 | `otto-eval` command (the paid, model-dependent half — never CI): `runEval(argv, deps)` replays each suite task under each config (injectable invoker), scores its evidence bundle, runs fixture checks, and prints a per-task comparison + verdicts. `parseEvalConfigs` validates the config matrix.                                                                  |
@@ -161,6 +163,18 @@ export {
   type RunArtifact,
 } from "./run-report.js";
 export { formatRunReport, runInspect } from "./inspect.js";
+export { formatAuditReport, runMemory } from "./memory-cli.js";
+export {
+  allocateMemoryId,
+  auditMemory,
+  detectConflicts,
+  memoryStatus,
+  projectLearnings,
+  supersede,
+  touchMemory,
+  type AuditReport,
+  type MemoryRecord,
+} from "./memory.js";
 ```
 
 `keepalive` / `detach` / `notify` / `retry` / `cli-help` are deliberately **not** part of the public surface.
@@ -466,6 +480,32 @@ Opt-in via `--adaptive-router` (or `OTTO_ADAPTIVE_ROUTER=1`); **off by default**
 - **Policy** ([`policy.ts`](../packages/core/src/policy.ts)). `decide(signals, ctx)` returns `continue` / `stop-low-progress` / `escalate-pause` / `finish-confident`, with precedence escalate > finish > stop > continue.
 
 **Loop wiring.** `loop.ts` captures HEAD at each iteration start; at the reviewer stage it routes the lens subset from `changedFilesSince(iterStartSha)` (an injectable `resolveChangedPaths` seam keeps it unit-testable), and at iteration end it feeds progress into the policy. The active outcome today is the **diff-stall early stop**: a run that produces no diff for two consecutive iterations ends as `stopped (low progress)` instead of burning the remaining iterations. `failingChecks` / `failureSignature` / finding recurrence are plumbed through the pure layer but not yet observed from stage output (the loop does not run the project's tests), so `escalate-pause` / `finish-confident` are inert until that observability lands — a deliberate, honest gap.
+
+---
+
+## Governed memory lifecycle
+
+Otto's repo learning has two layers. The flat, hand-curated `.otto/LEARNINGS.md` is the human-readable memory injected verbatim into every prompt (via the `<learnings>` block — see the template renderer above). Underneath it, a **governed memory** substrate ([`memory.ts`](../packages/core/src/memory.ts)) treats each learning as a structured record with provenance, scope, and a lifecycle — so memory can be audited and bounded instead of growing as an append-only blob that contaminates unrelated runs with stale or untrusted assumptions.
+
+Each record is one git-tracked JSON file under `<workspace>/.otto/memory/<id>.json` (durable like `LEARNINGS.md`, **not** `.otto-tmp/`). The **directory is the list** — there is no central index to keep in sync — exactly like `.otto/runs/<id>/stages/`. `allocateMemoryId(date, suffix)` uses the same sortable-ISO-stamp scheme as `allocateRunId`. Every reader (`readMemoryRecord` / `readMemoryRecords` / `listMemoryIds`) returns a safe empty value on an absent or malformed file and never throws — a memory read must not break a run.
+
+A `MemoryRecord` carries three **orthogonal** governance axes the issue calls for — don't collapse them:
+
+- **`trust`** — a coarse provenance band: `trusted` / `unverified` / `deprecated`.
+- **`confidence`** — a `0..1` scalar.
+- **`status`** — the lifecycle: `active` / `stale` / `superseded`.
+
+plus `sourceRun`, `taskKey`, `scope[]` (the files/modules a record applies to), timestamps (`createdAt` / `lastUsedAt`), a `useCount`, and a freshness policy (`expiresAt` absolute, `revalidateAfterDays` sliding).
+
+**Freshness is derived, not stored.** `memoryStatus(record, now)` recomputes `active` vs `stale` from the policy at read time (past `expiresAt`, or `revalidateAfterDays` elapsed since last use) — it does **not** trust the stored `status`, except `superseded`, which is terminal. `touchMemory` returns a copy with `lastUsedAt` / `useCount` bumped (sliding the revalidation window) without mutating in place. An unparseable timestamp is ignored, never treated as expired.
+
+**Contradiction handling.** `supersede(newer, older)` marks `older.status = "superseded"` and points `newer.supersedes` at it. `detectConflicts(records)` pairs active records with the same `category` + `scope` set but **different** `content` — identical content is agreement, not a conflict.
+
+**Audit.** `auditMemory(records, now)` → an `AuditReport` of `stale[]`, `conflicting[]`, and `frequentlyUsed[]` records plus counts. `otto-memory audit` ([`memory-cli.ts`](../packages/core/src/memory-cli.ts)) renders it via a pure `formatAuditReport`, so a maintainer sees stale or conflicting entries *before* they influence a run. (Deliberate asymmetry: `stale` and the counts use the **derived** `memoryStatus`, while `conflicting` uses the **stored** status — an audit must catch a record that is past its policy but still stored `active`.)
+
+**Projection + compaction.** `projectLearnings(records, now)` renders only the **active** records (derived-stale and superseded dropped) into the canonical four-section `# Otto learnings` view; `otto-memory project` prints it raw so it can be redirected into `.otto/LEARNINGS.md`. This is what keeps prompt size from memory bounded and explainable. The four **compaction tiers** — active context (the prompt) → summarized state (`LEARNINGS.md`) → reconstructable artifacts (`.otto-tmp/logs` + `.otto/runs`) → durable memory (`.otto/memory/<id>.json`) — are documented for the agent in the shared [`templates/governed-memory.md`](../packages/core/templates/governed-memory.md) fragment, `@include`d by both playbooks' LEARNINGS sections (`prompt.md` for afk, `ghprompt-workflow.md` for every `*afk*` provider mode).
+
+**Inert on the read path.** The substrate is wired into the read-only `otto-memory` bin and the playbook prose that *writes* records, but the loop still injects `LEARNINGS.md` verbatim — a memory record never gates or alters a run. `projectLearnings` is offered as a command, not auto-run over `LEARNINGS.md` (which would clobber the hand-curated superset). Pinned by `memory.test.ts` / `memory-cli.test.ts` / `governed-memory.test.ts`.
 
 ---
 

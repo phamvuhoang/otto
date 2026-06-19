@@ -118,6 +118,29 @@
   prose/template work, not code), then slice 7 docs. Pinned by `memory.test.ts`
   ("projectLearnings": empty/grouping/order/catch-all/active-only) +
   `memory-cli.test.ts` (project subcommand emits raw LEARNINGS, no audit header).
+- **Record-writing + compaction tiers are template PROSE, not code (issue #42 P3
+  slice 6b) — the first slice that activates record-writing.** Shipped as ONE
+  shared fragment `templates/governed-memory.md`, `@include`d by BOTH playbook
+  LEARNINGS sections (`prompt.md` for afk; `ghprompt-workflow.md` for every
+  `*afk*` provider mode) — the two sections are disjoint per rendered prompt, so
+  one include each gives every mode the model exactly once (same drift-proofing as
+  `quality-report.md`/`acceptance-prompts.md`; do NOT inline per template). The
+  fragment documents the four compaction tiers (active context = the prompt /
+  summarized state = `LEARNINGS.md` / reconstructable artifacts = `.otto-tmp/logs`
+  + `.otto/runs` / durable memory = `.otto/memory/<id>.json`) and tells a run to
+  capture a new learning in BOTH places: the terse `LEARNINGS.md` bullet
+  (unchanged — still what feeds the prompt `<learnings>` block via `cat`, so
+  records stay INERT on the READ path) AND a governed `.otto/memory/<id>.json`
+  record with the documented fields (`category` matches the LEARNINGS section,
+  `taskKey`/`scope`, `confidence`, `trust:unverified` for run-produced, freshness
+  optional, supersede-on-contradiction). LEARNINGS.md remains the hand-curated
+  superset; `otto-memory project > .otto/LEARNINGS.md` is NOT auto-run (would
+  clobber it — 6a's call). Dogfooded with the first real record
+  (`.otto/memory/2026-06-19T17-12-11-548Z-6b.json`), verified via `otto-memory
+  audit` (1 active) + `project` (renders into Conventions). Pinned at the
+  render-contract level by `governed-memory.test.ts` (tiers / fields / commands /
+  both includes / afk+ghafk end-to-end). Only slice 7 (README + ARCHITECTURE
+  docs) remains on #42.
 - **The harness evaluation suite (issue #40 P1) starts as a PURE scoring
   substrate over the #39 evidence bundle, deterministic-first.** `eval.ts`
   exports `EvalSignals` + `scoreTrajectory(manifest, stages)` — derives ONLY the

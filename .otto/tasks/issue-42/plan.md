@@ -30,8 +30,11 @@ regress existing runs.
       canonical `# Otto learnings` four-section view; `otto-memory project`
       subcommand prints it raw (redirectable into `.otto/LEARNINGS.md`). Pinned by
       `memory.test.ts` + `memory-cli.test.ts`. *(this run)*
-- [ ] **6b. Compaction rules + record-writing.** Document the compaction tiers
+- [x] **6b. Compaction rules + record-writing.** Document the compaction tiers
       (active context / summarized state / reconstructable artifacts / durable
       memory). Define how a run writes a record on a new learning (template prose).
+      Shipped as a shared fragment `templates/governed-memory.md`, `@include`d by
+      both LEARNINGS sections (`prompt.md` + `ghprompt-workflow.md`); pinned by
+      `governed-memory.test.ts`. *(this run)*
 - [ ] **7. Docs.** README feature bullet + `otto-memory audit` example;
       ARCHITECTURE module rows + a "Governed memory lifecycle" section.

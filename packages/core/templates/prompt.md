@@ -92,6 +92,8 @@ If, while doing the task, you discover a NEW durable, reusable learning — a re
 
 Dedupe against existing entries and prune anything no longer true. This file is committed WITH your task commit (it is git-tracked) — do NOT make a separate commit for it. The bar is durable AND reusable: do NOT record routine or one-off task details.
 
+@include:governed-memory.md
+
 # FINISHING THE RUN
 
 Committing the code is NOT necessarily the end of the run. How work "ships" depends on THIS repo's conventions — consult `<learnings>` / `./.otto/LEARNINGS.md`. If the repo ships via pull request, keep all work (including later review-fix rounds) on the SAME feature branch, and when it is complete `git push` the branch and open or refresh a single PR into the default branch — never spin up a second branch per round. Otherwise, committing to the working branch is the end-state.

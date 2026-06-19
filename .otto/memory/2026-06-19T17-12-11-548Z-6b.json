@@ -1,0 +1,17 @@
+{
+  "id": "2026-06-19T17-12-11-548Z-6b",
+  "content": "Governed-memory record-writing + compaction tiers (issue #42 slice 6b) is template prose in one shared fragment templates/governed-memory.md, @include'd by BOTH LEARNINGS sections (prompt.md for afk; ghprompt-workflow.md for every *afk* provider mode) so the model reaches every mode through one fragment. Records under .otto/memory/<id>.json are the governed source; LEARNINGS.md stays the human projection (still what feeds the prompt <learnings> block via `cat`, so records remain inert on the READ path). Pinned at the render-contract level by governed-memory.test.ts (tiers, fields, otto-memory commands, both includes, afk+ghafk end-to-end). This .json is the first dogfooded record proving the documented shape parses.",
+  "category": "convention",
+  "sourceRun": "2026-06-19T15-41-19-986Z-12323",
+  "taskKey": "issue-42",
+  "scope": [
+    "packages/core/templates/governed-memory.md",
+    "packages/core/templates/prompt.md",
+    "packages/core/templates/ghprompt-workflow.md"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-19T17:12:11.548Z",
+  "useCount": 0
+}

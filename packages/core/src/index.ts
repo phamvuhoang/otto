@@ -115,9 +115,15 @@ export {
   type PolicyDecision,
 } from "./policy.js";
 export {
+  checkApprovalRequired,
+  checkCommand,
+  checkNetworkDomain,
+  checkWritePath,
   DEFAULT_POLICY,
   parseSafetyPolicy,
   readSafetyPolicy,
+  type PolicyViolation,
+  type PolicyViolationKind,
   type SafetyPolicy,
 } from "./safety-policy.js";
 export {

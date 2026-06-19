@@ -1,0 +1,16 @@
+{
+  "id": "2026-06-20T00-55-00-000Z-43-2",
+  "content": "Safety-policy evaluation predicates (issue #43 P4 slice 2) are PURE and split allow-list vs deny-list per axis. Four functions in safety-policy.ts over a SafetyPolicy, each returning PolicyViolation[] ({kind, subject, message}, kind in blocked-command|write-root|network-domain|approval-required) and each EMPTY under DEFAULT_POLICY — that empty-list-means-unrestricted contract is the point. Two opposite semantics: checkCommand (blockedCommands) + checkApprovalRequired (approvalRequiredActions) are DENY/flag lists (a violation per match: substring includes for commands, exact includes for actions); checkWritePath (allowedWriteRoots) + checkNetworkDomain (allowedNetworkDomains) are ALLOW lists (empty = unrestricted, non-empty = ONE violation when the subject matches NO entry). Write paths: trailing-slash-trimmed root + boundary check (path===root || startsWith(root+'/'), so srcfoo is NOT under src; root '.'/empty = whole workspace). Domains: case-insensitive exact-or-subdomain (d===a || d.endsWith('.'+a), so notgithub.com is NOT a subdomain of github.com). Only the four plan-named predicates ship; secretPatterns/highRiskGlobs get no predicate this slice (later slices). Still INERT. Pinned by safety-policy.test.ts.",
+  "category": "convention",
+  "sourceRun": "2026-06-20T00-40-00-000Z-12323",
+  "taskKey": "issue-43",
+  "scope": [
+    "packages/core/src/safety-policy.ts",
+    "packages/core/src/__tests__/safety-policy.test.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T00:55:00.000Z",
+  "useCount": 0
+}

@@ -79,6 +79,118 @@ export function parseSafetyPolicy(raw: unknown): SafetyPolicy {
   return policy;
 }
 
+/** The axis of policy a {@link PolicyViolation} breached. */
+export type PolicyViolationKind =
+  | "blocked-command"
+  | "write-root"
+  | "network-domain"
+  | "approval-required";
+
+/**
+ * A single breach found by an evaluation predicate. `subject` is the thing
+ * checked (command/path/domain/action); `message` is a human-readable
+ * explanation. Predicates return an EMPTY array under {@link DEFAULT_POLICY}.
+ */
+export type PolicyViolation = {
+  kind: PolicyViolationKind;
+  subject: string;
+  message: string;
+};
+
+/**
+ * Deny-list check: a violation per {@link SafetyPolicy.blockedCommands} substring
+ * that appears in `command`. Empty list → no violations (DEFAULT_POLICY).
+ */
+export function checkCommand(
+  policy: SafetyPolicy,
+  command: string
+): PolicyViolation[] {
+  return policy.blockedCommands
+    .filter((pattern) => command.includes(pattern))
+    .map((pattern) => ({
+      kind: "blocked-command",
+      subject: command,
+      message: `command matches blocked pattern "${pattern}"`,
+    }));
+}
+
+/** Strip trailing slashes so `src/` and `src` name the same root. */
+function trimRoot(root: string): string {
+  return root.replace(/\/+$/, "");
+}
+
+/**
+ * Allow-list check over workspace-relative {@link SafetyPolicy.allowedWriteRoots}:
+ * empty → unrestricted (no violations). Otherwise a single violation when `path`
+ * is neither equal to nor nested under any allowed root. A root of `.` (or empty
+ * after trimming) permits the whole workspace.
+ */
+export function checkWritePath(
+  policy: SafetyPolicy,
+  path: string
+): PolicyViolation[] {
+  if (policy.allowedWriteRoots.length === 0) return [];
+  const allowed = policy.allowedWriteRoots.some((raw) => {
+    const root = trimRoot(raw);
+    if (root === "" || root === ".") return true;
+    return path === root || path.startsWith(root + "/");
+  });
+  return allowed
+    ? []
+    : [
+        {
+          kind: "write-root",
+          subject: path,
+          message: "path is outside every allowed write root",
+        },
+      ];
+}
+
+/**
+ * Allow-list check over {@link SafetyPolicy.allowedNetworkDomains}: empty →
+ * unrestricted. Otherwise a single violation when `domain` is neither an allowed
+ * domain nor a subdomain of one (case-insensitive).
+ */
+export function checkNetworkDomain(
+  policy: SafetyPolicy,
+  domain: string
+): PolicyViolation[] {
+  if (policy.allowedNetworkDomains.length === 0) return [];
+  const d = domain.toLowerCase();
+  const allowed = policy.allowedNetworkDomains.some((raw) => {
+    const a = raw.toLowerCase();
+    return d === a || d.endsWith("." + a);
+  });
+  return allowed
+    ? []
+    : [
+        {
+          kind: "network-domain",
+          subject: domain,
+          message: "domain is not in the allowed network domains",
+        },
+      ];
+}
+
+/**
+ * Flag check over {@link SafetyPolicy.approvalRequiredActions}: a violation when
+ * `action` exactly matches a listed action. Empty list → no violations.
+ */
+export function checkApprovalRequired(
+  policy: SafetyPolicy,
+  action: string
+): PolicyViolation[] {
+  return policy.approvalRequiredActions.includes(action)
+    ? [
+        {
+          kind: "approval-required",
+          subject: action,
+          message: `action "${action}" requires human approval`,
+        },
+      ]
+    : [];
+}
+
 const POLICY_REL = join(".otto", "policy.json");
 
 /**

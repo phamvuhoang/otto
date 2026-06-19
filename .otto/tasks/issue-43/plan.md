@@ -9,7 +9,7 @@ permissive, so trusted local plan/PRD workflows keep working (metric #3).
       malformed → defaults), `readSafetyPolicy(workspaceDir)` reading
       `.otto/policy.json`. Export from `index.ts`. Pinned by
       `safety-policy.test.ts`. INERT.
-- [ ] **2. Policy-evaluation predicates** — pure `checkCommand`/`checkWritePath`/
+- [x] **2. Policy-evaluation predicates** — pure `checkCommand`/`checkWritePath`/
       `checkNetworkDomain`/`checkApprovalRequired` returning a `PolicyViolation[]`
       (empty under `DEFAULT_POLICY`). INERT.
 - [ ] **3. Taint substrate `taint.ts`** — `TaintSource` taxonomy (issue-body,

@@ -881,6 +881,27 @@
   surfacing in templates (4), `SafetyEvent` in trajectories + eval (5), and the
   boundary checks around shell/`@spill`/stage execution (6, first non-inert).
   Spec/plan: `.otto/tasks/issue-43/`. Pinned by `safety-policy.test.ts`.
+- **Safety-policy evaluation predicates are PURE + split allow-list vs deny-list
+  per axis (issue #43 P4 slice 2).** Four functions in `safety-policy.ts` over a
+  `SafetyPolicy`, each returning `PolicyViolation[]` (`{kind, subject, message}`,
+  `kind` ∈ blocked-command|write-root|network-domain|approval-required) and each
+  EMPTY under `DEFAULT_POLICY` — that empty-list-means-unrestricted contract is
+  the slice's whole point. **Two opposite semantics, don't conflate them:**
+  `checkCommand` (blockedCommands) and `checkApprovalRequired` (approvalRequired
+  Actions) are DENY/flag lists — a violation per match (substring `includes` for
+  commands, exact `includes` for actions); `checkWritePath` (allowedWriteRoots)
+  and `checkNetworkDomain` (allowedNetworkDomains) are ALLOW lists — empty = no
+  restriction, non-empty = ONE violation when the subject matches NO entry.
+  Matching details that the tests pin: write paths use trailing-slash-trimmed
+  root + boundary check (`path===root || path.startsWith(root+"/")`, so `srcfoo`
+  is NOT under `src`; root `.`/empty = whole workspace); domains are
+  case-insensitive exact-or-subdomain (`d===a || d.endsWith("."+a)`, so
+  `notgithub.com` is NOT a subdomain of `github.com`). Only the four predicates
+  the plan names ship — `secretPatterns`/`highRiskGlobs` get no predicate this
+  slice (their consumers are later taint/boundary slices; YAGNI). Still INERT
+  (exported from `index.ts`, wired by no bin/loop). Pinned by
+  `safety-policy.test.ts` (per-predicate: DEFAULT empty + match/no-match +
+  boundary cases).
 
 ## Gotchas
 

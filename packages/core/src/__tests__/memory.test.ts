@@ -336,6 +336,19 @@ describe("auditMemory", () => {
       auditMemory([rec({ id: "b", useCount: 4 })], fresh).frequentlyUsed
     ).toEqual([]);
   });
+
+  it("frequentlyUsed is status-independent (stale/superseded still listed)", () => {
+    // derived-stale (past expiresAt) and superseded records, both heavily used:
+    // they appear in BOTH frequentlyUsed and their stale/superseded list/count.
+    const old = rec({ id: "old", content: "O", useCount: 9 });
+    const sup = rec({ id: "sup", content: "S", status: "superseded", useCount: 8 });
+    const report = auditMemory([old, sup], expired, 5);
+    expect(report.frequentlyUsed.map((x) => x.id)).toEqual(["old", "sup"]);
+    expect(report.counts.frequentlyUsed).toBe(2);
+    // and they are not filtered out of their lifecycle buckets
+    expect(report.stale.map((x) => x.id)).toEqual(["old"]);
+    expect(report.counts).toMatchObject({ stale: 1, superseded: 1 });
+  });
 });
 
 describe("write/read round-trip", () => {

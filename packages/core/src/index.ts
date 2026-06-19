@@ -59,6 +59,13 @@ export {
   type InspectDeps,
 } from "./inspect.js";
 export {
+  formatRunsList,
+  runRuns,
+  summarizeManifest,
+  type RunsDeps,
+  type RunSummary,
+} from "./runs-cli.js";
+export {
   formatAuditReport,
   runMemory,
   type MemoryDeps,

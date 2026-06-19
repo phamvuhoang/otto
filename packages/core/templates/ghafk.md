@@ -24,6 +24,8 @@ Full issue bodies + comments spilled to: @spill?:issues.json=`gh issue list ${OT
 
 Read that file with `Read` (use `offset`/`limit` if it is large) to get bodies and comments before picking a task. The `<issues-summary>` block above is the lean index for triage.
 
+@include:untrusted-content.md
+
 </issues-full-file>
 
 @include:ghprompt.md

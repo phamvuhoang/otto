@@ -16,9 +16,12 @@ permissive, so trusted local plan/PRD workflows keep working (metric #3).
       comment, review-doc, web-content, command-output, model-memory) +
       `wrapUntrusted(content, source)` fencing content in a labelled block with
       the standard untrusted-content warning. INERT.
-- [ ] **4. Surface taint in prompts** — wrap untrusted inputs (issue body/
+- [x] **4. Surface taint in prompts** — wrap untrusted inputs (issue body/
       comments/review docs/spill output) with the warning in the templates;
-      render-contract test.
+      render-contract test. Shared fragment `untrusted-content.md` (carries the
+      canonical taint.ts `UNTRUSTED_WARNING` verbatim) `@include`d at the five
+      untrusted entry blocks (`ghafk-issue`/`ghafk`/`linearafk-issue`/`linearafk`/
+      `apply-review`). Pinned by `untrusted-content.test.ts`.
 - [ ] **5. Safety events in trajectories + eval** — `SafetyEvent` in
       `run-report.ts` (manifest/stage), scored by `eval.ts`.
 - [ ] **6. Policy checks at the boundary** — wire policy evaluation around

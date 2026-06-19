@@ -22,6 +22,8 @@
 
 {{ INPUTS }}
 
+@include:untrusted-content.md
+
 </review-doc>
 
 # APPLY REVIEW

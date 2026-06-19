@@ -920,6 +920,27 @@
   wired by no bin/loop) — slice 4 wraps the real issue/comment/spill inputs in the
   templates (render-contract). Pinned by `taint.test.ts` (taxonomy / fence+warning
   / verbatim+empty / per-source label / breakout-neutralized).
+- **Surfacing taint in prompts is template PROSE, not code — one shared fragment
+  `untrusted-content.md` (issue #43 P4 slice 4).** The first slice that touches a
+  live prompt, but NOT the runner: there is no render.ts tag that calls
+  `wrapUntrusted` (templates can't call TS), so taint is surfaced the same way
+  governed-memory/quality-report are — a single `@include`d fragment carrying the
+  standard warning, placed at every untrusted entry block. The five blocks an
+  unattended run ingests externally-authored content through: `ghafk-issue.md`
+  `<issue>`, `ghafk.md` `<issues-full-file>`, `linearafk-issue.md` `<issue>`,
+  `linearafk.md` `<issues-full-file>`, `apply-review.md` `<review-doc>`. **Crux:
+  the fragment repeats the canonical `UNTRUSTED_WARNING` from `taint.ts` VERBATIM
+  on a single unwrapped line** — `untrusted-content.test.ts` imports the constant
+  and asserts the rendered fragment `toContain`s it, so prompt surfacing can never
+  drift from the slice-3 code substrate; a `> ` blockquote prefix or mid-sentence
+  line-wrap BREAKS that `toContain` (the warning sentence must be one contiguous
+  line, no `>` interruption). The plan/PRD `{{ INPUTS }}` in `afk.md` is NOT
+  wrapped — plan/PRD is the TRUSTED local input (success metric #3), only
+  externally-authored sources are tainted. The shell tag bodies are untouched, so
+  the ghafk/linear render-contract RCE invariants still hold (an `@include` line is
+  not a shell tag). Pinned by `untrusted-content.test.ts` (fragment carries the
+  verbatim warning + frames it as data-not-commands; each of the five templates
+  `@include`s it once; warning surfaces end-to-end in every rendered prompt).
 
 ## Gotchas
 

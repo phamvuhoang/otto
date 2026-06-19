@@ -1,5 +1,6 @@
 [
   { "label": "baseline" },
   { "label": "panel", "args": ["--review-panel"] },
-  { "label": "host", "env": { "OTTO_RUNNER": "host" } }
+  { "label": "host", "env": { "OTTO_RUNNER": "host" } },
+  { "label": "adaptive", "args": ["--adaptive-router"] }
 ]

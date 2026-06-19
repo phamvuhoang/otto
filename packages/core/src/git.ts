@@ -40,6 +40,32 @@ export function isPathIgnored(cwd: string, relPath: string): boolean {
   }
 }
 
+/** Current HEAD commit sha, or null outside a repo / on an unborn branch. */
+export function headSha(cwd: string): string | null {
+  return git(["rev-parse", "HEAD"], cwd);
+}
+
+/**
+ * Tracked file paths that changed since `sinceSha` — the union of commits made
+ * since then (`<sinceSha>..HEAD`) and any uncommitted staged/unstaged edits — so
+ * the adaptive router sees the work an iteration produced whether or not the
+ * agent committed it. `sinceSha` null (no prior HEAD) → just the working-tree
+ * diff. Returns a de-duplicated list; never throws.
+ */
+export function changedFilesSince(cwd: string, sinceSha: string | null): string[] {
+  const out = new Set<string>();
+  const collect = (raw: string | null) => {
+    if (!raw) return;
+    for (const line of raw.split("\n")) {
+      const p = line.trim();
+      if (p) out.add(p);
+    }
+  };
+  if (sinceSha) collect(git(["diff", "--name-only", `${sinceSha}..HEAD`], cwd));
+  collect(git(["diff", "--name-only", "HEAD"], cwd)); // unstaged + staged vs HEAD
+  return [...out];
+}
+
 /** True if a local branch/ref named `name` already exists. */
 export function refExists(cwd: string, name: string): boolean {
   try {

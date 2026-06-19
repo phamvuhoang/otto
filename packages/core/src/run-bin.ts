@@ -207,15 +207,27 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       join(workspaceDir, ".otto-tmp", "logs", `detached-${process.pid}.log`))
     : undefined;
 
+  // Adaptive compute router (issue #41): route review depth per iteration by
+  // change risk. Opt-in via --adaptive-router or OTTO_ADAPTIVE_ROUTER; off by
+  // default so the static review path is unchanged when the flag is absent.
+  const adaptiveRouter =
+    flags.adaptiveRouter ||
+    ["1", "true", "yes", "on"].includes(
+      (process.env.OTTO_ADAPTIVE_ROUTER ?? "").trim().toLowerCase()
+    );
+
   const DEFAULT_LENSES = ["correctness", "security", "tests"];
   const envLenses = (process.env.OTTO_REVIEW_LENSES ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+  // The lens pool. With the adaptive router on, the pool is available even
+  // without --review-panel, since the router may escalate a high-risk iteration
+  // to the full panel; the router then selects the per-iteration subset.
   const reviewLenses =
     envLenses.length > 0
       ? envLenses
-      : flags.reviewPanel
+      : flags.reviewPanel || adaptiveRouter
         ? DEFAULT_LENSES
         : undefined;
 
@@ -594,6 +606,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     cooldownMs: flags.cooldownMs,
     tokenMode,
     reviewLenses,
+    adaptiveRouter,
     mode: runMode,
     branchStrategy: resolved.strategy,
     maxWaitMs,

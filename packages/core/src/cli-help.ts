@@ -40,6 +40,8 @@ export type CliFlags = {
   /** `--auto-switch-on-limit` toggle (default false; opt-in, issue #24 P4). */
   autoSwitchOnLimit: boolean;
   reviewPanel: boolean;
+  /** `--adaptive-router` toggle (default false; opt-in, issue #41 P2). */
+  adaptiveRouter: boolean;
   watch: boolean;
   watchIntervalSec?: number;
   /**
@@ -177,6 +179,7 @@ export function parseFlags(
   let expectingFallbackAgent = false;
   let autoSwitchOnLimit = false;
   let reviewPanel = false;
+  let adaptiveRouter = false;
   let watch = false;
   let watchIntervalSec: number | undefined;
   let expectingWatchInterval = false;
@@ -322,6 +325,7 @@ export function parseFlags(
     else if (a === "--fallback-agent") expectingFallbackAgent = true;
     else if (a === "--auto-switch-on-limit") autoSwitchOnLimit = true;
     else if (a === "--review-panel") reviewPanel = true;
+    else if (a === "--adaptive-router") adaptiveRouter = true;
     else if (a === "--watch") watch = true;
     else if (a === "--watch-interval") expectingWatchInterval = true;
     else if (a === "--issue") expectingIssue = true;
@@ -404,6 +408,7 @@ export function parseFlags(
     fallbackAgent,
     autoSwitchOnLimit,
     reviewPanel,
+    adaptiveRouter,
     watch,
     watchIntervalSec,
     issue,
@@ -477,6 +482,7 @@ Flags:
   --fallback-agent <runtime>  runtime to switch to on a usage/rate limit: claude | codex (or OTTO_FALLBACK_AGENT / config "fallbackAgent"; default: none)
   --auto-switch-on-limit  switch to the fallback runtime when the active one hits a limit (or OTTO_AUTO_SWITCH_ON_LIMIT=1 / config "autoSwitchOnLimit"; default: off)
   --review-panel      replace the single reviewer stage with correctness/security/tests lens reviewers + one synth commit (default: off)
+  --adaptive-router   route review depth by per-iteration change risk: single reviewer (low) / lens subset (medium) / full panel (high) (or OTTO_ADAPTIVE_ROUTER=1; default: off)
   --branch <mode>     where Otto commits: current (default) | branch (new branch) | worktree (isolated checkout)
   --branch-prefix <p> branch name prefix for branch/worktree modes (default: otto/)
   --branch-convention <c>  validated branch namespace <c>/<task-key> (e.g. feat, feature, fix); normalizes a trailing slash; overrides --branch-prefix (or OTTO_BRANCH_CONVENTION; default: otto)
@@ -509,6 +515,7 @@ Environment variables:
   OTTO_FALLBACK_AGENT  runtime to switch to on a usage/rate limit: claude | codex; same as --fallback-agent (default: none).
   OTTO_AUTO_SWITCH_ON_LIMIT  switch to the fallback runtime on a limit when truthy (1/true/yes/on); same as --auto-switch-on-limit (default: off).
   OTTO_REVIEW_LENSES   comma-separated lens list for --review-panel (default: correctness,security,tests).
+  OTTO_ADAPTIVE_ROUTER  route review depth by change risk when truthy (1/true/yes/on); same as --adaptive-router (default: off).
   OTTO_WATCH_LABEL     issue label to poll for in watch mode (default: "otto").
   OTTO_INCLUDE_SUB_ISSUES  set to 1/true/yes to enable --include-sub-issues without the flag.
   OTTO_GITHUB_REPO     scope otto-ghafk to a single GitHub repo ("owner/name"); same as --repo.

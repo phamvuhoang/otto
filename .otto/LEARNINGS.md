@@ -2,6 +2,24 @@
 
 ## Conventions
 
+- **The harness evaluation suite (issue #40 P1) starts as a PURE scoring
+  substrate over the #39 evidence bundle, deterministic-first.** `eval.ts`
+  exports `EvalSignals` + `scoreTrajectory(manifest, stages)` — derives ONLY the
+  signals computable from a recorded trajectory (succeeded [exitReason ∈
+  {complete,done}], exitReason, completedIterations, stageCount, errorStageCount,
+  costUsd, totalTokens, elapsedMs). No I/O, no model calls → this IS the "cheap
+  deterministic subset" the issue wants in CI. **The split that matters:**
+  trajectory-derived signals (here) vs. fixture-derived ones (tests-passed,
+  diff-correctness, safety-events) that need the runner replaying a fixture — the
+  latter are LATER plan tasks, kept out of this module so it stays pure/CI-safe.
+  `elapsedMs` is `null` (never NaN) when un-finalized or a timestamp is
+  unparseable. Kept INERT (re-exported from `index.ts` like `run-report.ts`/
+  `task-key.ts`, but not wired into any bin/loop) so it can't regress runs;
+  later tasks build the comparison report → benchmark-task model → `otto-eval`
+  runner → fixtures on top. `succeeded` deliberately excludes `done with
+  failures` (matches the loop's own `sawFailure` distinction). Pinned by
+  `eval.test.ts` (in-memory manifest/stage fixtures, no fs). Plan/spec:
+  `.otto/tasks/issue-40/`.
 - **The run bundle is rendered by a standalone `otto-inspect` bin, not a loop
   flag (issue #39 P0 task 5).** `inspect.ts` splits into a PURE
   `formatRunReport(manifest, stages)` → string (the testable core, no I/O) and

@@ -127,6 +127,12 @@ export {
   type SafetyPolicy,
 } from "./safety-policy.js";
 export {
+  TAINT_SOURCES,
+  UNTRUSTED_WARNING,
+  wrapUntrusted,
+  type TaintSource,
+} from "./taint.js";
+export {
   compareTrajectories,
   scoreTrajectory,
   type EvalSignals,

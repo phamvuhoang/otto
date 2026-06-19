@@ -12,7 +12,7 @@ permissive, so trusted local plan/PRD workflows keep working (metric #3).
 - [x] **2. Policy-evaluation predicates** — pure `checkCommand`/`checkWritePath`/
       `checkNetworkDomain`/`checkApprovalRequired` returning a `PolicyViolation[]`
       (empty under `DEFAULT_POLICY`). INERT.
-- [ ] **3. Taint substrate `taint.ts`** — `TaintSource` taxonomy (issue-body,
+- [x] **3. Taint substrate `taint.ts`** — `TaintSource` taxonomy (issue-body,
       comment, review-doc, web-content, command-output, model-memory) +
       `wrapUntrusted(content, source)` fencing content in a labelled block with
       the standard untrusted-content warning. INERT.

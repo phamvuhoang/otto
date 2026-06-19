@@ -14,6 +14,7 @@ function signals(overrides: Partial<EvalSignals> = {}): EvalSignals {
     costUsd: 0.5,
     totalTokens: 1000,
     elapsedMs: 10_000,
+    safetyEventCount: 0,
     ...overrides,
   };
 }
@@ -146,6 +147,25 @@ describe("scoreTrajectory", () => {
     );
     expect(s.elapsedMs).toBeNull();
   });
+
+  it("counts safety events across the manifest and stage records", () => {
+    const taint = {
+      category: "taint" as const,
+      kind: "issue-body" as const,
+      subject: "x",
+      message: "m",
+      blocked: false,
+    };
+    const s = scoreTrajectory(
+      manifest({ safetyEvents: [taint] }),
+      [stage({ safetyEvents: [taint, taint] }), stage()]
+    );
+    expect(s.safetyEventCount).toBe(3);
+  });
+
+  it("reports zero safety events when none are recorded", () => {
+    expect(scoreTrajectory(manifest(), [stage()]).safetyEventCount).toBe(0);
+  });
 });
 
 describe("compareTrajectories", () => {
@@ -160,10 +180,10 @@ describe("compareTrajectories", () => {
     ]);
     const lines = out.split("\n");
     expect(lines[0]).toBe(
-      "| Run | Succeeded | Exit | Iterations | Stages | Errors | Cost (USD) | Tokens | Elapsed (ms) |"
+      "| Run | Succeeded | Exit | Iterations | Stages | Errors | Cost (USD) | Tokens | Elapsed (ms) | Safety events |"
     );
     expect(lines[1]).toBe(
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     );
     expect(lines).toHaveLength(4);
     expect(lines[2]).toContain("| baseline |");
@@ -204,6 +224,19 @@ describe("compareTrajectories", () => {
     const out = compareTrajectories([{ label: "solo", signals: signals() }]);
     expect(out).not.toContain("(best)");
     expect(out).not.toContain("(worst)");
+  });
+
+  it("shows a safety-events column but does not rank it", () => {
+    const out = compareTrajectories([
+      { label: "a", signals: signals({ safetyEventCount: 0 }) },
+      { label: "b", signals: signals({ safetyEventCount: 3 }) },
+    ]);
+    expect(out).toContain("Safety events");
+    // A conflated count cannot be honestly ranked (a blocked injection is good
+    // detection, not a worse run), so no best/worst markers on the safety column.
+    expect(out).not.toContain("3 (worst)");
+    expect(out).not.toContain("3 (best)");
+    expect(out).not.toContain("0 (best)");
   });
 
   it("excludes null signals from ranking and renders them as a dash", () => {

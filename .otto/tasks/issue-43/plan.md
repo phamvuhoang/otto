@@ -22,8 +22,11 @@ permissive, so trusted local plan/PRD workflows keep working (metric #3).
       canonical taint.ts `UNTRUSTED_WARNING` verbatim) `@include`d at the five
       untrusted entry blocks (`ghafk-issue`/`ghafk`/`linearafk-issue`/`linearafk`/
       `apply-review`). Pinned by `untrusted-content.test.ts`.
-- [ ] **5. Safety events in trajectories + eval** — `SafetyEvent` in
-      `run-report.ts` (manifest/stage), scored by `eval.ts`.
+- [x] **5. Safety events in trajectories + eval** — `SafetyEvent` in
+      `run-report.ts` (discriminated `policy-violation`/`taint`, optional
+      `safetyEvents[]` on manifest + stage record), scored by `eval.ts`
+      (`safetyEventCount` over manifest + stages; unranked comparison column).
+      INERT. Pinned by `run-report.test.ts` + `eval.test.ts`.
 - [ ] **6. Policy checks at the boundary** — wire policy evaluation around
       shell/`@spill` tags + stage execution (first non-inert slice; default
       policy permissive → trusted workflows unchanged).

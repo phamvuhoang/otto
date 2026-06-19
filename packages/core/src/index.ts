@@ -50,6 +50,7 @@ export {
   writeStageRecord,
   type RunArtifact,
   type RunManifest,
+  type SafetyEvent,
   type StageRecord,
 } from "./run-report.js";
 export {

@@ -941,6 +941,30 @@
   not a shell tag). Pinned by `untrusted-content.test.ts` (fragment carries the
   verbatim warning + frames it as data-not-commands; each of the five templates
   `@include`s it once; warning surfaces end-to-end in every rendered prompt).
+- **Safety events join the trajectory + eval, still INERT (issue #43 P4 slice
+  5).** `run-report.ts` gains a `SafetyEvent` type — a **discriminated union on
+  `category`** (`policy-violation` → `PolicyViolationKind` from `safety-policy.ts`;
+  `taint` → `TaintSource` from `taint.ts`, both type-only imports, no cycle) plus
+  `subject`/`message`/`blocked` — and an OPTIONAL `safetyEvents?: SafetyEvent[]` on
+  BOTH `RunManifest` (run-level events) and `StageRecord` (per-stage). `blocked`
+  carries the issue's "blocked or reported" distinction (taint is always
+  `blocked:false` — reported, never blocked). `eval.ts` adds
+  `safetyEventCount` to `EvalSignals` = `manifest.safetyEvents.length` + the sum
+  over stage records (both `?? 0`, so absent = none), and a **`Safety events`
+  comparison column that is deliberately UNRANKED** (no `rank` key) — a single
+  count conflates a blocked violation (bad) with a detected/reported injection
+  (good detection), so there is no honest best/worst direction; do NOT add a
+  `rank` to it. **Adding the column shifts the table to 10 columns** — the
+  `eval.test.ts` header + separator assertions were updated (Run + 9 fields → 10
+  `---`). Updated the `EvalSignals` doc comment: safety events are now
+  trajectory-derived (recorded during the run), so they moved OUT of the
+  "fixture-dependent signals scored separately by the runner" parenthetical.
+  Still INERT — nothing in the loop/bin populates `safetyEvents` yet; slice 6
+  (the first non-inert slice) wires the boundary checks that emit them. Records
+  are JSON-cast on read (no normalizer — Otto's own trusted output), so the
+  discriminated union is authoring-time only. Pinned by `run-report.test.ts`
+  (round-trip safetyEvents on manifest + stage) + `eval.test.ts`
+  (count aggregation across manifest+stages, zero when none, unranked column).
 
 ## Gotchas
 

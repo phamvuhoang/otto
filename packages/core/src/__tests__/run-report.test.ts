@@ -13,9 +13,27 @@ import {
   writeManifest,
   writeStageRecord,
   type RunManifest,
+  type SafetyEvent,
   type StageRecord,
 } from "../run-report.js";
 import { emptyTokenUsage } from "../tokens.js";
+
+const safetyEvents: SafetyEvent[] = [
+  {
+    category: "policy-violation",
+    kind: "blocked-command",
+    subject: "rm -rf /",
+    message: 'command matches blocked pattern "rm -rf"',
+    blocked: true,
+  },
+  {
+    category: "taint",
+    kind: "issue-body",
+    subject: "issue #43 body",
+    message: "untrusted issue body surfaced",
+    blocked: false,
+  },
+];
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), "otto-run-report-"));
@@ -80,6 +98,12 @@ describe("manifest I/O", () => {
     ).toBe(true);
     expect(readManifest(d, manifest.runId)).toEqual(manifest);
   });
+  it("round-trips safety events recorded on the manifest", () => {
+    const d = tmp();
+    const m = { ...manifest, safetyEvents };
+    writeManifest(d, m);
+    expect(readManifest(d, m.runId)).toEqual(m);
+  });
   it("returns null when absent", () => {
     expect(readManifest(tmp(), "nope")).toBeNull();
   });
@@ -129,6 +153,11 @@ describe("stage record I/O", () => {
     expect(name).toMatch(/^0000-iter1-task-fit-security\.json$/);
     // The record itself preserves the original stage name.
     expect(readStageRecords(d, "rid")[0].stage).toBe("task fit/security");
+  });
+  it("round-trips safety events recorded on a stage record", () => {
+    const d = tmp();
+    writeStageRecord(d, "rid", 0, { ...stageRecord, safetyEvents });
+    expect(readStageRecords(d, "rid")[0].safetyEvents).toEqual(safetyEvents);
   });
   it("returns [] when the run has no stage records", () => {
     expect(readStageRecords(tmp(), "nope")).toEqual([]);

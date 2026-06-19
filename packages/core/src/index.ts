@@ -58,6 +58,19 @@ export {
   type InspectDeps,
 } from "./inspect.js";
 export {
+  allocateMemoryId,
+  listMemoryIds,
+  memoryDir,
+  memoryRecordPath,
+  parseMemoryRecord,
+  readMemoryRecord,
+  readMemoryRecords,
+  writeMemoryRecord,
+  type MemoryRecord,
+  type MemoryStatus,
+  type MemoryTrust,
+} from "./memory.js";
+export {
   parseEvalConfigs,
   runEval,
   type EvalConfig,

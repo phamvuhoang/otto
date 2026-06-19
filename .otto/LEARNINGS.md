@@ -2,6 +2,30 @@
 
 ## Conventions
 
+- **Governed memory (issue #42 P3) starts as a PURE data substrate `memory.ts`,
+  modelled on `run-report.ts`.** Structured memory records live as one JSON file
+  per record under `.otto/memory/<id>.json` (git-tracked like `LEARNINGS.md`/
+  `verdicts.md`, NOT `.otto-tmp/`); **the directory IS the list** — no central
+  index. `MemoryRecord` carries the issue's governance fields (`sourceRun`,
+  `taskKey`, `scope[]`, `confidence` 0..1, `trust` trusted|unverified|deprecated,
+  `status` active|stale|superseded, `supersedes`, `createdAt`/`lastUsedAt`,
+  `useCount`, `expiresAt`/`revalidateAfterDays`) plus required identity
+  (`id`,`content`) and `category`. `allocateMemoryId(date,suffix)` mirrors
+  `allocateRunId` (sortable ISO stamp, `:`/`.`→`-`, `-<suffix>`; pass a unique
+  suffix when writing several in one run). `parseMemoryRecord(raw)` is the
+  normalizer used by ALL readers: non-object/array or missing `id`/`content` →
+  null (so a malformed file is skipped, never crashes a read), confidence clamped
+  to [0,1], invalid trust/status → defaults `unverified`/`active`. `listMemoryIds`
+  is a FILENAME lister (drops non-`.json`, KEEPS a malformed `.json`, sorted);
+  `readMemoryRecords` parses each and skips the malformed — same split as
+  run-report's `listRunIds`/`readStageRecords`. **Three orthogonal axes by
+  design:** `trust` (provenance band) vs `confidence` (scalar) vs `status`
+  (lifecycle) — don't collapse them. INERT this slice (exported from `index.ts`,
+  imported by no bin/loop) so it can't regress runs; later plan slices add
+  freshness (`memoryStatus`/`touchMemory`), contradiction handling
+  (`supersede`/`detectConflicts`), audit (`auditMemory`), an `otto-memory audit`
+  bin, and the LEARNINGS.md projection + compaction tiers. Spec/plan:
+  `.otto/tasks/issue-42/`. Pinned by `memory.test.ts`.
 - **The harness evaluation suite (issue #40 P1) starts as a PURE scoring
   substrate over the #39 evidence bundle, deterministic-first.** `eval.ts`
   exports `EvalSignals` + `scoreTrajectory(manifest, stages)` — derives ONLY the

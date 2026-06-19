@@ -1370,4 +1370,91 @@ describe("runLoop", () => {
     expect(manifest?.startedAt).toBeTruthy();
     expect(manifest?.artifacts).toEqual([]);
   });
+
+  it("writes one stage record per executed stage", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const reviewer: Stage = { name: "reviewer", template: "review.md" };
+    writeFileSync(
+      join(dirs.packageDir, "templates", "review.md"),
+      "review {{ INPUTS }}",
+      "utf8"
+    );
+    // never the sentinel, so both stages run in the single iteration.
+    mocks.runStage.mockResolvedValue(ok("keep going", 0.1));
+
+    await runLoop(loopOptions(dirs, { stages: [stage, reviewer], iterations: 1 }));
+
+    const { runsDir, readStageRecords } = await import("../run-report.js");
+    const ids = (await import("node:fs")).readdirSync(
+      runsDir(dirs.workspaceDir)
+    );
+    expect(ids).toHaveLength(1);
+    const records = readStageRecords(dirs.workspaceDir, ids[0]);
+    expect(records.map((r) => r.stage)).toEqual(["implementer", "reviewer"]);
+    expect(records[0]).toMatchObject({
+      iteration: 1,
+      stage: "implementer",
+      costUsd: 0.1,
+      isError: false,
+      runtimeId: "claude",
+    });
+    expect(records[0].startedAt).toBeTruthy();
+    expect(records[0].finishedAt).toBeTruthy();
+  });
+
+  it("records the gate stage even when it hits the sentinel", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const reviewer: Stage = { name: "reviewer", template: "review.md" };
+    writeFileSync(
+      join(dirs.packageDir, "templates", "review.md"),
+      "review {{ INPUTS }}",
+      "utf8"
+    );
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    await runLoop(loopOptions(dirs, { stages: [stage, reviewer], iterations: 1 }));
+
+    const { runsDir, readStageRecords } = await import("../run-report.js");
+    const ids = (await import("node:fs")).readdirSync(
+      runsDir(dirs.workspaceDir)
+    );
+    const records = readStageRecords(dirs.workspaceDir, ids[0]);
+    // gate hit the sentinel, so the reviewer never ran: just the gate record.
+    expect(records.map((r) => r.stage)).toEqual(["implementer"]);
+  });
+
+  it("hands the panel a recordStage callback and does not double-record the panel stage", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const reviewer: Stage = { name: "reviewer", template: "review.md" };
+    writeFileSync(
+      join(dirs.packageDir, "templates", "review.md"),
+      "review",
+      "utf8"
+    );
+    mocks.runStage.mockResolvedValue(ok("keep going", 0.1));
+    mocks.runPanel.mockResolvedValue(ok("<review>OK</review>", 0.2));
+
+    await runLoop(
+      loopOptions(dirs, {
+        stages: [stage, reviewer],
+        iterations: 1,
+        reviewLenses: ["correctness"],
+      })
+    );
+
+    expect(mocks.runPanel).toHaveBeenCalledTimes(1);
+    expect(typeof mocks.runPanel.mock.calls[0][0].recordStage).toBe("function");
+
+    const { runsDir, readStageRecords } = await import("../run-report.js");
+    const ids = (await import("node:fs")).readdirSync(
+      runsDir(dirs.workspaceDir)
+    );
+    const records = readStageRecords(dirs.workspaceDir, ids[0]);
+    // the (mocked) panel records its own substages; the loop records only the
+    // non-panel gate stage, never an umbrella record for the panel reviewer.
+    expect(records.map((r) => r.stage)).toEqual(["implementer"]);
+  });
 });

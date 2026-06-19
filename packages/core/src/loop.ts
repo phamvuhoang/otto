@@ -10,7 +10,7 @@ import { RateLimitError, computeWaitMs } from "./rate-limit.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { cleanScratch } from "./scratch.js";
 import { getAgentRuntime, stageLogPath, type StageResult } from "./runner.js";
-import { allocateRunId, writeManifest } from "./run-report.js";
+import { allocateRunId, writeManifest, writeStageRecord } from "./run-report.js";
 import { executeStage } from "./stage-exec.js";
 import {
   clearState,
@@ -342,6 +342,35 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     startedAt: nowIso(),
   });
 
+  // Per-stage evidence records: `stageSeq` is a monotonic counter that orders
+  // them under the bundle's `stages/` dir. Recording is best-effort — a bundle
+  // write must never break the run. The panel records its own substages via the
+  // same closure (threaded as `recordStage`), so lens/verify/synth each get a
+  // record named for the substage rather than one umbrella "reviewer" record.
+  let stageSeq = 0;
+  const recordStage = (
+    recIteration: number,
+    stageName: string,
+    sr: StageResult,
+    startedAt: string
+  ): void => {
+    try {
+      writeStageRecord(workspaceDir, runId, stageSeq++, {
+        iteration: recIteration,
+        stage: stageName,
+        runtimeId: sr.runtimeId ?? activeAgentId,
+        costUsd: sr.costUsd,
+        usage: sr.usage,
+        isError: sr.isError,
+        apiErrorStatus: sr.apiErrorStatus,
+        startedAt,
+        finishedAt: nowIso(),
+      });
+    } catch {
+      // Best-effort: never fail a run because a stage record could not be written.
+    }
+  };
+
   // When an external signal is injected (daemon/watch mode), the caller owns
   // wake-lock + process signal handlers. Skip both here.
   const releaser: Releaser =
@@ -525,6 +554,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               agentId: activeAgentId,
               resumeNote,
               onStage: accountStage,
+              recordStage: (stageName, subSr, startedAt) =>
+                recordStage(i, stageName, subSr, startedAt),
             });
           }
           const r = await executeStage({
@@ -542,6 +573,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           return r;
         };
 
+        const stageStartedAt = nowIso();
         try {
           for (;;) {
             const accountingSnapshot = {
@@ -673,6 +705,11 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
         // Cost/pacing accounting is handled by accountStage — called once per
         // non-panel stage above, and once per sub-agent inside runPanel.
+
+        // Record this stage's evidence. A panel stage already recorded its own
+        // substages (lens/verify/synth) via the threaded recordStage, so skip
+        // the umbrella record to avoid double-counting the synth result.
+        if (!usePanel) recordStage(i, stage.name, sr!, stageStartedAt);
 
         if (s === 0) {
           if (sr!.result.includes(SENTINEL)) {

@@ -14,7 +14,7 @@ Ordered, bite-sized, testable tasks. One iteration implements one task.
       `startedAt`. Thread a `branchStrategy` into `LoopOptions` from run-bin.
       Add `.otto/runs/` to the workspace `.gitignore` (mirror state.json).
       Verify: `loop.test.ts` asserts a manifest exists after a one-iteration run.
-- [ ] **3. Write one stage record after each stage.** In the loop's per-stage
+- [x] **3. Write one stage record after each stage.** In the loop's per-stage
       path (and inside `runPanel` substages), normalize the `StageResult` into a
       `StageRecord` and `writeStageRecord`. Verify: `loop.test.ts` asserts N
       stage records for N stages; panel substages recorded.
@@ -31,4 +31,5 @@ Ordered, bite-sized, testable tasks. One iteration implements one task.
       format, and the inspect command. Verify: doc-contract test if a drift risk
       emerges; otherwise prose only.
 
-This iteration: **task 2**. Next: **task 3** (write one stage record per stage).
+This iteration: **task 3**. Next: **task 4** (finalize the manifest on every
+terminal path).

@@ -101,6 +101,52 @@ describe("runPanel", () => {
     expect(out.result).toBe("<review>OK</review>");
   });
 
+  it("records each substage via recordStage (lens names, then verify, then synth)", async () => {
+    mocks.executeStage.mockImplementation(
+      (opts: {
+        stage: { template: string };
+        vars: { LENS?: string; FINDINGS_DIR?: string };
+      }) => {
+        if (opts.stage.template === "review-synth.md")
+          return Promise.resolve(ok("<review>OK</review>", 0.5));
+        if (opts.stage.template === "review-verify.md") {
+          writeFileSync(
+            join(ws, opts.vars.FINDINGS_DIR!, "verdicts.md"),
+            "CONFIRMED — a.ts:1 — real defect\n",
+            "utf8"
+          );
+          return Promise.resolve(ok("<verify>1 confirmed</verify>", 0.2));
+        }
+        return Promise.resolve(ok(`finding for ${opts.vars.LENS}`, 0.1));
+      }
+    );
+    const recorded: Array<{ stage: string; costUsd: number; startedAt: string }> =
+      [];
+    await runPanel({
+      lenses: ["correctness", "security"],
+      workspaceDir: ws,
+      packageDir: "/pkg",
+      iteration: 3,
+      maxRetries: 0,
+      cooldownMs: 0,
+      onStage: noStop,
+      recordStage: (stage, sr, startedAt) => {
+        recorded.push({ stage, costUsd: sr.costUsd, startedAt });
+      },
+    });
+    // one record per lens (by lens name), then verify, then synth
+    expect(recorded.map((r) => r.stage)).toEqual([
+      "correctness",
+      "security",
+      "review-verify",
+      "review-synth",
+    ]);
+    expect(recorded.map((r) => r.costUsd)).toEqual([0.1, 0.1, 0.2, 0.5]);
+    expect(
+      recorded.every((r) => typeof r.startedAt === "string" && r.startedAt)
+    ).toBe(true);
+  });
+
   it("stops before remaining lenses + synth when onStage signals the budget is spent", async () => {
     mocks.executeStage.mockResolvedValue(ok("finding", 0.4));
     const out = await runPanel({

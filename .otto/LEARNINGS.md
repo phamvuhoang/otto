@@ -2,6 +2,35 @@
 
 ## Conventions
 
+- **Per-stage records are written by a `recordStage` closure in `runLoop`, with
+  the panel recording its own substages (issue #39 P0 task 3).** `runLoop` holds
+  a monotonic `stageSeq` counter + a `recordStage(iteration, stageName, sr,
+  startedAt)` closure that normalizes a `StageResult` into a `StageRecord` and
+  `writeStageRecord`s it under the bundle's `stages/`. **Recording is wrapped in
+  `try/catch` and swallows — a bundle write must NEVER break a run** (mirrors the
+  initial-manifest write). It captures `startedAt = nowIso()` BEFORE the retry
+  loop (so the timestamp spans all retries/waits) and stamps `finishedAt` at
+  write time; `runtimeId` is `sr.runtimeId ?? activeAgentId` (test `ok()` helpers
+  omit `runtimeId`, so the fallback matters). **The gate stage is recorded BEFORE
+  the sentinel early-return**, so a run that completes on iteration 1 still leaves
+  a gate record. **Panel split:** a panel stage is NOT given an umbrella
+  "reviewer" record (`if (!usePanel) recordStage(...)`); instead the loop threads
+  the same closure into `runPanel` as `recordStage?: (stageName, sr, startedAt)`,
+  and the panel calls it once per substage — **by lens NAME** for each lens
+  (free text from `OTTO_REVIEW_LENSES`, sanitized into the filename by
+  `writeStageRecord`), then `review-verify`, then `review-synth`. Each panel
+  substage captures its own `startedAt` before its `executeStage`; the verify
+  record is written BEFORE the budget-stop check so a budget-halted verify is
+  still recorded. **`StageRecord.logPath` is left undefined for now** — the real
+  NDJSON path is computed inside `executeStage` (its filename embeds a fresh
+  `new Date()` timestamp, so re-deriving it in the loop would NOT match the
+  actual file); surfacing it needs `executeStage` to return the path, deferred to
+  a later task (manifest-level artifact links are task 4). Failed stages (retries
+  exhausted → throw → `break`) are not recorded here either (no `StageResult`);
+  that terminal-failure record is task-4 scope. Pinned by `loop.test.ts` ("writes
+  one stage record per executed stage", "records the gate stage even when it hits
+  the sentinel", "hands the panel a recordStage callback and does not
+  double-record") + `panel.test.ts` ("records each substage via recordStage").
 - **Run evidence bundle lives under `.otto/runs/<run-id>/` (issue #39 P0).** Pure
   module `run-report.ts` mirrors `state.ts` (fs + JSON, absent/malformed → safe
   null/`[]`, injectable `Date`/`pid`): `RunManifest` (manifest.json: bin/mode/

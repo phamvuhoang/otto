@@ -211,7 +211,8 @@ export function codexPreflight(probes = {}) {
  * starts with the command, ends with the prompt instruction. Non-interactive
  * automation needs the sandbox + never-approve flags Codex requires (Claude's
  * `--permission-mode bypassPermissions` has no 1:1 Codex equivalent — the pair
- * `--ask-for-approval never ... --sandbox <mode>` is the closest, see findings).
+ * `--ask-for-approval never ... --ignore-user-config --sandbox <mode>` is the
+ * closest, see findings).
  */
 export function buildCodexArgs(
   promptRelPath,
@@ -224,6 +225,7 @@ export function buildCodexArgs(
     "never",
     "exec",
     "--json",
+    "--ignore-user-config",
     "--skip-git-repo-check",
     "--sandbox",
     sandboxMode,
@@ -241,6 +243,7 @@ async function main() {
     "never",
     "exec",
     "--json",
+    "--ignore-user-config",
     "--skip-git-repo-check",
     "--sandbox",
     "read-only",

@@ -157,6 +157,7 @@ test("buildCodexArgs builds a non-interactive argv ending in the prompt", () => 
   assert.ok(ai > 0 && ai < argv.indexOf("exec"));
   assert.equal(argv[3], "exec");
   assert.ok(argv.includes("--json"));
+  assert.ok(argv.includes("--ignore-user-config"));
   assert.ok(argv.includes("--skip-git-repo-check"));
   // Non-interactive needs sandbox + never-approve (no claude bypassPermissions 1:1).
   assert.ok(argv.includes("--sandbox"));

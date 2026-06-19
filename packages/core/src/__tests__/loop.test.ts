@@ -1602,4 +1602,78 @@ describe("runLoop", () => {
       expect(m?.artifacts.map((a) => a.kind)).toContain("review-followups");
     });
   });
+
+  describe("adaptive router", () => {
+    const reviewer: Stage = { name: "reviewer", template: "stage.md" };
+    const lensPool = ["correctness", "security", "tests"];
+
+    function routerOptions(dirs: LoopDirs, changedPaths: string[]) {
+      // Implementer (gate) does NOT emit the sentinel, so the reviewer runs.
+      mocks.runStage.mockImplementation((s: Stage) =>
+        Promise.resolve(s.name === "implementer" ? ok("did work") : ok("reviewed"))
+      );
+      mocks.runPanel.mockResolvedValue(ok("paneled"));
+      return loopOptions(dirs, {
+        stages: [stage, reviewer] as [Stage, Stage],
+        reviewLenses: lensPool,
+        adaptiveRouter: true,
+        resolveChangedPaths: () => changedPaths,
+      });
+    }
+
+    it("routes a medium-risk change to a lens subset panel", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      await runLoop(routerOptions(dirs, ["packages/core/src/eval.ts"]));
+
+      expect(mocks.runPanel).toHaveBeenCalledTimes(1);
+      expect(mocks.runPanel).toHaveBeenCalledWith(
+        expect.objectContaining({ lenses: ["correctness", "security"] })
+      );
+      expect(stderrText()).toContain("adaptive router: narrow-code");
+    });
+
+    it("routes a high-risk change to the full panel", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      await runLoop(
+        routerOptions(dirs, ["packages/core/src/auth.ts", "apps/cli/x.js"])
+      );
+      expect(mocks.runPanel).toHaveBeenCalledWith(
+        expect.objectContaining({ lenses: lensPool })
+      );
+    });
+
+    it("routes a low-risk docs change to a single reviewer (no panel)", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      await runLoop(routerOptions(dirs, ["README.md"]));
+
+      expect(mocks.runPanel).not.toHaveBeenCalled();
+      // implementer + single reviewer both went through runStage.
+      expect(mocks.runStage).toHaveBeenCalledTimes(2);
+      expect(stderrText()).toContain("adaptive router: docs-only → single reviewer");
+    });
+
+    it("leaves the static review path untouched when the flag is off", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockImplementation((s: Stage) =>
+        Promise.resolve(s.name === "implementer" ? ok("did work") : ok("reviewed"))
+      );
+      mocks.runPanel.mockResolvedValue(ok("paneled"));
+      // No adaptiveRouter: a low-risk path must NOT downgrade the configured panel.
+      await runLoop(
+        loopOptions(dirs, {
+          stages: [stage, reviewer] as [Stage, Stage],
+          reviewLenses: lensPool,
+          resolveChangedPaths: () => ["README.md"],
+        })
+      );
+      expect(mocks.runPanel).toHaveBeenCalledWith(
+        expect.objectContaining({ lenses: lensPool })
+      );
+      expect(stderrText()).not.toContain("adaptive router");
+    });
+  });
 });

@@ -125,3 +125,44 @@ export function reviewDepthForLevel(level: RiskLevel): ReviewDepth {
       return "panel";
   }
 }
+
+/** Lenses to run at a given review depth, drawn from the available pool. */
+const LENSES_DEPTH_CAP = 2;
+
+/**
+ * Choose which review lenses run at a {@link ReviewDepth}, drawn (in order) from
+ * the available pool: `single` → none (a plain single reviewer), `lenses` → a
+ * capped medium subset, `panel` → the full pool. Pure.
+ */
+export function selectLenses(depth: ReviewDepth, available: string[]): string[] {
+  switch (depth) {
+    case "single":
+      return [];
+    case "lenses":
+      return available.slice(0, LENSES_DEPTH_CAP);
+    case "panel":
+      return available;
+  }
+}
+
+/** A per-iteration review-routing decision: how deep, which lenses, and why. */
+export type RouteDecision = {
+  depth: ReviewDepth;
+  lenses: string[];
+  assessment: RiskAssessment;
+};
+
+/**
+ * Route one iteration's review from its changed paths and the available lens
+ * pool: classify the change, map the risk level to a depth, and select the
+ * lenses for that depth. Pure — the loop calls this behind the adaptive-router
+ * flag and runs the returned lens set (empty = single reviewer).
+ */
+export function routeReview(
+  changedPaths: string[],
+  available: string[]
+): RouteDecision {
+  const assessment = classifyRisk(changedPaths);
+  const depth = reviewDepthForLevel(assessment.level);
+  return { depth, lenses: selectLenses(depth, available), assessment };
+}

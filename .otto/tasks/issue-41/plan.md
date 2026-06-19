@@ -18,7 +18,7 @@ Check one off per run.
   `{ action: "continue" | "stop-low-progress" | "escalate-pause" |
   "finish-confident"; reason }`. Encodes early-stop / escalation thresholds.
   Pinned by tests.
-- [ ] **4. Route review depth by risk.** Behind `--adaptive-router` (or
+- [x] **4. Route review depth by risk.** Behind `--adaptive-router` (or
   `OTTO_ADAPTIVE_ROUTER`), resolve review lenses from `classifyRisk` of the
   iteration's changed paths instead of the static list. Off by default; static
   behavior unchanged when the flag is absent. Pinned by `run-bin`/loop tests.

@@ -245,6 +245,75 @@ export function detectConflicts(
   return conflicts;
 }
 
+/** Default `useCount` at or above which a record is "frequently used". */
+export const DEFAULT_FREQUENT_USE = 5;
+
+/**
+ * A governance snapshot of a memory set: which records are stale, which pairs
+ * contradict each other, which are heavily relied upon, plus a count breakdown.
+ * Produced by {@link auditMemory}; rendered by the `otto-memory audit` bin.
+ */
+export type AuditReport = {
+  /** Records whose DERIVED freshness status is `stale` (past expiry/revalidation). */
+  stale: MemoryRecord[];
+  /** Conflicting pairs (same scope+category, different content) — see {@link detectConflicts}. */
+  conflicting: [MemoryRecord, MemoryRecord][];
+  /** Records used at least the threshold number of times, most-used first. */
+  frequentlyUsed: MemoryRecord[];
+  counts: {
+    total: number;
+    active: number;
+    stale: number;
+    superseded: number;
+    /** Number of conflicting PAIRS, not records. */
+    conflicting: number;
+    frequentlyUsed: number;
+  };
+};
+
+/**
+ * Audit a memory set at `now`: surface stale, conflicting, and frequently-used
+ * records so a maintainer can spot governance problems before they influence a
+ * run. Pure. Two intentionally different status sources: `stale` (and the
+ * active/stale/superseded counts) use the DERIVED {@link memoryStatus} so a
+ * record past its freshness policy is caught even if its stored status still says
+ * `active`; `conflicting` delegates to {@link detectConflicts}, which uses the
+ * STORED status (time-free). `frequentlyUsed` lists records with
+ * `useCount >= frequentThreshold`, most-used first, ties broken by id.
+ */
+export function auditMemory(
+  records: MemoryRecord[],
+  now: Date = new Date(),
+  frequentThreshold: number = DEFAULT_FREQUENT_USE
+): AuditReport {
+  const stale: MemoryRecord[] = [];
+  let active = 0;
+  let superseded = 0;
+  for (const r of records) {
+    const s = memoryStatus(r, now);
+    if (s === "stale") stale.push(r);
+    else if (s === "superseded") superseded++;
+    else active++;
+  }
+  const conflicting = detectConflicts(records);
+  const frequentlyUsed = records
+    .filter((r) => r.useCount >= frequentThreshold)
+    .sort((a, b) => b.useCount - a.useCount || (a.id < b.id ? -1 : 1));
+  return {
+    stale,
+    conflicting,
+    frequentlyUsed,
+    counts: {
+      total: records.length,
+      active,
+      stale: stale.length,
+      superseded,
+      conflicting: conflicting.length,
+      frequentlyUsed: frequentlyUsed.length,
+    },
+  };
+}
+
 /** Write one memory record (creates `.otto/memory/`). */
 export function writeMemoryRecord(
   workspaceDir: string,

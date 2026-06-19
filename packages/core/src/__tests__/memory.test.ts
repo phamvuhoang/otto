@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   allocateMemoryId,
+  auditMemory,
   detectConflicts,
   listMemoryIds,
   memoryDir,
@@ -251,6 +252,89 @@ describe("detectConflicts", () => {
     const a = active({ id: "a", content: "X", scope: ["p", "q"] });
     const b = active({ id: "b", content: "Y", scope: ["q", "p"] });
     expect(detectConflicts([a, b])).toHaveLength(1);
+  });
+});
+
+describe("auditMemory", () => {
+  // createdAt/lastUsedAt 2026-06-19; expiresAt 2026-12-19; revalidateAfterDays 30.
+  const fresh = new Date("2026-06-19T02:00:00.000Z"); // within every window
+  const expired = new Date("2027-01-01T00:00:00.000Z"); // past expiresAt
+
+  const rec = (over: Partial<MemoryRecord>): MemoryRecord => ({
+    ...record,
+    status: "active",
+    ...over,
+  });
+
+  it("empty input → empty report with zero counts", () => {
+    expect(auditMemory([], fresh)).toEqual({
+      stale: [],
+      conflicting: [],
+      frequentlyUsed: [],
+      counts: {
+        total: 0,
+        active: 0,
+        stale: 0,
+        superseded: 0,
+        conflicting: 0,
+        frequentlyUsed: 0,
+      },
+    });
+  });
+
+  it("classifies stale by DERIVED status, not the stored field", () => {
+    // stored status is active, but it has passed expiresAt at `expired`
+    const r = rec({ id: "a", useCount: 0 });
+    const report = auditMemory([r], expired);
+    expect(report.stale.map((x) => x.id)).toEqual(["a"]);
+    expect(report.counts).toMatchObject({ total: 1, active: 0, stale: 1 });
+  });
+
+  it("counts superseded separately and excludes it from stale", () => {
+    const r = rec({ id: "s", status: "superseded" });
+    const report = auditMemory([r], expired);
+    expect(report.stale).toEqual([]);
+    expect(report.counts).toMatchObject({
+      total: 1,
+      active: 0,
+      stale: 0,
+      superseded: 1,
+    });
+  });
+
+  it("surfaces conflicting pairs (delegates to detectConflicts)", () => {
+    const a = rec({ id: "a", content: "X" });
+    const b = rec({ id: "b", content: "Y" });
+    const report = auditMemory([a, b], fresh);
+    expect(report.conflicting).toHaveLength(1);
+    expect(report.conflicting[0].map((r) => r.id)).toEqual(["a", "b"]);
+    expect(report.counts.conflicting).toBe(1);
+  });
+
+  it("lists frequently-used records (>= threshold) most-used first", () => {
+    const lo = rec({ id: "lo", content: "L", useCount: 2 });
+    const hi = rec({ id: "hi", content: "H", useCount: 9 });
+    const mid = rec({ id: "mid", content: "M", useCount: 5 });
+    const report = auditMemory([lo, hi, mid], fresh, 5);
+    expect(report.frequentlyUsed.map((r) => r.id)).toEqual(["hi", "mid"]);
+    expect(report.counts.frequentlyUsed).toBe(2);
+  });
+
+  it("breaks useCount ties by id for determinism", () => {
+    const a = rec({ id: "b", content: "X", useCount: 7 });
+    const b = rec({ id: "a", content: "Y", useCount: 7 });
+    const report = auditMemory([a, b], fresh, 5);
+    expect(report.frequentlyUsed.map((r) => r.id)).toEqual(["a", "b"]);
+  });
+
+  it("uses the default frequency threshold when none is given", () => {
+    const r = rec({ id: "a", useCount: 5 });
+    expect(auditMemory([r], fresh).frequentlyUsed.map((x) => x.id)).toEqual([
+      "a",
+    ]);
+    expect(
+      auditMemory([rec({ id: "b", useCount: 4 })], fresh).frequentlyUsed
+    ).toEqual([]);
   });
 });
 

@@ -59,6 +59,22 @@
   `index.ts`, wired by no bin/loop). Pinned by `memory.test.ts` ("supersede" +
   "detectConflicts"). Next slices: `auditMemory` (4) consumes `detectConflicts`'
   pairs as `conflicting[]`, then the `otto-memory` bin (5).
+- **Memory audit mixes DERIVED and STORED status on purpose (issue #42 P3 slice
+  4).** Pure `auditMemory(records, now, frequentThreshold=DEFAULT_FREQUENT_USE=5)`
+  → `AuditReport {stale[], conflicting[], frequentlyUsed[], counts{total, active,
+  stale, superseded, conflicting, frequentlyUsed}}`. The crux: `stale[]` and the
+  active/stale/superseded counts use the DERIVED `memoryStatus(r, now)` (so a
+  record past its freshness policy is caught even if its stored `status` still
+  says `active` — that's the whole point of an audit), but `conflicting` delegates
+  to `detectConflicts`, which uses the STORED `status` (time-free, per slice 3).
+  Don't "fix" this asymmetry. `counts.conflicting` is the number of PAIRS, not
+  records. `frequentlyUsed` = `useCount >= frequentThreshold`, sorted most-used
+  first with id as the deterministic tiebreaker; status-independent (a stale OR
+  superseded record can still be frequently-used — an important signal, so it is
+  NOT filtered out, and appears in both lists). Still INERT (exported from
+  `index.ts`, wired by no bin/loop). Pinned by `memory.test.ts` ("auditMemory").
+  Next: the `otto-memory` bin (5) renders this via `formatAuditReport`, mirroring
+  `runInspect`/`formatRunReport`.
 - **The harness evaluation suite (issue #40 P1) starts as a PURE scoring
   substrate over the #39 evidence bundle, deterministic-first.** `eval.ts`
   exports `EvalSignals` + `scoreTrajectory(manifest, stages)` — derives ONLY the

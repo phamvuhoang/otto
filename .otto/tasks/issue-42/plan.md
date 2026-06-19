@@ -18,9 +18,9 @@ regress existing runs.
       `older.status="superseded"`, `newer.supersedes=older.id`) and
       `detectConflicts(records)` (same `scope`+`category`, both `active`,
       different `content`). Inert. Pinned by `memory.test.ts`. *(this run)*
-- [ ] **4. Audit.** Pure `auditMemory(records, now)` → `AuditReport`
+- [x] **4. Audit.** Pure `auditMemory(records, now)` → `AuditReport`
       (`stale[]`, `conflicting[]`, `frequentlyUsed[]`, counts). Inert. Pinned by
-      `memory.test.ts`.
+      `memory.test.ts`. *(this run)*
 - [ ] **5. `otto-memory` bin.** `runMemory(argv, deps)` with an `audit`
       subcommand → `formatAuditReport(report)`, mirroring `runInspect`. Wire
       `apps/cli/bin/otto-memory.js` + `package.json` `bin`. Pinned by

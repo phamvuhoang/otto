@@ -59,7 +59,9 @@ export {
 } from "./inspect.js";
 export {
   allocateMemoryId,
+  auditMemory,
   detectConflicts,
+  DEFAULT_FREQUENT_USE,
   listMemoryIds,
   memoryDir,
   memoryRecordPath,
@@ -70,6 +72,7 @@ export {
   supersede,
   touchMemory,
   writeMemoryRecord,
+  type AuditReport,
   type MemoryRecord,
   type MemoryStatus,
   type MemoryTrust,

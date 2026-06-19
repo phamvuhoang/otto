@@ -97,6 +97,19 @@ describe("runMemory", () => {
     expect(text).toContain("x");
   });
 
+  it("projects active records to LEARNINGS markdown (project subcommand)", async () => {
+    const ws = tmp();
+    writeMemoryRecord(ws, rec({ id: "c", content: "a convention", category: "convention" }));
+    const d = deps(ws);
+    const code = await runMemory(["project"], d);
+    expect(code).toBe(0);
+    const text = d._out.join("\n");
+    // raw LEARNINGS view — no "Memory audit" header that would corrupt a redirect
+    expect(text).not.toContain("Memory audit");
+    expect(text).toContain("# Otto learnings");
+    expect(text).toContain("## Conventions\n\n- a convention");
+  });
+
   it("handles an absent memory dir as an empty audit", async () => {
     const ws = tmp();
     const d = deps(ws);

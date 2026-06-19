@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
   auditMemory,
   memoryDir,
+  projectLearnings,
   readMemoryRecords,
   type AuditReport,
   type MemoryRecord,
@@ -26,7 +27,7 @@ const defaultDeps: MemoryDeps = {
   err: (m) => process.stderr.write(`${m}\n`),
 };
 
-const USAGE = "Usage: otto-memory audit";
+const USAGE = "Usage: otto-memory <audit|project>";
 
 /** One-line label for a record's scope: its globs, or "(repo-wide)" when empty. */
 function describeScope(record: MemoryRecord): string {
@@ -77,10 +78,11 @@ export function formatAuditReport(report: AuditReport): string {
 }
 
 /**
- * Drive the `otto-memory` command. The sole subcommand (`audit`, also the
- * default) reads every record under `.otto/memory/`, audits the set at the
- * current instant, and prints the human report. Resolves to the process exit
- * code (mirrors `runInspect`).
+ * Drive the `otto-memory` command. Two subcommands over the records under
+ * `.otto/memory/`: `audit` (the default) prints the governance report; `project`
+ * prints the human-readable `LEARNINGS.md` view of the active records — emitted
+ * raw (no header line) so it can be redirected straight into `.otto/LEARNINGS.md`.
+ * Resolves to the process exit code (mirrors `runInspect`).
  */
 export async function runMemory(
   argv: string[],
@@ -91,13 +93,17 @@ export async function runMemory(
     deps.out(USAGE);
     return 0;
   }
-  if (arg !== undefined && arg !== "audit") {
+  if (arg !== undefined && arg !== "audit" && arg !== "project") {
     deps.err(`Unknown subcommand '${arg}'.\n${USAGE}`);
     return 1;
   }
 
   const workspaceDir = resolve(deps.env.OTTO_WORKSPACE ?? deps.cwd);
   const records = readMemoryRecords(workspaceDir);
+  if (arg === "project") {
+    deps.out(projectLearnings(records));
+    return 0;
+  }
   deps.out(`Memory audit (${memoryDir(workspaceDir)})`);
   deps.out(formatAuditReport(auditMemory(records)));
   return 0;

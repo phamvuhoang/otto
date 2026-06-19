@@ -96,6 +96,28 @@
   entry + shebang + imports `runMemory` + index re-exports). Next: slice 6 wires
   records ↔ `LEARNINGS.md` projection + compaction tiers (the first slice that is
   NOT inert), then slice 7 docs.
+- **The LEARNINGS projection is a READ-ONLY render, not an auto-overwrite (issue
+  #42 P3 slice 6a).** Pure `projectLearnings(records, now)` buckets the ACTIVE
+  records into the canonical `# Otto learnings` four sections (Conventions /
+  Gotchas / Decisions / Dead ends) — bullets are `- <content>` only, sorted by id
+  (chronological). **Two deliberate calls:** (1) it filters by the DERIVED
+  `memoryStatus(r, now)==="active"` (so derived-stale AND superseded records drop
+  out — that bounding is the whole point of "memory as governed state"), and (2)
+  it carries NO governance metadata (scope/trust/confidence) — those stay in
+  `otto-memory audit`; the projection IS a human `LEARNINGS.md`, so it must read as
+  plain prose. Category→section is a `startsWith` over a normalized (alnum-only,
+  so `dead-end`/`dead end`→`deadend`) category; an unrecognized/missing category
+  falls under Conventions (the catch-all, section index 0). All four headers are
+  always emitted (stable file shape) even when empty. The `otto-memory project`
+  subcommand prints it **raw — no `Memory audit (<dir>)` header line** — precisely
+  so `otto-memory project > .otto/LEARNINGS.md` is a clean redirect. **Slice 6a
+  did NOT auto-write `.otto/LEARNINGS.md` (would clobber the hand-curated prose,
+  which is a superset of any record set — there are zero records today), and did
+  NOT wire the loop** — still a standalone diagnostic. The compaction-tier docs +
+  "how a run writes a record" half of plan item 6 was split out as **6b** (it's
+  prose/template work, not code), then slice 7 docs. Pinned by `memory.test.ts`
+  ("projectLearnings": empty/grouping/order/catch-all/active-only) +
+  `memory-cli.test.ts` (project subcommand emits raw LEARNINGS, no audit header).
 - **The harness evaluation suite (issue #40 P1) starts as a PURE scoring
   substrate over the #39 evidence bundle, deterministic-first.** `eval.ts`
   exports `EvalSignals` + `scoreTrajectory(manifest, stages)` — derives ONLY the

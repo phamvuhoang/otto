@@ -12,6 +12,7 @@ import {
   memoryRecordPath,
   memoryStatus,
   parseMemoryRecord,
+  projectLearnings,
   readMemoryRecord,
   readMemoryRecords,
   supersede,
@@ -348,6 +349,101 @@ describe("auditMemory", () => {
     // and they are not filtered out of their lifecycle buckets
     expect(report.stale.map((x) => x.id)).toEqual(["old"]);
     expect(report.counts).toMatchObject({ stale: 1, superseded: 1 });
+  });
+});
+
+describe("projectLearnings", () => {
+  // createdAt/lastUsedAt 2026-06-19; expiresAt 2026-12-19; revalidateAfterDays 30.
+  const fresh = new Date("2026-06-19T02:00:00.000Z"); // within every window
+  const expired = new Date("2027-01-01T00:00:00.000Z"); // past expiresAt
+
+  const rec = (over: Partial<MemoryRecord>): MemoryRecord => ({
+    ...record,
+    status: "active",
+    ...over,
+  });
+
+  it("empty input → the four canonical sections under the H1", () => {
+    expect(projectLearnings([], fresh)).toBe(
+      "# Otto learnings\n\n" +
+        "## Conventions\n\n" +
+        "## Gotchas\n\n" +
+        "## Decisions\n\n" +
+        "## Dead ends\n"
+    );
+  });
+
+  it("groups active records by category into the right section", () => {
+    const out = projectLearnings(
+      [
+        rec({ id: "c", content: "C1", category: "convention" }),
+        rec({ id: "g", content: "G1", category: "gotcha" }),
+        rec({ id: "d", content: "D1", category: "decision" }),
+        rec({ id: "e", content: "E1", category: "dead-end" }),
+      ],
+      fresh
+    );
+    expect(out).toBe(
+      "# Otto learnings\n\n" +
+        "## Conventions\n\n- C1\n\n" +
+        "## Gotchas\n\n- G1\n\n" +
+        "## Decisions\n\n- D1\n\n" +
+        "## Dead ends\n\n- E1\n"
+    );
+  });
+
+  it("orders records within a section by id (chronological)", () => {
+    const out = projectLearnings(
+      [
+        rec({ id: "2026-02", content: "second", category: "convention" }),
+        rec({ id: "2026-01", content: "first", category: "convention" }),
+      ],
+      fresh
+    );
+    expect(out).toContain("- first\n- second");
+  });
+
+  it("maps unknown/missing category to Conventions (the catch-all)", () => {
+    const out = projectLearnings(
+      [
+        rec({ id: "a", content: "no category", category: undefined }),
+        rec({ id: "b", content: "odd category", category: "misc" }),
+      ],
+      fresh
+    );
+    expect(out).toBe(
+      "# Otto learnings\n\n" +
+        "## Conventions\n\n- no category\n- odd category\n\n" +
+        "## Gotchas\n\n" +
+        "## Decisions\n\n" +
+        "## Dead ends\n"
+    );
+  });
+
+  it("excludes derived-stale and superseded records (bounded to active)", () => {
+    const out = projectLearnings(
+      [
+        rec({
+          id: "ok",
+          content: "keep me",
+          category: "convention",
+          expiresAt: undefined,
+          revalidateAfterDays: undefined,
+        }),
+        // stored status active but past expiresAt at `expired` → derived stale
+        rec({ id: "stale", content: "drop stale", category: "convention" }),
+        rec({
+          id: "sup",
+          content: "drop superseded",
+          category: "convention",
+          status: "superseded",
+        }),
+      ],
+      expired
+    );
+    expect(out).toContain("- keep me");
+    expect(out).not.toContain("drop stale");
+    expect(out).not.toContain("drop superseded");
   });
 });
 

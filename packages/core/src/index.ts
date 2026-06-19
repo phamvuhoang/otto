@@ -72,6 +72,7 @@ export {
   memoryRecordPath,
   memoryStatus,
   parseMemoryRecord,
+  projectLearnings,
   readMemoryRecord,
   readMemoryRecords,
   supersede,

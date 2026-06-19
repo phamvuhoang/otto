@@ -25,9 +25,13 @@ regress existing runs.
       subcommand → `formatAuditReport(report)`, mirroring `runInspect`. Wire
       `apps/cli/bin/otto-memory.js` + `package.json` `bin`. Pinned by
       `memory-cli.test.ts` + `scripts/otto-memory-bin.test.mjs`. *(this run)*
-- [ ] **6. LEARNINGS projection + compaction rules.** Project active records to
-      the human-readable `LEARNINGS.md` view; document the compaction tiers
+- [x] **6a. LEARNINGS projection.** Pure `projectLearnings(records, now)`
+      rendering the ACTIVE records (derived-stale + superseded excluded) into the
+      canonical `# Otto learnings` four-section view; `otto-memory project`
+      subcommand prints it raw (redirectable into `.otto/LEARNINGS.md`). Pinned by
+      `memory.test.ts` + `memory-cli.test.ts`. *(this run)*
+- [ ] **6b. Compaction rules + record-writing.** Document the compaction tiers
       (active context / summarized state / reconstructable artifacts / durable
-      memory). Define how a run writes a record on a new learning.
+      memory). Define how a run writes a record on a new learning (template prose).
 - [ ] **7. Docs.** README feature bullet + `otto-memory audit` example;
       ARCHITECTURE module rows + a "Governed memory lifecycle" section.

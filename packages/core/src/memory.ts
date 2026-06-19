@@ -314,6 +314,57 @@ export function auditMemory(
   };
 }
 
+/**
+ * The canonical `LEARNINGS.md` sections in file order, each with a predicate over
+ * a normalized category. The first section (Conventions) is also the catch-all for
+ * a record whose category matches none of them.
+ */
+const LEARNINGS_SECTIONS: { heading: string; match: (norm: string) => boolean }[] =
+  [
+    { heading: "Conventions", match: (n) => n.startsWith("convention") },
+    { heading: "Gotchas", match: (n) => n.startsWith("gotcha") },
+    { heading: "Decisions", match: (n) => n.startsWith("decision") },
+    { heading: "Dead ends", match: (n) => n.startsWith("deadend") },
+  ];
+
+/** Reduce a category to alphanumerics so "dead-end"/"dead end" both match "deadend". */
+function normalizeCategory(category: string | undefined): string {
+  return (category ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * Project the ACTIVE memory records into the human-readable `LEARNINGS.md` view:
+ * the canonical `# Otto learnings` document with its four sections (Conventions /
+ * Gotchas / Decisions / Dead ends), each listing its records' `content` as bullets
+ * in id (chronological) order. Records whose DERIVED freshness is `stale`, or that
+ * are `superseded`, are excluded — so the projection stays bounded to memory that
+ * may still inform a run (issue #42: "preserving `.otto/LEARNINGS.md` as the
+ * human-readable projection"). A record whose category matches no section falls
+ * under Conventions, the catch-all. Pure — returns the markdown; it does NOT write
+ * the file (governance metadata stays in `otto-memory audit`, not this view).
+ */
+export function projectLearnings(
+  records: MemoryRecord[],
+  now: Date = new Date()
+): string {
+  const buckets: MemoryRecord[][] = LEARNINGS_SECTIONS.map(() => []);
+  for (const r of records) {
+    if (memoryStatus(r, now) !== "active") continue;
+    const norm = normalizeCategory(r.category);
+    const idx = LEARNINGS_SECTIONS.findIndex((s) => s.match(norm));
+    buckets[idx === -1 ? 0 : idx].push(r);
+  }
+  const blocks = LEARNINGS_SECTIONS.map((section, i) => {
+    const bullets = [...buckets[i]]
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((r) => `- ${r.content}`);
+    return bullets.length
+      ? `## ${section.heading}\n\n${bullets.join("\n")}`
+      : `## ${section.heading}`;
+  });
+  return ["# Otto learnings", ...blocks].join("\n\n") + "\n";
+}
+
 /** Write one memory record (creates `.otto/memory/`). */
 export function writeMemoryRecord(
   workspaceDir: string,

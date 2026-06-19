@@ -58,6 +58,11 @@ export {
   type InspectDeps,
 } from "./inspect.js";
 export {
+  formatAuditReport,
+  runMemory,
+  type MemoryDeps,
+} from "./memory-cli.js";
+export {
   allocateMemoryId,
   auditMemory,
   detectConflicts,

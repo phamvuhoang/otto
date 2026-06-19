@@ -21,10 +21,10 @@ regress existing runs.
 - [x] **4. Audit.** Pure `auditMemory(records, now)` → `AuditReport`
       (`stale[]`, `conflicting[]`, `frequentlyUsed[]`, counts). Inert. Pinned by
       `memory.test.ts`. *(this run)*
-- [ ] **5. `otto-memory` bin.** `runMemory(argv, deps)` with an `audit`
+- [x] **5. `otto-memory` bin.** `runMemory(argv, deps)` with an `audit`
       subcommand → `formatAuditReport(report)`, mirroring `runInspect`. Wire
       `apps/cli/bin/otto-memory.js` + `package.json` `bin`. Pinned by
-      `memory.test.ts` + a root contract test.
+      `memory-cli.test.ts` + `scripts/otto-memory-bin.test.mjs`. *(this run)*
 - [ ] **6. LEARNINGS projection + compaction rules.** Project active records to
       the human-readable `LEARNINGS.md` view; document the compaction tiers
       (active context / summarized state / reconstructable artifacts / durable

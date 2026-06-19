@@ -75,6 +75,27 @@
   `index.ts`, wired by no bin/loop). Pinned by `memory.test.ts` ("auditMemory").
   Next: the `otto-memory` bin (5) renders this via `formatAuditReport`, mirroring
   `runInspect`/`formatRunReport`.
+- **The `otto-memory` bin is the FIRST consumer that wires governed memory into a
+  runnable surface (issue #42 P3 slice 5) — but only a READ-ONLY one.** Split
+  exactly like `inspect.ts`/`run-report.ts`: `memory.ts` stays the pure substrate;
+  the new `memory-cli.ts` holds a pure `formatAuditReport(report)` → string and a
+  thin `runMemory(argv, deps)` → exit code (injectable `{env,cwd,out,err}` like
+  `InspectDeps`). `runMemory` resolves `OTTO_WORKSPACE ?? cwd`, `readMemoryRecords`
+  + `auditMemory` (at the live `now`), prints `Memory audit (<dir>)` then the
+  report body. The ONLY subcommand is `audit` (also the default no-arg);
+  `-h`/`--help` → usage exit 0; any other token → unknown-subcommand exit 1.
+  `formatAuditReport` does NOT print the `Memory audit` header (runMemory prints
+  the located `(<dir>)` line) — keep the path out of the pure formatter so it has
+  nothing host-specific. New bin `apps/cli/bin/otto-memory.js` (delegates to
+  `runMemory`, same shape as `otto-inspect.js`) + `apps/cli/package.json` `bin`
+  entry; exported from `index.ts`. **Slice 5 keeps the substrate's INERT-on-the-
+  loop property: nothing in `loop.ts`/the playbooks reads/writes records yet** —
+  the bin is a standalone diagnostic, so a memory read still can't regress a run.
+  Pinned by `memory-cli.test.ts` (format empty/populated + runMemory audit/absent-
+  dir/help/unknown) and `scripts/otto-memory-bin.test.mjs` (bin wiring: package.json
+  entry + shebang + imports `runMemory` + index re-exports). Next: slice 6 wires
+  records ↔ `LEARNINGS.md` projection + compaction tiers (the first slice that is
+  NOT inert), then slice 7 docs.
 - **The harness evaluation suite (issue #40 P1) starts as a PURE scoring
   substrate over the #39 evidence bundle, deterministic-first.** `eval.ts`
   exports `EvalSignals` + `scoreTrajectory(manifest, stages)` — derives ONLY the

@@ -21,7 +21,16 @@
   `apps/cli/package.json` `bin` + `apps/cli/bin/otto-inspect.js`; exported from
   `index.ts`. Pinned by `inspect.test.ts` (format finalized/un-finalized +
   runInspect explicit/latest/unknown-id/no-runs) and `run-report.test.ts`
-  (`listRunIds`). **Remaining issue-39 work: task 6 (docs).**
+  (`listRunIds`). **Issue-39 is COMPLETE — task 6 (docs) landed the run-evidence-bundle
+  prose in README ("Why Otto" bullet + `otto-inspect latest` example + the bin in
+  "How it works") and a `## Run evidence bundle` section in `docs/ARCHITECTURE.md`
+  (layout / run-id format / inspect command) + `run-report.ts`/`inspect.ts`
+  module-map and index-re-export rows. Prose-only, NO doc-contract test: a stable
+  bundle layout + a single read-only command is low drift risk, and the plan
+  explicitly scoped task 6 as "doc-contract test if a drift risk emerges, otherwise
+  prose only" — adding one would be over-engineering. The existing
+  `agent-runtime-doc-contract`/`linear-cli-docs`/`quality-report-samples` doc tests
+  do NOT cover the bundle, and the additive prose did not trip them.**
 - **The run manifest is finalized inside `summarize`, NOT at each return site
   (issue #39 P0 task 4).** `runLoop` writes the initial manifest at loop start
   (task 2) and re-writes the WHOLE manifest on exit via a best-effort

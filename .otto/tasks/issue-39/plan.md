@@ -33,9 +33,12 @@ Ordered, bite-sized, testable tasks. One iteration implements one task.
       Shipped as a new `otto-inspect` bin → `runInspect` in `inspect.ts`
       (pure `formatRunReport` + `listRunIds`). Verified by `inspect.test.ts`
       and a manual bin smoke.
-- [ ] **6. Docs.** README + `docs/ARCHITECTURE.md`: the bundle layout, run-id
-      format, and the inspect command. Verify: doc-contract test if a drift risk
-      emerges; otherwise prose only.
+- [x] **6. Docs.** README + `docs/ARCHITECTURE.md`: the bundle layout, run-id
+      format, and the inspect command. Shipped as prose (no doc-contract test —
+      a stable layout + command is low drift risk): README gains a "Why Otto"
+      bullet, an `otto-inspect latest` example, and the bin in "How it works";
+      ARCHITECTURE gains a `## Run evidence bundle` section plus `run-report.ts`
+      / `inspect.ts` module-map + index re-export entries.
 
-This iteration: **task 5**. Next: **task 6** (docs — README + ARCHITECTURE:
-bundle layout, run-id format, the `otto-inspect` command).
+All tasks complete. Next: **NO MORE TASKS** (docs landed; otto-inspect smoke
+verified `Usage: otto-inspect [<run-id>|latest]`).

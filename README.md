@@ -64,6 +64,7 @@ More than a `while`-loop around `claude`:
 - 🔎 **It reviews itself, on a budget.** Past the single reviewer, an opt-in **review panel** runs read-only `correctness` / `security` / `tests` lenses, then an adversarial verifier that tries to _refute_ each finding (rejecting when unsure) before a single `fix(review):` commit lands only the confirmed defects. Cap spend with `--budget`, pace with `--cooldown`.
 - 📊 **It can show token usage.** `--token-mode measure` prints per-stage and run-total input/output/cache token counts from Claude's `result` event. `--token-mode reduce` also applies conservative render-time prompt compaction; default `off` preserves current output and prompts.
 - 🔁 **It survives the night.** Holds an OS wake-lock, retries transient failures with backoff, waits out Claude rate limits and resumes the same iteration, and persists `.otto/state.json` so a restart picks up where it left off — never redoing committed work.
+- 🧾 **It leaves a paper trail.** Every run writes a durable **evidence bundle** to `.otto/runs/<run-id>/` — a manifest (inputs, runtime, iteration count, token/cost totals, exit reason, next action) plus one record per stage. `otto-inspect [latest]` renders it into a compact "what happened and why did Otto stop?" report, so you review the outcome instead of replaying `.otto-tmp/logs`.
 
 Beyond the build loop, two read/repair modes reuse all of the above:
 
@@ -109,6 +110,9 @@ otto-afk --apply-review ./code-review.md 20
 # Run as a daemon that wakes on newly-labelled issues
 otto-ghafk --watch --watch-interval 300 5
 
+# Inspect the most recent run's evidence bundle (what happened, why it stopped)
+otto-inspect latest
+
 # Drive a repo other than the current directory; pin the model
 OTTO_WORKSPACE=~/code/other-repo OTTO_MODEL=opus otto-afk "./docs/plans/feature.md" 10
 
@@ -125,7 +129,7 @@ Full flag reference and more verify / apply-review recipes: **[docs/CLI.md](./do
 
 Otto ships as two npm packages:
 
-- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool).
+- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool). `otto-inspect` renders a past run's evidence bundle.
 - **[`@phamvuhoang/otto-core`](./packages/core)** — the library: iteration loop, native-sandbox runner, template renderer, stage registry. Importable from any Node project.
 
 Each iteration runs a **stage chain**: a **gate** stage (implement / verify / apply-review, depending on the bin and flags) followed by a **reviewer**. Before each stage, Otto renders a prompt template — expanding `@include`, `@spill`, `` !?`cmd` ``, `` !`cmd` ``, and `{{ INPUTS }}` tags — and injects the workspace's `.otto/LEARNINGS.md`. If the gate emits the sentinel `<promise>NO MORE TASKS</promise>`, the loop exits before the reviewer runs.

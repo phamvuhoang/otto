@@ -444,6 +444,24 @@ otto-ghafk --issue https://github.com/owner/repo/issues/42 5    # full URL
 
 The loop fetches only that issue and exits when it is complete (the agent emits `<promise>NO MORE TASKS</promise>`). Cannot be combined with `--watch`.
 
+### Sub-issue expansion (`--include-sub-issues`)
+
+Parent "epic" issues often carry only a high-level description, with the real work living in their children. Add `--include-sub-issues` (or `OTTO_INCLUDE_SUB_ISSUES=1`) to expand a target issue into its open children and run the single-issue loop once per child:
+
+```bash
+otto-ghafk --issue 38 --include-sub-issues 5
+```
+
+How it resolves children:
+
+- **Native GitHub sub-issues first** (`gh api repos/{owner}/{repo}/issues/<n>/sub_issues`, paginated).
+- **Markdown task-list fallback** when the issue has no native sub-issues: it parses the parent body for task-list references (`- [ ] #N` / `- [x] #N`) **in document order**.
+- The tree is walked **recursively, depth-first** (a child's own sub-issues are implemented before the child), only **open** issues are processed, and the **parent is skipped** (it is treated as a pure tracker). Cycles are guarded.
+
+Each child is scoped exactly like a single-issue run (its own `<promise>NO MORE TASKS</promise>` gate and resume state). `<iterations>` is the per-child safety cap; `--budget` spans the **whole invocation** (the loop stops launching further children once the budget is exhausted). If the target has no children at all, it behaves as an ordinary single-issue run; if it has children but they are all closed, there is nothing to do.
+
+`--include-sub-issues` is `otto-ghafk`-only and requires `--issue`.
+
 ---
 
 ## Stopping a run

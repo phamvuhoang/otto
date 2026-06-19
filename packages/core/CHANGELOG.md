@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.10.0...otto-core-v0.11.0) (2026-06-19)
+
+
+### Features
+
+* evidence bundle ([#39](https://github.com/phamvuhoang/otto/issues/39)) + harness eval suite ([#40](https://github.com/phamvuhoang/otto/issues/40)) ([#51](https://github.com/phamvuhoang/otto/issues/51)) ([26fe919](https://github.com/phamvuhoang/otto/commit/26fe91912259966b4d1a4d87af88aa06c3894009))
+
 ## [0.10.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.9.0...otto-core-v0.10.0) (2026-06-19)
 
 

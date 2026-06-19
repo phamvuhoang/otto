@@ -27,9 +27,12 @@ permissive, so trusted local plan/PRD workflows keep working (metric #3).
       `safetyEvents[]` on manifest + stage record), scored by `eval.ts`
       (`safetyEventCount` over manifest + stages; unranked comparison column).
       INERT. Pinned by `run-report.test.ts` + `eval.test.ts`.
-- [ ] **6. Policy checks at the boundary** — wire policy evaluation around
-      shell/`@spill` tags + stage execution (first non-inert slice; default
-      policy permissive → trusted workflows unchanged).
-- [ ] **7. Docs** — README (Why Otto bullet + policy.json example), ARCHITECTURE
-      (module-map rows + a Safety policy & taint section), a policy.json field
-      reference.
+- [x] **6. Policy checks at the boundary** — `executeStage` reads `.otto/policy.json`
+      and threads it into `renderTemplate`, which evaluates each host-shell/`@spill`
+      command against the deny-list before running it; a blocked command is skipped
+      (neutralized to fallback/empty) and recorded as a `blocked` policy-violation
+      `SafetyEvent` on the stage record. Default-permissive → trusted workflows
+      unchanged. First non-inert slice. Pinned by `render.test.ts` + `stage-exec.test.ts`.
+- [x] **7. Docs** — README (Why Otto safety bullet), ARCHITECTURE (`safety-policy.ts`/
+      `taint.ts` module-map rows + a "Safety policy & taint" section with the
+      `.otto/policy.json` six-field reference).

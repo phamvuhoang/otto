@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.8.2...otto-core-v0.9.0) (2026-06-19)
+
+
+### Features
+
+* **loop:** interactive pause/resume controls + Codex sandbox commit fix ([#29](https://github.com/phamvuhoang/otto/issues/29)) ([#47](https://github.com/phamvuhoang/otto/issues/47)) ([01549bf](https://github.com/phamvuhoang/otto/commit/01549bfd97f43e2fbeafcffdc8f5823253ad66b8))
+
 ## [0.8.2](https://github.com/phamvuhoang/otto/compare/otto-core-v0.8.1...otto-core-v0.8.2) (2026-06-19)
 
 

@@ -86,6 +86,17 @@ describe("parseFlags --issue", () => {
   });
 });
 
+describe("parseFlags --include-sub-issues", () => {
+  it("defaults to false", () => {
+    expect(parseFlags(["3"]).includeSubIssues).toBe(false);
+  });
+  it("is set by the boolean flag and consumes no value", () => {
+    const f = parseFlags(["--include-sub-issues", "3"]);
+    expect(f.includeSubIssues).toBe(true);
+    expect(f.rest).toEqual(["3"]);
+  });
+});
+
 describe("parseDurationMs", () => {
   it("parses bare seconds", () => expect(parseDurationMs("90")).toBe(90_000));
   it("parses m/h/s suffixes", () => {

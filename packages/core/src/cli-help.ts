@@ -48,6 +48,9 @@ export type CliFlags = {
    * `parseIssue`). In both cases it is shell-safe for `OTTO_ISSUE`.
    */
   issue?: number | string;
+  /** `--include-sub-issues` toggle (default false; opt-in, issue #28).
+   *  Only meaningful with `--issue` on otto-ghafk; run-bin enforces that. */
+  includeSubIssues: boolean;
   maxWaitMs?: number;
   fresh: boolean;
   verify: boolean;
@@ -179,6 +182,7 @@ export function parseFlags(
   let expectingWatchInterval = false;
   let issue: number | string | undefined;
   let expectingIssue = false;
+  let includeSubIssues = false;
   let maxWaitMs: number | undefined;
   let expectingMaxWait = false;
   let fresh = false;
@@ -321,6 +325,7 @@ export function parseFlags(
     else if (a === "--watch") watch = true;
     else if (a === "--watch-interval") expectingWatchInterval = true;
     else if (a === "--issue") expectingIssue = true;
+    else if (a === "--include-sub-issues") includeSubIssues = true;
     else if (a === "--max-wait") expectingMaxWait = true;
     else if (a === "--fresh") fresh = true;
     else if (a === "--verify") verify = true;
@@ -402,6 +407,7 @@ export function parseFlags(
     watch,
     watchIntervalSec,
     issue,
+    includeSubIssues,
     maxWaitMs,
     fresh,
     verify,
@@ -479,6 +485,7 @@ Flags:
   --repo <owner/name> scope otto-ghafk to a GitHub repo: poll + list + view only that repo's issues (or OTTO_GITHUB_REPO; default: the workspace's repo); repeatable for multi-target watch (or OTTO_GITHUB_REPOS=owner/a,owner/b)
   --project <name>    scope otto-linear-afk to a Linear project (narrows team/label further; or OTTO_LINEAR_PROJECT; default: no project filter); repeatable for multi-target watch (or OTTO_LINEAR_PROJECTS="Roadmap Q3,Bugs")
   --issue <ref>       target a single issue (otto-ghafk: number, #N, owner/repo#N, or URL; otto-linear-afk: ENG-123, UUID, or Linear URL); loop exits when it is done (default: off)
+  --include-sub-issues  with --issue (otto-ghafk): also implement the issue's open sub-issues — native GitHub sub-issues, or a markdown task-list (- [ ] #N) fallback — depth-first, parent skipped (or OTTO_INCLUDE_SUB_ISSUES=1; default: off)
   --max-wait <dur>    cap the wait when rate-limited before halting (e.g. 90m, 6h; default 6h)
   --fresh             ignore any saved resume state and start from iteration 1
   --verify            read-only: reconcile the plan against git, run the suites, write a report; make no commits (otto-afk)
@@ -503,6 +510,7 @@ Environment variables:
   OTTO_AUTO_SWITCH_ON_LIMIT  switch to the fallback runtime on a limit when truthy (1/true/yes/on); same as --auto-switch-on-limit (default: off).
   OTTO_REVIEW_LENSES   comma-separated lens list for --review-panel (default: correctness,security,tests).
   OTTO_WATCH_LABEL     issue label to poll for in watch mode (default: "otto").
+  OTTO_INCLUDE_SUB_ISSUES  set to 1/true/yes to enable --include-sub-issues without the flag.
   OTTO_GITHUB_REPO     scope otto-ghafk to a single GitHub repo ("owner/name"); same as --repo.
   OTTO_GITHUB_REPOS    scope otto-ghafk watch to several GitHub repos (comma-separated "owner/a,owner/b"); same as repeating --repo.
   OTTO_LINEAR_PROJECT  scope otto-linear-afk to a single Linear project (name); same as --project.
@@ -560,6 +568,7 @@ export type PrintConfigOptions = {
    */
   watchScope?: string;
   issue?: number | string;
+  includeSubIssues?: boolean;
   maxWaitMs?: number;
   mode?: string;
   branchStrategy?: "current" | "branch" | "worktree";
@@ -599,6 +608,7 @@ export function printConfig(
     watchLabel = process.env.OTTO_WATCH_LABEL?.trim() || "otto",
     watchScope,
     issue,
+    includeSubIssues = false,
     maxWaitMs,
     mode,
     branchStrategy,
@@ -686,6 +696,7 @@ export function printConfig(
   watch                 ${watchStatus}
   scope                 ${scopeStatus}
   issue                 ${issueStatus}
+  sub-issues            ${includeSubIssues ? "on" : "off"}
 `);
 
   // Preflight: report whether the run's prerequisites are satisfied so a user

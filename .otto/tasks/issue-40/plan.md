@@ -18,7 +18,7 @@ Check one off per run.
   fixture manifest (id, kind, fixture path, the otto bin/args + env config to
   run, and the deterministic expected-outcome checks). Pure parsing + schema
   validation. Pinned by tests. No fixtures run yet.
-- [ ] **4. Fixture-derived signals.** Extend scoring with the checks that need
+- [x] **4. Fixture-derived signals.** Extend scoring with the checks that need
   the fixture repo, not just the trajectory: tests-passed (run the fixture's
   test cmd), diff-correctness (compare against a golden/assertion). Pinned by
   tests against a tiny in-repo fixture.

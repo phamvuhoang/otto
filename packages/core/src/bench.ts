@@ -1,4 +1,8 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+
+import type { EvalSignals } from "./eval.js";
+import { resolveShell } from "./render.js";
 
 /**
  * A deterministic outcome check run in the fixture workspace after a benchmark
@@ -177,6 +181,80 @@ export function parseBenchmarkSuite(raw: unknown): BenchmarkTask[] {
     seen.add(t.id);
   }
   return tasks;
+}
+
+/** Pass/fail outcome of one {@link BenchmarkCheck}. */
+export type CheckResult = { name: string; passed: boolean };
+
+/**
+ * Runs a check command in the fixture workspace and reports its exit status.
+ * Injectable so {@link runFixtureChecks} stays unit-testable without spawning.
+ */
+export type CheckRunner = (
+  command: string,
+  cwd: string
+) => { status: number | null };
+
+const defaultCheckRunner: CheckRunner = (command, cwd) => {
+  const r = spawnSync(command, { shell: resolveShell(), cwd, stdio: "ignore" });
+  return { status: r.status };
+};
+
+/**
+ * Run each fixture check command in `cwd` (the fixture workspace) and report
+ * pass/fail per check — the fixture-derived signals (tests-passed,
+ * diff-correctness, safety assertions) that the trajectory alone cannot give.
+ * A check passes iff its command exits 0; a null status (signal-killed or a
+ * spawn failure) is a failure.
+ */
+export function runFixtureChecks(
+  checks: BenchmarkCheck[],
+  cwd: string,
+  run: CheckRunner = defaultCheckRunner
+): CheckResult[] {
+  return checks.map((c) => ({
+    name: c.name,
+    passed: run(c.command, cwd).status === 0,
+  }));
+}
+
+/** Verdict of scoring one run against its benchmark expectation. */
+export type ExpectationVerdict = {
+  /** True iff every asserted expectation held. */
+  passed: boolean;
+  /** Human-readable reasons the run fell short (empty when passed). */
+  failures: string[];
+};
+
+/**
+ * Score the trajectory signals and fixture-check results of one replay against
+ * its {@link BenchmarkExpect}. Pure: only the asserted fields are checked, so an
+ * empty expectation always passes. Every shortfall is accumulated so a report
+ * can show all of them at once.
+ */
+export function evaluateExpectation(
+  expect: BenchmarkExpect,
+  signals: EvalSignals,
+  checks: CheckResult[]
+): ExpectationVerdict {
+  const failures: string[] = [];
+
+  if (expect.succeeded !== undefined && signals.succeeded !== expect.succeeded) {
+    failures.push(
+      `succeeded: expected ${expect.succeeded}, got ${signals.succeeded}` +
+        (signals.exitReason ? ` (exit: ${signals.exitReason})` : "")
+    );
+  }
+  if (expect.maxCostUsd !== undefined && signals.costUsd > expect.maxCostUsd) {
+    failures.push(
+      `cost: $${signals.costUsd} exceeds ceiling $${expect.maxCostUsd}`
+    );
+  }
+  for (const c of checks) {
+    if (!c.passed) failures.push(`check '${c.name}' failed`);
+  }
+
+  return { passed: failures.length === 0, failures };
 }
 
 /**

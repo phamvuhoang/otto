@@ -33,7 +33,7 @@ export type RenderOptions = {
   spillRefPath?: string;
 };
 
-function resolveShell(): string {
+export function resolveShell(): string {
   if (process.platform !== "win32") return "/bin/bash";
   // Prefer bash.exe (git-for-windows / WSL passthrough) for POSIX redirects + utils.
   const pathDirs = (process.env.PATH ?? "").split(";");

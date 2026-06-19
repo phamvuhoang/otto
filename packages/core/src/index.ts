@@ -64,13 +64,18 @@ export {
   type LabelledSignals,
 } from "./eval.js";
 export {
+  evaluateExpectation,
   parseBenchmarkSuite,
   parseBenchmarkTask,
   readBenchmarkSuite,
+  runFixtureChecks,
   type BenchmarkBin,
   type BenchmarkCheck,
   type BenchmarkExpect,
   type BenchmarkTask,
+  type CheckResult,
+  type CheckRunner,
+  type ExpectationVerdict,
 } from "./bench.js";
 export {
   runWatch,

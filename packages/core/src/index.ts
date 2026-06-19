@@ -68,10 +68,13 @@ export {
 export {
   classifyRisk,
   reviewDepthForLevel,
+  routeReview,
+  selectLenses,
   type ReviewDepth,
   type RiskAssessment,
   type RiskClass,
   type RiskLevel,
+  type RouteDecision,
 } from "./risk.js";
 export {
   deriveProgress,

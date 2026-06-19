@@ -10,11 +10,11 @@ Check one off per run.
   and `reviewDepthForLevel(level)`. Inert. Pinned by `risk.test.ts`.
   Verify: `pnpm -r typecheck && pnpm -r test` green; every class/level/precedence
   case pinned.
-- [ ] **2. Progress signals (`progress.ts`).** Pure derivation of per-iteration
+- [x] **2. Progress signals (`progress.ts`).** Pure derivation of per-iteration
   progress from the #39 trajectory + a changed-paths/diff-stat snapshot:
   `diffChanged`, `testsDelta`, `repeatedFailureSignature`, `findingRecurrence`,
   `costBurnRate`. No I/O (callers pass snapshots). Pinned by tests.
-- [ ] **3. Policy (`policy.ts`).** Pure `decide(signals)` →
+- [x] **3. Policy (`policy.ts`).** Pure `decide(signals)` →
   `{ action: "continue" | "stop-low-progress" | "escalate-pause" |
   "finish-confident"; reason }`. Encodes early-stop / escalation thresholds.
   Pinned by tests.

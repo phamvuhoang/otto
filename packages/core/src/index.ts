@@ -74,6 +74,17 @@ export {
   type RiskLevel,
 } from "./risk.js";
 export {
+  deriveProgress,
+  type IterationObservation,
+  type ProgressSignals,
+} from "./progress.js";
+export {
+  decide,
+  type PolicyAction,
+  type PolicyContext,
+  type PolicyDecision,
+} from "./policy.js";
+export {
   compareTrajectories,
   scoreTrajectory,
   type EvalSignals,

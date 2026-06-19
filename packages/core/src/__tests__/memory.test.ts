@@ -29,8 +29,12 @@ const record: MemoryRecord = {
   confidence: 0.9,
   trust: "trusted",
   status: "active",
+  supersedes: "2026-06-18T00-00-00-000Z-41-0",
   createdAt: "2026-06-19T00:00:00.000Z",
+  lastUsedAt: "2026-06-19T01:00:00.000Z",
   useCount: 0,
+  expiresAt: "2026-12-19T00:00:00.000Z",
+  revalidateAfterDays: 30,
 };
 
 describe("allocateMemoryId", () => {

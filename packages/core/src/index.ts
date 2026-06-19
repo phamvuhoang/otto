@@ -57,7 +57,12 @@ export {
   runInspect,
   type InspectDeps,
 } from "./inspect.js";
-export { scoreTrajectory, type EvalSignals } from "./eval.js";
+export {
+  compareTrajectories,
+  scoreTrajectory,
+  type EvalSignals,
+  type LabelledSignals,
+} from "./eval.js";
 export {
   runWatch,
   pollOpenIssues,

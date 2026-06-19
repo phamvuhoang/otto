@@ -8,10 +8,12 @@ Check one off per run.
   (succeeded, exitReason, completedIterations, stageCount, errorStageCount,
   costUsd, totalTokens, elapsedMs). Inert. Pinned by `eval.test.ts`.
   Verify: `pnpm -r typecheck && pnpm -r test` green; new tests pin every signal.
-- [ ] **2. Comparison report (`eval.ts` + formatter).** `compareTrajectories(
+- [x] **2. Comparison report (`eval.ts` + formatter).** `compareTrajectories(
   labelled: {label, signals}[])` → a stable comparison table/string across
   configs (one row per labelled run, columns = signals; mark best/worst per
   signal). Pure. Pinned by tests.
+  Verify: `pnpm -r typecheck && pnpm -r test` green; markdown table + best/worst
+  markers + tie/single-run/null cases pinned in `eval.test.ts`.
 - [ ] **3. Benchmark task model.** A `BenchmarkTask` type + loader for a
   fixture manifest (id, kind, fixture path, the otto bin/args + env config to
   run, and the deterministic expected-outcome checks). Pure parsing + schema

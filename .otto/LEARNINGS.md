@@ -19,7 +19,21 @@
   runner → fixtures on top. `succeeded` deliberately excludes `done with
   failures` (matches the loop's own `sawFailure` distinction). Pinned by
   `eval.test.ts` (in-memory manifest/stage fixtures, no fs). Plan/spec:
-  `.otto/tasks/issue-40/`.
+  `.otto/tasks/issue-40/`. **Task 2 added the comparison formatter
+  `compareTrajectories(LabelledSignals[])`** — a pure markdown table (one row per
+  labelled run, one column per `EvalSignals` field) that marks best/worst per
+  DIRECTIONAL signal: `succeeded` higher-is-better, `errorStageCount`/`costUsd`/
+  `totalTokens`/`elapsedMs` lower-is-better; `exitReason`/`completedIterations`/
+  `stageCount` are shown but NOT ranked (no natural direction). A column is marked
+  only with a real spread (≥2 comparable runs AND min!==max), so single-run /
+  all-tied tables carry no `(best)`/`(worst)`; `null` values (e.g. un-finalized
+  `elapsedMs`/`completedIterations`) are excluded from ranking and rendered `—`.
+  Numbers are rendered EXACT (`String(...)`, cost as `$<raw>`) — no rounding — so
+  a marked-best cell never displays equal to a marked-worst one. Still INERT
+  (exported, not wired). Adding an export means editing `index.ts`'s NAMED eval
+  re-export (it's `export { ... } from "./eval.js"`, not `export *`). Pinned by
+  `eval.test.ts` "compareTrajectories" (empty / table shape / best-worst /
+  succeeded-direction / tie / single-run / null-excluded).
 - **The run bundle is rendered by a standalone `otto-inspect` bin, not a loop
   flag (issue #39 P0 task 5).** `inspect.ts` splits into a PURE
   `formatRunReport(manifest, stages)` → string (the testable core, no I/O) and

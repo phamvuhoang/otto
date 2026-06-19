@@ -1,8 +1,22 @@
 import { describe, expect, it } from "vitest";
 
-import { scoreTrajectory } from "../eval.js";
+import { compareTrajectories, scoreTrajectory, type EvalSignals } from "../eval.js";
 import type { RunManifest, StageRecord } from "../run-report.js";
 import { emptyTokenUsage } from "../tokens.js";
+
+function signals(overrides: Partial<EvalSignals> = {}): EvalSignals {
+  return {
+    succeeded: true,
+    exitReason: "complete",
+    completedIterations: 1,
+    stageCount: 2,
+    errorStageCount: 0,
+    costUsd: 0.5,
+    totalTokens: 1000,
+    elapsedMs: 10_000,
+    ...overrides,
+  };
+}
 
 function manifest(overrides: Partial<RunManifest> = {}): RunManifest {
   return {
@@ -131,5 +145,74 @@ describe("scoreTrajectory", () => {
       []
     );
     expect(s.elapsedMs).toBeNull();
+  });
+});
+
+describe("compareTrajectories", () => {
+  it("reports when there are no runs to compare", () => {
+    expect(compareTrajectories([])).toBe("No runs to compare.");
+  });
+
+  it("renders a stable markdown table with one row per run", () => {
+    const out = compareTrajectories([
+      { label: "baseline", signals: signals() },
+      { label: "panel-on", signals: signals({ costUsd: 0.8 }) },
+    ]);
+    const lines = out.split("\n");
+    expect(lines[0]).toBe(
+      "| Run | Succeeded | Exit | Iterations | Stages | Errors | Cost (USD) | Tokens | Elapsed (ms) |"
+    );
+    expect(lines[1]).toBe(
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    );
+    expect(lines).toHaveLength(4);
+    expect(lines[2]).toContain("| baseline |");
+    expect(lines[3]).toContain("| panel-on |");
+  });
+
+  it("marks best and worst per directional signal", () => {
+    const out = compareTrajectories([
+      { label: "cheap", signals: signals({ costUsd: 0.2, errorStageCount: 0 }) },
+      { label: "pricey", signals: signals({ costUsd: 0.9, errorStageCount: 3 }) },
+    ]);
+    expect(out).toContain("$0.2 (best)");
+    expect(out).toContain("$0.9 (worst)");
+    // lower errors win.
+    expect(out).toContain("| 0 (best) |");
+    expect(out).toContain("| 3 (worst) |");
+  });
+
+  it("ranks succeeded as higher-is-better", () => {
+    const out = compareTrajectories([
+      { label: "ok", signals: signals({ succeeded: true }) },
+      { label: "fail", signals: signals({ succeeded: false }) },
+    ]);
+    expect(out).toContain("yes (best)");
+    expect(out).toContain("no (worst)");
+  });
+
+  it("does not mark a column where every run ties", () => {
+    const out = compareTrajectories([
+      { label: "a", signals: signals({ costUsd: 0.5 }) },
+      { label: "b", signals: signals({ costUsd: 0.5 }) },
+    ]);
+    expect(out).not.toContain("(best)");
+    expect(out).not.toContain("(worst)");
+  });
+
+  it("does not mark anything for a single run", () => {
+    const out = compareTrajectories([{ label: "solo", signals: signals() }]);
+    expect(out).not.toContain("(best)");
+    expect(out).not.toContain("(worst)");
+  });
+
+  it("excludes null signals from ranking and renders them as a dash", () => {
+    const out = compareTrajectories([
+      { label: "finalized", signals: signals({ elapsedMs: 12_000 }) },
+      { label: "interrupted", signals: signals({ elapsedMs: null }) },
+    ]);
+    // Only one run has a comparable elapsed value, so no best/worst marker on it.
+    expect(out).toContain("| 12000 |");
+    expect(out).toContain("| — |");
   });
 });

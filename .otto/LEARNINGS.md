@@ -44,6 +44,21 @@
   ("memoryStatus (freshness)" + "touchMemory"). Test gotcha: to exercise the
   unparseable-timestamp path you must corrupt BOTH `lastUsedAt` AND `createdAt`,
   else the valid `createdAt` fallback drives revalidation.
+- **Contradiction handling is pure + uses the STORED status, not the derived one
+  (issue #42 P3 slice 3).** `supersede(newer, older)` returns a `Supersession`
+  `{newer, older}` of COPIES (pure, no mutation, like `touchMemory`): `older.status
+  = "superseded"` (terminal — `memoryStatus` preserves it) and `newer.supersedes =
+  older.id`; `newer.status` is left alone (only its supersede pointer changes).
+  `detectConflicts(records)` → `[MemoryRecord, MemoryRecord][]` pairs that are BOTH
+  `record.status === "active"` (the stored field, NOT `memoryStatus` — so it needs
+  no `now` and stays pure/time-free), same `category` AND same `scope` SET
+  (order-independent via a sorted-join `conflictKey`; undefined category treated as
+  ""), but DIFFERENT `content` (identical content is agreement, not conflict).
+  O(n²) over the active subset — fine for the small memory set, no grouping needed;
+  pairs emitted in input (chronological) order. Still INERT (exported from
+  `index.ts`, wired by no bin/loop). Pinned by `memory.test.ts` ("supersede" +
+  "detectConflicts"). Next slices: `auditMemory` (4) consumes `detectConflicts`'
+  pairs as `conflicting[]`, then the `otto-memory` bin (5).
 - **The harness evaluation suite (issue #40 P1) starts as a PURE scoring
   substrate over the #39 evidence bundle, deterministic-first.** `eval.ts`
   exports `EvalSignals` + `scoreTrajectory(manifest, stages)` — derives ONLY the

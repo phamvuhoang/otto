@@ -59,6 +59,7 @@ export {
 } from "./inspect.js";
 export {
   allocateMemoryId,
+  detectConflicts,
   listMemoryIds,
   memoryDir,
   memoryRecordPath,
@@ -66,11 +67,13 @@ export {
   parseMemoryRecord,
   readMemoryRecord,
   readMemoryRecords,
+  supersede,
   touchMemory,
   writeMemoryRecord,
   type MemoryRecord,
   type MemoryStatus,
   type MemoryTrust,
+  type Supersession,
 } from "./memory.js";
 export {
   parseEvalConfigs,

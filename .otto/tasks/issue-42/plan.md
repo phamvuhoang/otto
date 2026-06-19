@@ -14,10 +14,10 @@ regress existing runs.
       `active`/`stale` from `expiresAt`/`revalidateAfterDays` vs `now`/`createdAt`/
       `lastUsedAt`; `touchMemory(record, now)` bumping `lastUsedAt`/`useCount`.
       Inert. Pinned by `memory.test.ts`. *(this run)*
-- [ ] **3. Contradiction handling.** Pure `supersede(newer, older)` (sets
+- [x] **3. Contradiction handling.** Pure `supersede(newer, older)` (sets
       `older.status="superseded"`, `newer.supersedes=older.id`) and
       `detectConflicts(records)` (same `scope`+`category`, both `active`,
-      different `content`). Inert. Pinned by `memory.test.ts`.
+      different `content`). Inert. Pinned by `memory.test.ts`. *(this run)*
 - [ ] **4. Audit.** Pure `auditMemory(records, now)` → `AuditReport`
       (`stale[]`, `conflicting[]`, `frequentlyUsed[]`, counts). Inert. Pinned by
       `memory.test.ts`.

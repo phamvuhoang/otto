@@ -197,6 +197,54 @@ export function touchMemory(
   };
 }
 
+/** The two record copies produced by {@link supersede}. */
+export type Supersession = { newer: MemoryRecord; older: MemoryRecord };
+
+/**
+ * Record that `newer` replaces `older`: returns copies with `older.status` set to
+ * `superseded` (terminal — {@link memoryStatus} preserves it) and `newer.supersedes`
+ * pointing at `older.id`. Pure — neither input is mutated. The caller writes both
+ * copies back to persist the contradiction.
+ */
+export function supersede(
+  newer: MemoryRecord,
+  older: MemoryRecord
+): Supersession {
+  return {
+    newer: { ...newer, supersedes: older.id },
+    older: { ...older, status: "superseded" },
+  };
+}
+
+/** Group key for conflict detection: same category + same scope set. */
+function conflictKey(record: MemoryRecord): string {
+  const scope = [...record.scope].sort().join(" ");
+  return `${record.category ?? ""}${scope}`;
+}
+
+/**
+ * Find pairs of records that contradict each other: both `active`, the same
+ * `category` and `scope` set (order-independent), but different `content`. Returns
+ * each conflicting pair in input order; identical content is agreement, not
+ * conflict, and non-`active` records are ignored. Pure.
+ */
+export function detectConflicts(
+  records: MemoryRecord[]
+): [MemoryRecord, MemoryRecord][] {
+  const active = records.filter((r) => r.status === "active");
+  const conflicts: [MemoryRecord, MemoryRecord][] = [];
+  for (let i = 0; i < active.length; i++) {
+    for (let j = i + 1; j < active.length; j++) {
+      const a = active[i];
+      const b = active[j];
+      if (a.content !== b.content && conflictKey(a) === conflictKey(b)) {
+        conflicts.push([a, b]);
+      }
+    }
+  }
+  return conflicts;
+}
+
 /** Write one memory record (creates `.otto/memory/`). */
 export function writeMemoryRecord(
   workspaceDir: string,

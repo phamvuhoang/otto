@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   allocateMemoryId,
+  detectConflicts,
   listMemoryIds,
   memoryDir,
   memoryRecordPath,
@@ -12,6 +13,7 @@ import {
   parseMemoryRecord,
   readMemoryRecord,
   readMemoryRecords,
+  supersede,
   touchMemory,
   writeMemoryRecord,
   type MemoryRecord,
@@ -181,6 +183,74 @@ describe("touchMemory", () => {
     // original is untouched (pure)
     expect(r.useCount).toBe(2);
     expect(r.lastUsedAt).toBe(record.lastUsedAt);
+  });
+});
+
+describe("supersede", () => {
+  it("marks older superseded and points newer at it, without mutating inputs", () => {
+    const older: MemoryRecord = {
+      ...record,
+      id: "old",
+      status: "active",
+      supersedes: undefined,
+    };
+    const newer: MemoryRecord = {
+      ...record,
+      id: "new",
+      content: "newer text",
+      status: "active",
+      supersedes: undefined,
+    };
+    const { newer: n, older: o } = supersede(newer, older);
+    expect(o.status).toBe("superseded");
+    expect(n.supersedes).toBe("old");
+    // newer keeps its own status; only its supersedes pointer changes
+    expect(n.status).toBe("active");
+    // inputs are untouched (pure — returns copies)
+    expect(older.status).toBe("active");
+    expect(newer.supersedes).toBeUndefined();
+  });
+});
+
+describe("detectConflicts", () => {
+  const active = (over: Partial<MemoryRecord>): MemoryRecord => ({
+    ...record,
+    status: "active",
+    ...over,
+  });
+
+  it("flags two active records with same scope+category but different content", () => {
+    const a = active({ id: "a", content: "X" });
+    const b = active({ id: "b", content: "Y" });
+    const conflicts = detectConflicts([a, b]);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].map((r) => r.id)).toEqual(["a", "b"]);
+  });
+
+  it("does not flag identical content (agreement, not conflict)", () => {
+    const a = active({ id: "a", content: "same" });
+    const b = active({ id: "b", content: "same" });
+    expect(detectConflicts([a, b])).toEqual([]);
+  });
+
+  it("does not flag records in different scope or category", () => {
+    const a = active({ id: "a", content: "X", scope: ["src/a/**"] });
+    const b = active({ id: "b", content: "Y", scope: ["src/b/**"] });
+    const c = active({ id: "c", content: "Z", category: "gotcha" });
+    expect(detectConflicts([a, b, c])).toEqual([]);
+  });
+
+  it("ignores non-active records (superseded/stale do not conflict)", () => {
+    const a = active({ id: "a", content: "X" });
+    const b = active({ id: "b", content: "Y", status: "superseded" });
+    const c = active({ id: "c", content: "Z", status: "stale" });
+    expect(detectConflicts([a, b, c])).toEqual([]);
+  });
+
+  it("treats scope as an order-independent set", () => {
+    const a = active({ id: "a", content: "X", scope: ["p", "q"] });
+    const b = active({ id: "b", content: "Y", scope: ["q", "p"] });
+    expect(detectConflicts([a, b])).toHaveLength(1);
   });
 });
 

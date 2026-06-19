@@ -403,6 +403,7 @@ describe("codexRuntime adapter", () => {
       "exec",
     ]);
     expect(args).toContain("--json");
+    expect(args).toContain("--ignore-user-config");
     expect(args).toContain("--skip-git-repo-check");
     expect(args).toContain("--sandbox");
     expect(args[args.indexOf("--sandbox") + 1]).toBe("workspace-write");

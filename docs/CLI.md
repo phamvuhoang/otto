@@ -65,7 +65,7 @@ otto-afk --agent codex "./docs/plans/feature.md" 5
 
 `--print-config` shows the resolved `runtime` (`<id> (<display name>)`), its `runtime source` (default/flag/env/config), the runtime-aware `model` line, and the `fallback` setting. The run banner echoes it (`otto-afk 0.x (core 0.x) · runtime: Claude Code`), each stage banner appends it (`iteration 2/10 · implementer · Claude Code`), the per-stage NDJSON log path carries a `-<id>` suffix (`…-iter2-implementer-claude.ndjson`), and the final summary prints `runtime: <id>` — or `runtime: claude -> codex (switched once: rate limit)` after an auto-switch.
 
-**Runtime status today:** `claude` (Claude Code) is the default. `codex` (Codex CLI) is executable via `codex exec --json` and can be the primary runtime or the fallback runtime. Claude uses Otto's transient `--settings` sandbox file; Codex uses the global `--ask-for-approval never` flag plus its own `exec --sandbox workspace-write` flag when `OTTO_RUNNER=sandbox`, and `exec --sandbox danger-full-access` when `OTTO_RUNNER=host`. Codex auth is normally `codex login`; API-key runs can use `CODEX_API_KEY`, and Otto also accepts `OPENAI_API_KEY` by mapping it to `CODEX_API_KEY` for the Codex child process.
+**Runtime status today:** `claude` (Claude Code) is the default. `codex` (Codex CLI) is executable via `codex exec --json` and can be the primary runtime or the fallback runtime. Claude uses Otto's transient `--settings` sandbox file; Codex uses the global `--ask-for-approval never` flag plus `exec --ignore-user-config --sandbox workspace-write` when `OTTO_RUNNER=sandbox`, and `exec --ignore-user-config --sandbox danger-full-access` when `OTTO_RUNNER=host`. Codex auth is normally `codex login`; API-key runs can use `CODEX_API_KEY`, and Otto also accepts `OPENAI_API_KEY` by mapping it to `CODEX_API_KEY` for the Codex child process.
 
 ### Provider-specific model (`OTTO_CLAUDE_MODEL` / `OTTO_CODEX_MODEL`)
 
@@ -459,6 +459,7 @@ The loop fetches only that issue and exits when it is complete (the agent emits 
 - **`Not logged in · Please run /login`** — Claude credentials missing. Run `claude /login` on the host (see [CONFIG.md → First-run setup](./CONFIG.md#first-run-setup)).
 - **`gh issue list` fails with `not a git repository`** — the workspace has no `.git`. The `ghafk.md` template falls back to `[]` so the iteration still proceeds, but `gh` cannot detect the target repo. Initialize the repo, or push first.
 - **Loop hangs after a stage's final assistant message** — the `claude` CLI emitted its final NDJSON `result` event but failed to exit. The runner self-recovers within `OTTO_RESULT_GRACE_MS` (default 30000ms). Work already committed is preserved.
+- **Codex stalls before any assistant output** — Otto runs Codex with `exec --ignore-user-config` so personal Codex MCP/plugin config is not loaded into unattended stages. Older Otto versions can hang if a user MCP server blocks during Codex startup.
 
 ---
 

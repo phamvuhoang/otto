@@ -42,9 +42,11 @@ may act on. The trust boundary is:
   `--settings` native OS sandbox under `OTTO_RUNNER=sandbox` (below). The **Codex CLI** runtime
   authenticates from `~/.codex/auth.json`, `CODEX_API_KEY`, or the compatibility
   `OPENAI_API_KEY` environment variable, and does **not** use Claude's `--settings` sandbox — it
-  combines global `--ask-for-approval never` with its own `exec --sandbox <mode>` confinement, so
-  the blast-radius controls are runtime-specific. Each runtime exposes only its own provider's
-  credentials to the agent; review the active runtime with `--print-config` before a run.
+  combines global `--ask-for-approval never` with its own `exec --ignore-user-config --sandbox
+  <mode>` confinement, so the blast-radius controls are runtime-specific. `--ignore-user-config`
+  keeps personal Codex MCP/plugin config out of unattended stages while preserving Codex auth.
+  Each runtime exposes only its own provider's credentials to the agent; review the active runtime
+  with `--print-config` before a run.
 
 ### Reducing blast radius
 

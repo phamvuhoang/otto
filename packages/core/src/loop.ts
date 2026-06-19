@@ -5,7 +5,9 @@ import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
 import { readCoreVersion } from "./cli-help.js";
 import { acquire, type Releaser } from "./keepalive.js";
 import { notifyComplete, notifyError } from "./notify.js";
+import { changedFilesSince, headSha } from "./git.js";
 import { sleep, isThrottle, nextCooldownFactor } from "./pacing.js";
+import { routeReview } from "./risk.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { cleanScratch } from "./scratch.js";
@@ -148,6 +150,12 @@ export type LoopOptions = {
   tokenMode?: TokenMode;
   /** Opt-in reviewer panel: replace the single reviewer stage with K read-only lens reviewers + one synth commit. */
   reviewLenses?: string[];
+  /** Opt-in adaptive compute router (issue #41): route review depth per iteration
+   *  by the risk of that iteration's change. When off, `reviewLenses` is used as-is. */
+  adaptiveRouter?: boolean;
+  /** Injectable resolver for an iteration's changed paths (default: git diff since
+   *  the iteration-start HEAD). Used only when `adaptiveRouter` is on. */
+  resolveChangedPaths?: (workspaceDir: string) => string[];
   /** Injected AbortSignal for daemon callers (e.g. watch mode). When provided,
    *  runLoop skips wake-lock acquisition and process signal handler installation;
    *  the caller owns both. */
@@ -280,6 +288,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     cooldownMs = 0,
     tokenMode = "off",
     reviewLenses,
+    adaptiveRouter = false,
+    resolveChangedPaths,
     signal: externalSignal,
     mode = "afk",
     branchStrategy,
@@ -587,6 +597,9 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   try {
     for (let i = startIteration; i <= total; i++) {
       persist(i, "running");
+      // Adaptive router: snapshot HEAD at iteration start so the reviewer stage
+      // can classify the change this iteration produced before routing its depth.
+      const iterStartSha = adaptiveRouter ? headSha(workspaceDir) : null;
       for (let s = 0; s < stages.length; s++) {
         const stage = stages[s];
 
@@ -601,15 +614,37 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           : `== iteration ${i}/${total} · ${stage.name} (stage ${s + 1}/${stages.length}) · ${activeAgentDisplayName} ==`;
         process.stderr.write(`\n${banner}\n`);
 
+        // Adaptive router: route this iteration's review depth by change risk,
+        // selecting a per-iteration subset of the lens pool. Off → static pool.
+        let effectiveLenses = reviewLenses;
+        if (
+          adaptiveRouter &&
+          stage.name === "reviewer" &&
+          reviewLenses &&
+          reviewLenses.length > 0
+        ) {
+          const changed = resolveChangedPaths
+            ? resolveChangedPaths(workspaceDir)
+            : changedFilesSince(workspaceDir, iterStartSha);
+          const route = routeReview(changed, reviewLenses);
+          effectiveLenses = route.lenses;
+          const how = route.lenses.length
+            ? `${route.depth} (${route.lenses.join(", ")})`
+            : "single reviewer";
+          process.stderr.write(
+            `${dim(`↳ adaptive router: ${route.assessment.class} → ${how}`)}\n`
+          );
+        }
+
         const usePanel =
-          reviewLenses && reviewLenses.length > 0 && stage.name === "reviewer";
+          effectiveLenses && effectiveLenses.length > 0 && stage.name === "reviewer";
 
         let sr: StageResult;
         const runOnce = async (): Promise<StageResult> => {
           if (usePanel) {
             const { runPanel } = await import("./panel.js");
             return runPanel({
-              lenses: reviewLenses!,
+              lenses: effectiveLenses!,
               workspaceDir,
               packageDir,
               iteration: i,

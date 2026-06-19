@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyRisk, reviewDepthForLevel } from "../risk.js";
+import {
+  classifyRisk,
+  reviewDepthForLevel,
+  routeReview,
+  selectLenses,
+} from "../risk.js";
 
 describe("classifyRisk", () => {
   it("classifies a docs-only change as low risk", () => {
@@ -76,5 +81,55 @@ describe("reviewDepthForLevel", () => {
     expect(reviewDepthForLevel("low")).toBe("single");
     expect(reviewDepthForLevel("medium")).toBe("lenses");
     expect(reviewDepthForLevel("high")).toBe("panel");
+  });
+});
+
+describe("selectLenses", () => {
+  const available = ["correctness", "security", "tests"];
+
+  it("selects no lenses for single-reviewer depth", () => {
+    expect(selectLenses("single", available)).toEqual([]);
+  });
+
+  it("selects the full available set for panel depth", () => {
+    expect(selectLenses("panel", available)).toEqual(available);
+  });
+
+  it("selects a capped subset for lenses depth", () => {
+    expect(selectLenses("lenses", available)).toEqual(["correctness", "security"]);
+  });
+
+  it("never returns more than the available lenses", () => {
+    expect(selectLenses("lenses", ["correctness"])).toEqual(["correctness"]);
+    expect(selectLenses("panel", [])).toEqual([]);
+  });
+});
+
+describe("routeReview", () => {
+  const available = ["correctness", "security", "tests"];
+
+  it("routes a docs-only change to a single reviewer (no lenses)", () => {
+    const r = routeReview(["README.md"], available);
+    expect(r.depth).toBe("single");
+    expect(r.lenses).toEqual([]);
+    expect(r.assessment.class).toBe("docs-only");
+  });
+
+  it("routes a narrow code change to a lens subset", () => {
+    const r = routeReview(["packages/core/src/eval.ts"], available);
+    expect(r.depth).toBe("lenses");
+    expect(r.lenses).toEqual(["correctness", "security"]);
+  });
+
+  it("routes a security-sensitive change to the full panel", () => {
+    const r = routeReview(["packages/core/src/auth.ts"], available);
+    expect(r.depth).toBe("panel");
+    expect(r.lenses).toEqual(available);
+  });
+
+  it("routes an unknown (no visible diff) change conservatively to the panel", () => {
+    const r = routeReview([], available);
+    expect(r.depth).toBe("panel");
+    expect(r.lenses).toEqual(available);
   });
 });

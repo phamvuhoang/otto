@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.11.0...otto-core-v0.12.0) (2026-06-19)
+
+
+### Features
+
+* adaptive compute router ([#41](https://github.com/phamvuhoang/otto/issues/41)) ([#54](https://github.com/phamvuhoang/otto/issues/54)) ([dc4b987](https://github.com/phamvuhoang/otto/commit/dc4b987d950750a4cbbd16a22f7de4ce96a7c3a5))
+
 ## [0.11.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.10.0...otto-core-v0.11.0) (2026-06-19)
 
 

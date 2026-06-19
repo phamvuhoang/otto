@@ -13,13 +13,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
 import {
   compareTrajectories,
   evaluateExpectation,
+  parseEvalConfigs,
   readBenchmarkSuite,
   runFixtureChecks,
   scoreTrajectory,
@@ -93,6 +94,22 @@ test("scoring substrate derives signals, compares, and verdicts", () => {
     [{ name: "tests", passed: true }]
   );
   assert.equal(verdict.passed, true);
+});
+
+test("the config matrix parses and includes an adaptive-router on/off pair", () => {
+  const configs = parseEvalConfigs(
+    JSON.parse(readFileSync(join(suiteDir, "configs.json"), "utf8"))
+  );
+  const labels = configs.map((c) => c.label);
+  // baseline = router off; adaptive = router on. Both present → the eval suite
+  // can A/B the adaptive compute router (#41) deterministically.
+  assert.ok(labels.includes("baseline"), "configs.json missing the baseline (router-off) config");
+  const adaptive = configs.find((c) => c.label === "adaptive");
+  assert.ok(adaptive, "configs.json missing the adaptive (router-on) config");
+  assert.ok(
+    adaptive.args.includes("--adaptive-router"),
+    "the adaptive config must pass --adaptive-router"
+  );
 });
 
 test("the safety fixture's no-model check passes on the clean tree", () => {

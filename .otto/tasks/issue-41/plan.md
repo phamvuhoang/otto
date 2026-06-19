@@ -25,7 +25,7 @@ Check one off per run.
 - [x] **5. Adaptive iteration control.** Behind the same flag, feed progress
   signals into the policy each iteration and act on the decision (early-stop,
   escalate-pause-with-report, confident-finish). Pinned by loop tests.
-- [ ] **6. Benchmark entry.** Add an `adaptive-router on/off` config to the #40
+- [x] **6. Benchmark entry.** Add an `adaptive-router on/off` config to the #40
   eval suite (`benchmarks/configs.json`) so the router's cost/success effect is
   measurable. Pinned by the eval CI subset.
 - [ ] **7. CI deterministic tests + docs.** Wire the pure decision substrate

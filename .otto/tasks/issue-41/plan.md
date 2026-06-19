@@ -28,7 +28,7 @@ Check one off per run.
 - [x] **6. Benchmark entry.** Add an `adaptive-router on/off` config to the #40
   eval suite (`benchmarks/configs.json`) so the router's cost/success effect is
   measurable. Pinned by the eval CI subset.
-- [ ] **7. CI deterministic tests + docs.** Wire the pure decision substrate
+- [x] **7. CI deterministic tests + docs.** Wire the pure decision substrate
   into a `scripts/*.test.mjs` guard; document the router (README +
   `docs/ARCHITECTURE.md`): risk classes, routing table, progress signals,
   policies, and the off-by-default flag.

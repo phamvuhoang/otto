@@ -94,6 +94,13 @@ export type RunPanelOptions = {
    * exhausted (stop the panel) and the current adaptive cooldown factor.
    */
   onStage?: (sr: StageResult) => PanelStageControl;
+  /**
+   * Called after every panel sub-agent (each lens + verify + synth) so the loop
+   * can write one evidence record per substage. The lens substages are named by
+   * their lens (free text from OTTO_REVIEW_LENSES); verify/synth use their stage
+   * names. `startedAt` is the ISO timestamp captured before the substage ran.
+   */
+  recordStage?: (stageName: string, sr: StageResult, startedAt: string) => void;
 };
 
 /** Tracked-only worktree dirtiness ("" = clean). Untracked files are ignored. */
@@ -126,7 +133,9 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     agentId,
     resumeNote = "",
     onStage,
+    recordStage,
   } = opts;
+  const isoNow = (): string => new Date().toISOString();
   const panelRel = `panel-${process.pid}-${iteration}-${Date.now()}`;
   const panelHostDir = join(workspaceDir, ".otto-tmp", panelRel);
   mkdirSync(panelHostDir, { recursive: true });
@@ -167,6 +176,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     for (let i = 0; i < lenses.length; i++) {
       const lens = lenses[i];
       phaseLine(`${lens} lens (${i + 1}/${lenses.length})`);
+      const lensStartedAt = isoNow();
       const sr = await executeStage({
         stage: LENS_STAGE,
         vars: { LENS: lens, RESUME: resumeNote },
@@ -186,6 +196,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
         "utf8"
       );
       outcomeLine(findingsNote(sr.result));
+      recordStage?.(lens, sr, lensStartedAt);
 
       const ctrl = onStage?.(sr) ?? { stop: false, cooldownFactor: 1 };
       if (ctrl.stop) return sr; // budget exhausted — skip remaining lenses + verify + synth
@@ -195,6 +206,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     // 2. Adversarial verify — a skeptic refutes the lens findings, writing
     //    verdicts.md (CONFIRMED/REJECTED) so synth only fixes survivors.
     phaseLine("adversarial verify");
+    const verifyStartedAt = isoNow();
     const verify = await executeStage({
       stage: VERIFY_STAGE,
       vars: { FINDINGS_DIR: findingsDirRef, RESUME: resumeNote },
@@ -208,6 +220,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
       logLabel: "verify",
     });
     restoreIfMutated("verify");
+    recordStage?.(VERIFY_STAGE.name, verify, verifyStartedAt);
     const verdicts = readVerdicts(panelHostDir);
     if (verdicts.exists) {
       outcomeLine(
@@ -233,6 +246,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
 
     // 3. Synth — fix only CONFIRMED findings in one fix(review:) commit.
     phaseLine("synthesize & fix");
+    const synthStartedAt = isoNow();
     const synth = await executeStage({
       stage: SYNTH_STAGE,
       vars: { FINDINGS_DIR: findingsDirRef, RESUME: resumeNote },
@@ -268,6 +282,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     } else {
       outcomeLine("clean — no fix needed");
     }
+    recordStage?.(SYNTH_STAGE.name, synth, synthStartedAt);
     onStage?.(synth);
     return synth;
   } finally {

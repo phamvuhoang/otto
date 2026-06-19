@@ -40,6 +40,52 @@ export {
   type TokenUsage,
 } from "./tokens.js";
 export {
+  allocateRunId,
+  listRunIds,
+  readManifest,
+  readStageRecords,
+  runReportDir,
+  runsDir,
+  writeManifest,
+  writeStageRecord,
+  type RunArtifact,
+  type RunManifest,
+  type StageRecord,
+} from "./run-report.js";
+export {
+  formatRunReport,
+  runInspect,
+  type InspectDeps,
+} from "./inspect.js";
+export {
+  parseEvalConfigs,
+  runEval,
+  type EvalConfig,
+  type EvalDeps,
+  type EvalInvocation,
+  type EvalInvoker,
+} from "./eval-run.js";
+export {
+  compareTrajectories,
+  scoreTrajectory,
+  type EvalSignals,
+  type LabelledSignals,
+} from "./eval.js";
+export {
+  evaluateExpectation,
+  parseBenchmarkSuite,
+  parseBenchmarkTask,
+  readBenchmarkSuite,
+  runFixtureChecks,
+  type BenchmarkBin,
+  type BenchmarkCheck,
+  type BenchmarkExpect,
+  type BenchmarkTask,
+  type CheckResult,
+  type CheckRunner,
+  type ExpectationVerdict,
+} from "./bench.js";
+export {
   runWatch,
   pollOpenIssues,
   pollLinearIssues,

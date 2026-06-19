@@ -2,6 +2,154 @@
 
 ## Conventions
 
+- **The harness evaluation suite (issue #40 P1) starts as a PURE scoring
+  substrate over the #39 evidence bundle, deterministic-first.** `eval.ts`
+  exports `EvalSignals` + `scoreTrajectory(manifest, stages)` — derives ONLY the
+  signals computable from a recorded trajectory (succeeded [exitReason ∈
+  {complete,done}], exitReason, completedIterations, stageCount, errorStageCount,
+  costUsd, totalTokens, elapsedMs). No I/O, no model calls → this IS the "cheap
+  deterministic subset" the issue wants in CI. **The split that matters:**
+  trajectory-derived signals (here) vs. fixture-derived ones (tests-passed,
+  diff-correctness, safety-events) that need the runner replaying a fixture — the
+  latter are LATER plan tasks, kept out of this module so it stays pure/CI-safe.
+  `elapsedMs` is `null` (never NaN) when un-finalized or a timestamp is
+  unparseable. Kept INERT (re-exported from `index.ts` like `run-report.ts`/
+  `task-key.ts`, but not wired into any bin/loop) so it can't regress runs;
+  later tasks build the comparison report → benchmark-task model → `otto-eval`
+  runner → fixtures on top. `succeeded` deliberately excludes `done with
+  failures` (matches the loop's own `sawFailure` distinction). Pinned by
+  `eval.test.ts` (in-memory manifest/stage fixtures, no fs). Plan/spec:
+  `.otto/tasks/issue-40/`. **Task 2 added the comparison formatter
+  `compareTrajectories(LabelledSignals[])`** — a pure markdown table (one row per
+  labelled run, one column per `EvalSignals` field) that marks best/worst per
+  DIRECTIONAL signal: `succeeded` higher-is-better, `errorStageCount`/`costUsd`/
+  `totalTokens`/`elapsedMs` lower-is-better; `exitReason`/`completedIterations`/
+  `stageCount` are shown but NOT ranked (no natural direction). A column is marked
+  only with a real spread (≥2 comparable runs AND min!==max), so single-run /
+  all-tied tables carry no `(best)`/`(worst)`; `null` values (e.g. un-finalized
+  `elapsedMs`/`completedIterations`) are excluded from ranking and rendered `—`.
+  Numbers are rendered EXACT (`String(...)`, cost as `$<raw>`) — no rounding — so
+  a marked-best cell never displays equal to a marked-worst one. Still INERT
+  (exported, not wired). Adding an export means editing `index.ts`'s NAMED eval
+  re-export (it's `export { ... } from "./eval.js"`, not `export *`). Pinned by
+  `eval.test.ts` "compareTrajectories" (empty / table shape / best-worst /
+  succeeded-direction / tie / single-run / null-excluded).
+- **The run bundle is rendered by a standalone `otto-inspect` bin, not a loop
+  flag (issue #39 P0 task 5).** `inspect.ts` splits into a PURE
+  `formatRunReport(manifest, stages)` → string (the testable core, no I/O) and
+  `runInspect(argv, deps)` → exit code (resolves `OTTO_WORKSPACE ?? cwd`, reads
+  the bundle, prints). Run-id resolution: an explicit id, else `latest`/no-arg →
+  `listRunIds(workspaceDir).at(-1)` (run ids are lexicographically sortable, so
+  the LAST of the ascending sort is newest — that's why `allocateRunId` is
+  timestamp-prefixed). `listRunIds` lives in `run-report.ts` (the I/O module,
+  beside the other `.otto/runs` helpers), filters to DIRECTORIES, absent →
+  `[]`. The report deliberately suppresses the `exit:`/`next:` lines when
+  `finishedAt` is absent (un-finalized/interrupted run — see the finalize
+  bullet's interrupt gap) rather than inventing an exit reason; it shows
+  `? / <planned>` iterations instead. `runInspect` follows the
+  `runLinearAuth` shape (injectable `{env,cwd,out,err}` deps,
+  returns an exit code the thin bin `process.exit`s) — NOT `runBin`, because
+  inspect is a read-only reader with no loop/stages/preflight. New bin wired in
+  `apps/cli/package.json` `bin` + `apps/cli/bin/otto-inspect.js`; exported from
+  `index.ts`. Pinned by `inspect.test.ts` (format finalized/un-finalized +
+  runInspect explicit/latest/unknown-id/no-runs) and `run-report.test.ts`
+  (`listRunIds`). **Issue-39 is COMPLETE — task 6 (docs) landed the run-evidence-bundle
+  prose in README ("Why Otto" bullet + `otto-inspect latest` example + the bin in
+  "How it works") and a `## Run evidence bundle` section in `docs/ARCHITECTURE.md`
+  (layout / run-id format / inspect command) + `run-report.ts`/`inspect.ts`
+  module-map and index-re-export rows. Prose-only, NO doc-contract test: a stable
+  bundle layout + a single read-only command is low drift risk, and the plan
+  explicitly scoped task 6 as "doc-contract test if a drift risk emerges, otherwise
+  prose only" — adding one would be over-engineering. The existing
+  `agent-runtime-doc-contract`/`linear-cli-docs`/`quality-report-samples` doc tests
+  do NOT cover the bundle, and the additive prose did not trip them.**
+- **The run manifest is finalized inside `summarize`, NOT at each return site
+  (issue #39 P0 task 4).** `runLoop` writes the initial manifest at loop start
+  (task 2) and re-writes the WHOLE manifest on exit via a best-effort
+  `finalizeManifest(reason, completed)` closure (`writeManifest` overwrites, so
+  finalize reconstructs every field — there is no partial update). Crux: every
+  terminal path already funnels through the `summarize(reason, iterations)`
+  helper, so finalize is called from INSIDE `summarize` (one call site) rather
+  than threading it through all 8 `return outcome()` sites — `reason` →
+  `exitReason` + `nextActionFor(reason)` → `nextAction`, the `iterations` arg →
+  `completedIterations`, plus live `runCostUsd`/`runTokenUsage`, the ACTIVE
+  runtime (post-auto-switch), `collectArtifacts()`, and `finishedAt`.
+  `startedAt` is captured once into `manifestStartedAt` and reused by both the
+  initial write and finalize (so the bundle's span is honest). **Finalize is
+  `try/catch`-swallowed** like the initial write + `recordStage` (a bundle write
+  must never break a run). **`collectArtifacts()` always links the NDJSON logs
+  DIR** (`.otto-tmp/logs`, workspace-relative — durable, unlike the per-stage
+  rendered prompts which are cleaned in `finally` before finalize runs) and
+  conditionally `.otto/review-followups.md` when it exists. **Scope gap to know:
+  the `process.exit()` interrupt paths (SIGINT/SIGTERM/keyboard quit via
+  `gracefulExit`) do NOT call `summarize`, so an interrupted run leaves only the
+  INITIAL (un-finalized) manifest** — acceptable for "100% have a manifest", but
+  finalizing interrupts is deferred (would need a synchronous finalize in
+  `gracefulExit`). **Test interaction:** the task-2 "writes an initial run
+  manifest" test completes via the sentinel, so it now reads the FINALIZED
+  manifest — its `artifacts).toEqual([])` assertion was dropped (finalize
+  populates artifacts); the identity fields (bin/mode/inputs/runtime/
+  branchStrategy/iterations/startedAt) survive both writes unchanged. Pinned by
+  `loop.test.ts` "finalizes the run manifest on terminal paths" (complete / done
+  / budget / done-with-failures / review-followups artifact).
+- **Per-stage records are written by a `recordStage` closure in `runLoop`, with
+  the panel recording its own substages (issue #39 P0 task 3).** `runLoop` holds
+  a monotonic `stageSeq` counter + a `recordStage(iteration, stageName, sr,
+  startedAt)` closure that normalizes a `StageResult` into a `StageRecord` and
+  `writeStageRecord`s it under the bundle's `stages/`. **Recording is wrapped in
+  `try/catch` and swallows — a bundle write must NEVER break a run** (mirrors the
+  initial-manifest write). It captures `startedAt = nowIso()` BEFORE the retry
+  loop (so the timestamp spans all retries/waits) and stamps `finishedAt` at
+  write time; `runtimeId` is `sr.runtimeId ?? activeAgentId` (test `ok()` helpers
+  omit `runtimeId`, so the fallback matters). **The gate stage is recorded BEFORE
+  the sentinel early-return**, so a run that completes on iteration 1 still leaves
+  a gate record. **Panel split:** a panel stage is NOT given an umbrella
+  "reviewer" record (`if (!usePanel) recordStage(...)`); instead the loop threads
+  the same closure into `runPanel` as `recordStage?: (stageName, sr, startedAt)`,
+  and the panel calls it once per substage — **by lens NAME** for each lens
+  (free text from `OTTO_REVIEW_LENSES`, sanitized into the filename by
+  `writeStageRecord`), then `review-verify`, then `review-synth`. Each panel
+  substage captures its own `startedAt` before its `executeStage`; the verify
+  record is written BEFORE the budget-stop check so a budget-halted verify is
+  still recorded. **`StageRecord.logPath` is left undefined for now** — the real
+  NDJSON path is computed inside `executeStage` (its filename embeds a fresh
+  `new Date()` timestamp, so re-deriving it in the loop would NOT match the
+  actual file); surfacing it needs `executeStage` to return the path, deferred to
+  a later task (manifest-level artifact links are task 4). Failed stages (retries
+  exhausted → throw → `break`) are not recorded here either (no `StageResult`);
+  that terminal-failure record is task-4 scope. Pinned by `loop.test.ts` ("writes
+  one stage record per executed stage", "records the gate stage even when it hits
+  the sentinel", "hands the panel a recordStage callback and does not
+  double-record") + `panel.test.ts` ("records each substage via recordStage").
+- **Run evidence bundle lives under `.otto/runs/<run-id>/` (issue #39 P0).** Pure
+  module `run-report.ts` mirrors `state.ts` (fs + JSON, absent/malformed → safe
+  null/`[]`, injectable `Date`/`pid`): `RunManifest` (manifest.json: bin/mode/
+  inputs/runtime/branchStrategy/iterations/cost/tokens/exitReason/nextAction/
+  artifacts/timestamps) + per-stage `StageRecord`s under `stages/`. **Key shape
+  decision: the `stages/` DIRECTORY is the stage list — the manifest does NOT
+  duplicate it** (`readStageRecords` discovers by sorted filename), so there's no
+  two-source sync. `allocateRunId(date?,pid?)` = ISO timestamp (`:`/`.`→`-`) +
+  `-<pid>` → lexicographically sortable (so "latest" is a plain string sort) and
+  collision-safe per host. Stage filenames are `<seq4>-iter<n>-<stage>.json` with
+  the stage segment sanitized to `[A-Za-z0-9_-]` (panel lens names from
+  `OTTO_REVIEW_LENSES` are free text → a filename). Bundles go in `.otto/` (durable
+  like `state.json`), NOT `.otto-tmp/`; raw `.otto-tmp/logs` is untouched. Pinned by
+  `run-report.test.ts`. **Task 2 wired it into the loop:** `runLoop` calls
+  `allocateRunId()` + `writeManifest()` ONCE at loop start (right after the version
+  banner, after the resume/runtime-restore block so the manifest's `runtime` matches
+  the live `activeAgentId`/`activeAgentDisplayName`, incl. a fallback restored on
+  resume). `branchStrategy` is a new optional `LoopOptions` field threaded from
+  run-bin's `resolved.strategy`. The initial manifest seeds `costUsd:0`,
+  `tokenUsage:emptyTokenUsage()`, `artifacts:[]`, `iterations:total` (the planned/
+  resumed total, not the arg) + `startedAt` — later tasks (4) finalize the cost/token/
+  exit fields and (3) write stage records. **runId is allocated fresh per `runLoop`
+  invocation, NOT reused across resume** (RunState has no runId); a resumed run starts
+  a new bundle. `.otto/runs/` is added to the workspace `.gitignore` by
+  run-bin's `ensureStateGitignored` (now loops over `[".otto/state.json",
+  ".otto/runs/"]`, tracking `existing` so the second append sees the first). The
+  watch path's inner `runLoop` is NOT threaded `branchStrategy` (optional → undefined
+  in watch-run manifests; out of task-2 scope). Pinned by `loop.test.ts`
+  "writes an initial run manifest at loop start".
 - **Agent-runtime docs span 5 surfaces, pinned by one doc-contract test, and
   document Codex HONESTLY (issue #24 P5).** The runtime feature is documented in
   README (flags/env lists + a `--print-config` example), `docs/CLI.md` (a
@@ -553,6 +701,17 @@
   gate-clearing verdicts. **Test gotcha:** RELEASING.md line-wraps prose, so a
   verdict phrase like "Needs human review" can split across a newline — normalize
   whitespace (`section.replace(/\s+/g, " ")`) before matching multi-word phrases.
+- **A rate-limited panel attempt rolls back BOTH accounting AND evidence
+  records.** Panel substages (`recordStage`) write inline as each lens/verify/
+  synth completes, but a later substage's limit retries the WHOLE panel
+  (`loop.ts` `for(;;)`), so the loop must undo the failed attempt's records too —
+  else seq is monotonic and the retry re-records each lens, duplicating records.
+  `recordStage` derives seq from `recordedStageFiles.length` (contiguous), the
+  retry catch snapshots that length next to the accounting snapshot, and on
+  `RateLimitError` `splice`s + `removeStageRecords` the attempt's files so the
+  retry reuses the freed seqs. Any future inline-write-during-attempt artifact
+  needs the same snapshot/rollback parity. Pinned by `loop.test.ts` "rolls back
+  panel sub-stage records when a panel attempt is retried after a rate limit".
 
 ## Gotchas
 

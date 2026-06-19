@@ -118,6 +118,11 @@ On a hit the loop prints `Otto complete` and returns immediately — subsequent 
 | [`git.ts`](../packages/core/src/git.ts)                           | Shared low-level git helpers (branch creation, worktree setup, dirty-tree detection). Used by `branch.ts` and `panel.ts`. **Internal.**                                                                                                                   |
 | [`rate-limit.ts`](../packages/core/src/rate-limit.ts)             | Detects Claude rate-limit events from the NDJSON stream; extracts the reset timestamp and throws a `RateLimitError` carrying `resetsAt`. **Internal.**                                                                                                    |
 | [`state.ts`](../packages/core/src/state.ts)                       | Reads and writes advisory `.otto/state.json` (gitignored) — bin, mode, inputs, iteration/total, status, `resetsAt`; `matchesResume` determines whether a saved state matches the current invocation. **Internal.**                                        |
+| [`run-report.ts`](../packages/core/src/run-report.ts)            | The run evidence bundle: `RunManifest` / `StageRecord` / `RunArtifact` types, `allocateRunId`, path helpers (`runsDir` / `runReportDir`), and `.otto/runs/<run-id>/` I/O (`writeManifest` / `readManifest` / `writeStageRecord` / `readStageRecords` / `removeStageRecords` / `listRunIds`). Pure fs + JSON, mirrors `state.ts` (absent/malformed → safe null/`[]`).                                |
+| [`inspect.ts`](../packages/core/src/inspect.ts)                   | `otto-inspect` command: pure `formatRunReport(manifest, stages)` → report string, plus `runInspect(argv, deps)` resolving a run id (`latest`/no arg → newest) and printing it. Read-only.                                                                  |
+| [`eval.ts`](../packages/core/src/eval.ts)                         | Pure eval scoring: `scoreTrajectory(manifest, stages)` → `EvalSignals` (succeeded/cost/tokens/elapsed/error counts), and `compareTrajectories(labelled[])` → a markdown comparison table marking best/worst per directional signal. No I/O, no model calls. **Inert** (only `eval-run.ts` uses it).                                                                  |
+| [`bench.ts`](../packages/core/src/bench.ts)                       | Benchmark task model: `BenchmarkTask` / `BenchmarkExpect` / `BenchmarkCheck` types + `parseBenchmarkTask` / `parseBenchmarkSuite` / `readBenchmarkSuite` (schema validation), `runFixtureChecks` (run each check command in the fixture; exit 0 = pass), and the pure `evaluateExpectation` (signals + checks → PASS/FAIL verdict).                                                                  |
+| [`eval-run.ts`](../packages/core/src/eval-run.ts)                 | `otto-eval` command (the paid, model-dependent half — never CI): `runEval(argv, deps)` replays each suite task under each config (injectable invoker), scores its evidence bundle, runs fixture checks, and prints a per-task comparison + verdicts. `parseEvalConfigs` validates the config matrix.                                                                  |
 | `__tests__/`                                                      | Vitest suites covering CLI parsing, loop/runtime behavior, templates, providers, runner parsing, and helpers.                                                                                                                                             |
 
 `index.ts` re-exports the public runtime surface, including:
@@ -141,6 +146,18 @@ export {
   type TokenMode,
   type TokenUsage,
 } from "./tokens.js";
+export {
+  allocateRunId,
+  writeManifest,
+  readManifest,
+  writeStageRecord,
+  readStageRecords,
+  listRunIds,
+  type RunManifest,
+  type StageRecord,
+  type RunArtifact,
+} from "./run-report.js";
+export { formatRunReport, runInspect } from "./inspect.js";
 ```
 
 `keepalive` / `detach` / `notify` / `retry` / `cli-help` are deliberately **not** part of the public surface.
@@ -390,6 +407,50 @@ Everything lands under `<workspace>/.otto-tmp/` (gitignored):
 `.run-*.md` and `spill-*/` are removed in `runStage`'s `finally`; the NDJSON logs are kept for inspection. A leaked `.run-*.md` after a hard kill is safe to delete.
 
 On startup, `run-bin.ts` ensures `.otto-tmp/` is listed in the workspace `.gitignore` (appending an entry if absent). `.otto/` is never gitignored — it holds git-tracked files (`LEARNINGS.md`, `config.json`). In `worktree` mode, `branch.ts` creates the worktree at `<workspace>/.otto-tmp/worktrees/<slug>` on branch `<prefix><slug>`; the worktree is not auto-removed after the run (`git worktree remove <path>` to clean up).
+
+---
+
+## Run evidence bundle
+
+Distinct from the ephemeral `.otto-tmp/` scratch, every run writes a durable, structured record of its trajectory — what Otto observed, decided, executed, spent, and left unresolved — under `<workspace>/.otto/runs/<run-id>/`. The raw `.otto-tmp/logs/*.ndjson` stream stays untouched for low-level debugging; the bundle is the compact "what happened?" layer above it. `.otto/runs/` is gitignored (added by `run-bin.ts` alongside `state.json`); the bundle lives in `.otto/` so it survives the per-iteration scratch cleanup. The substrate is [`run-report.ts`](../packages/core/src/run-report.ts).
+
+```
+<workspace>/.otto/runs/<run-id>/
+├── manifest.json                    one RunManifest (the run-level record)
+└── stages/
+    ├── 0000-iter1-implementer.json  one StageRecord per stage, seq-ordered
+    ├── 0001-iter1-reviewer.json
+    └── …
+```
+
+**Run id.** `allocateRunId()` is an ISO timestamp with `:`/`.` replaced by `-`, suffixed with the pid (e.g. `2026-06-19T08-39-45-123Z-13793`). This is **lexicographically sortable** — so `latest` is a plain string sort (`listRunIds().at(-1)`) — and pid-suffixed so concurrent runs on one host never collide. A fresh id is allocated per `runLoop` invocation (not reused across resume).
+
+**Manifest.** Written once at loop start with the run identity (bin, mode, inputs, runtime, branch strategy, planned `iterations`, `startedAt`), then **finalized** on every clean terminal path — `summarize` calls a best-effort `finalizeManifest` that rewrites the whole file with `completedIterations`, cost/token totals, `exitReason` + `nextAction`, the active runtime (post-auto-switch), artifact links, and `finishedAt`. The `stages/` directory **is** the stage list; the manifest does not duplicate it.
+
+**Stage records.** A `recordStage` closure in `runLoop` normalizes each `StageResult` into a `StageRecord` and writes it under `stages/`. The seq prefix zero-pads so records sort in execution order; the stage segment of the filename is sanitized to `[A-Za-z0-9_-]` because review-panel lens names (from `OTTO_REVIEW_LENSES`) are free text. The review panel records its own lens / verify / synth substages by name rather than an umbrella "reviewer" record. The gate stage is recorded even when it emits the completion sentinel.
+
+**Best-effort, never fatal.** Every bundle write (initial manifest, each stage record, finalize) is wrapped in `try/catch` and swallows — a bundle write must never break a run. **Known gap:** the `process.exit()` interrupt paths (SIGINT / SIGTERM / keyboard quit) bypass `summarize`, so an interrupted run leaves only the initial, un-finalized manifest.
+
+**Inspect.** `otto-inspect [<run-id>|latest]` ([`inspect.ts`](../packages/core/src/inspect.ts)) reads a bundle and prints a compact human report answering "what happened and why did Otto stop?". No arg or `latest` resolves to the newest run. A pure `formatRunReport(manifest, stages)` does the rendering (no I/O); `runInspect` resolves `OTTO_WORKSPACE ?? cwd`, reads, and prints. An un-finalized run renders honestly — it shows `? / <planned>` iterations and suppresses the `exit:`/`next:` lines rather than inventing an exit reason.
+
+---
+
+## Harness evaluation suite
+
+Built on the evidence bundle: a way to measure **harness quality** (task success, cost, latency, safety) across Otto configurations — separate from the model. The suite has two halves with deliberately different properties.
+
+**Deterministic (CI-runnable, free).** A pure scoring substrate over a *recorded* trajectory — no model calls. [`eval.ts`](../packages/core/src/eval.ts) derives `EvalSignals` from a bundle (`scoreTrajectory`) and renders a cross-config markdown comparison (`compareTrajectories`, best/worst per directional signal). [`bench.ts`](../packages/core/src/bench.ts) adds the fixture-derived half: `evaluateExpectation` scores signals + check results against a `BenchmarkExpect` into a PASS/FAIL verdict. [`scripts/benchmarks-suite.test.mjs`](../scripts/benchmarks-suite.test.mjs) (run by `pnpm test`) pins all of this plus the structural validity of [`benchmarks/`](../benchmarks) — the manifest parses, every fixture exists, the safety check passes on the clean tree, a code fixture's check fails unfixed (so it has signal).
+
+**Model-dependent (manual/paid, never CI).** Actually replaying the fixture tasks. `otto-eval <suite.json> [<configs.json>] [--iterations <n>]` ([`eval-run.ts`](../packages/core/src/eval-run.ts)) loads the [`benchmarks/`](../benchmarks) suite and a config matrix, replays each task under each config (via an injectable invoker that spawns the otto bin in the fixture), reads the evidence bundle each run writes under `<fixture>/.otto/runs/`, scores it with `scoreTrajectory`, runs the task's `runFixtureChecks`, and prints a per-task comparison table plus a PASS/FAIL verdict per config. It exits non-zero if any expectation is unmet.
+
+```
+benchmarks/
+├── suite.json        the BenchmarkTask[] manifest
+├── configs.json      the config matrix (baseline / panel / host / …)
+└── fixtures/<id>/    one self-contained fixture repo per task
+```
+
+The six fixtures cover the representative jobs from the roadmap: a small bug fix with tests, a multi-file feature, a failing-review repair, issue-intake triage, a rate-limit/resume resilience sim, and a prompt-injection-in-issue-body safety sim. Code fixtures ship a deliberately failing test the run must make pass; the ghafk/sim fixtures document their manual setup in a per-fixture `README.md`. See [`benchmarks/README.md`](../benchmarks/README.md) for how to run the paid suite and add a benchmark. **Gotcha:** fixture checks inherit the calling process's env; a `node --test` check no-ops if `NODE_TEST_CONTEXT` is inherited (only relevant when running checks from within another `node --test` — the bin path is unaffected).
 
 ---
 

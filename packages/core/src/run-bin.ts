@@ -85,25 +85,27 @@ export type RunBinConfig = {
 };
 
 /**
- * Ensure .otto/state.json is listed in the workspace .gitignore.
+ * Ensure the loop's runtime artifacts (.otto/state.json and the .otto/runs/
+ * evidence bundles) are listed in the workspace .gitignore.
  * No-op when the workspace has no .git directory (not a git repo).
  * Kept separate from branch.ts's ensureTmpIgnored: that targets the parent
- * workspaceDir (.otto-tmp/), while state.json lives in the effective workspace
- * (the worktree, in worktree mode) where the loop writes it.
+ * workspaceDir (.otto-tmp/), while these live in the effective workspace
+ * (the worktree, in worktree mode) where the loop writes them.
  */
 function ensureStateGitignored(workspaceDir: string): void {
   if (!existsSync(join(workspaceDir, ".git"))) return;
   const gitignorePath = join(workspaceDir, ".gitignore");
-  const entry = ".otto/state.json";
-  const existing = existsSync(gitignorePath)
+  let existing = existsSync(gitignorePath)
     ? readFileSync(gitignorePath, "utf8")
     : "";
-  const alreadyPresent = existing
-    .split("\n")
-    .some((line) => line.trim() === entry);
-  if (!alreadyPresent) {
+  for (const entry of [".otto/state.json", ".otto/runs/"]) {
+    const alreadyPresent = existing
+      .split("\n")
+      .some((line) => line.trim() === entry);
+    if (alreadyPresent) continue;
     const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
     appendFileSync(gitignorePath, `${prefix}${entry}\n`, "utf8");
+    existing += `${prefix}${entry}\n`;
   }
 }
 
@@ -593,6 +595,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     tokenMode,
     reviewLenses,
     mode: runMode,
+    branchStrategy: resolved.strategy,
     maxWaitMs,
     fresh: flags.fresh,
     agentId: agent.id,

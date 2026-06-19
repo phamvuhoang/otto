@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
@@ -10,6 +10,13 @@ import { RateLimitError, computeWaitMs } from "./rate-limit.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { cleanScratch } from "./scratch.js";
 import { getAgentRuntime, stageLogPath, type StageResult } from "./runner.js";
+import {
+  allocateRunId,
+  removeStageRecords,
+  writeManifest,
+  writeStageRecord,
+  type RunArtifact,
+} from "./run-report.js";
 import { executeStage } from "./stage-exec.js";
 import {
   clearState,
@@ -147,6 +154,9 @@ export type LoopOptions = {
   signal?: AbortSignal;
   /** Run mode for state.json identity (e.g. "afk" / "ghafk"). Default "afk". */
   mode?: string;
+  /** Branch strategy in effect (e.g. "branch" / "worktree" / "current"),
+   *  recorded in the run manifest. */
+  branchStrategy?: string;
   /** Cap on the rate-limit wait before halting. Default 6h. */
   maxWaitMs?: number;
   /** Force a fresh run, ignoring/clearing prior state. Default false. */
@@ -272,6 +282,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     reviewLenses,
     signal: externalSignal,
     mode = "afk",
+    branchStrategy,
     maxWaitMs = DEFAULT_MAX_WAIT_MS,
     fresh = false,
     agentId = "claude",
@@ -317,6 +328,59 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   process.stderr.write(
     `${USE_COLOR ? `${dim("━━━")} ${bold(versionLine)} ${dim("━━━")}` : `== ${versionLine} ==`}\n`
   );
+
+  // Allocate the run id and write an initial evidence-bundle manifest at loop
+  // start, so a run that crashes before any terminal path still leaves a record
+  // of what it was about to do. Later tasks finalize this manifest (cost/token
+  // totals, exit reason, artifacts) and write per-stage records alongside.
+  const runId = allocateRunId();
+  const manifestStartedAt = nowIso();
+  writeManifest(workspaceDir, {
+    runId,
+    bin,
+    mode,
+    inputs,
+    runtime: { id: activeAgentId, displayName: activeAgentDisplayName },
+    branchStrategy,
+    iterations: total,
+    costUsd: 0,
+    tokenUsage: emptyTokenUsage(),
+    artifacts: [],
+    startedAt: manifestStartedAt,
+  });
+
+  // Per-stage evidence records: `stageSeq` is a monotonic counter that orders
+  // them under the bundle's `stages/` dir. Recording is best-effort — a bundle
+  // write must never break the run. The panel records its own substages via the
+  // same closure (threaded as `recordStage`), so lens/verify/synth each get a
+  // record named for the substage rather than one umbrella "reviewer" record.
+  // Basenames of the records written so far, in seq order — the array length is
+  // the next seq, so records stay contiguous, and a failed panel attempt's
+  // records can be rolled back by truncating + deleting (see the retry catch).
+  const recordedStageFiles: string[] = [];
+  const recordStage = (
+    recIteration: number,
+    stageName: string,
+    sr: StageResult,
+    startedAt: string
+  ): void => {
+    try {
+      const name = writeStageRecord(workspaceDir, runId, recordedStageFiles.length, {
+        iteration: recIteration,
+        stage: stageName,
+        runtimeId: sr.runtimeId ?? activeAgentId,
+        costUsd: sr.costUsd,
+        usage: sr.usage,
+        isError: sr.isError,
+        apiErrorStatus: sr.apiErrorStatus,
+        startedAt,
+        finishedAt: nowIso(),
+      });
+      recordedStageFiles.push(name);
+    } catch {
+      // Best-effort: never fail a run because a stage record could not be written.
+    }
+  };
 
   // When an external signal is injected (daemon/watch mode), the caller owns
   // wake-lock + process signal handlers. Skip both here.
@@ -403,10 +467,64 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     };
   };
 
+  // Artifact links a finalized manifest carries. The raw NDJSON logs dir is
+  // always present (success metric: raw `.otto-tmp/logs` debugging stays
+  // available); the deferred-followups trail is linked only when it exists.
+  // Paths are workspace-relative so the bundle is portable.
+  const collectArtifacts = (): RunArtifact[] => {
+    const list: RunArtifact[] = [
+      {
+        kind: "ndjson-logs",
+        path: join(".otto-tmp", "logs"),
+        description: "raw per-stage NDJSON run logs",
+      },
+    ];
+    if (existsSync(join(workspaceDir, ".otto", "review-followups.md"))) {
+      list.push({
+        kind: "review-followups",
+        path: join(".otto", "review-followups.md"),
+        description: "deferred reviewer follow-ups",
+      });
+    }
+    return list;
+  };
+
+  // Finalize the run manifest on a terminal exit: stamp the completed-iteration
+  // count, cumulative cost/token totals, the exit reason + its next-action hint,
+  // the active runtime, artifact links, and finishedAt. Best-effort — a bundle
+  // write must NEVER break a run (mirrors the initial write + recordStage).
+  // Called once per terminal path through `summarize`, so every exit reason is
+  // covered without threading the manifest through each return site.
+  const finalizeManifest = (reason: string, completed: number): void => {
+    try {
+      writeManifest(workspaceDir, {
+        runId,
+        bin,
+        mode,
+        inputs,
+        runtime: { id: activeAgentId, displayName: activeAgentDisplayName },
+        branchStrategy,
+        iterations: total,
+        completedIterations: completed,
+        costUsd: runCostUsd,
+        tokenUsage: runTokenUsage,
+        exitReason: reason,
+        nextAction: nextActionFor(reason),
+        artifacts: collectArtifacts(),
+        startedAt: manifestStartedAt,
+        finishedAt: nowIso(),
+      });
+    } catch {
+      // Best-effort: never fail a run because the manifest could not be finalized.
+    }
+  };
+
   // One consistent end-of-run summary across every terminal path: the exit
   // reason, iterations run, and cumulative cost, then a next-action hint so a
   // maintainer reading the final line knows what to do next. Written to stdout
   // (like the other completion lines) so it survives `> out.txt` redirection.
+  // Also finalizes the run manifest here so the evidence bundle records the same
+  // exit reason on every terminal path the loop funnels through summarize.
   const summarize = (reason: string, iterations: number): void => {
     const iters = `${iterations} iteration${iterations === 1 ? "" : "s"}`;
     const tokens =
@@ -423,6 +541,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       line += `${dimOut(`  ⚑ ${deferred} deferred follow-up${deferred === 1 ? "" : "s"} in .otto/review-followups.md`)}\n`;
     }
     process.stdout.write(line);
+    finalizeManifest(reason, iterations);
   };
   let sawFailure = false;
 
@@ -501,6 +620,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               agentId: activeAgentId,
               resumeNote,
               onStage: accountStage,
+              recordStage: (stageName, subSr, startedAt) =>
+                recordStage(i, stageName, subSr, startedAt),
             });
           }
           const r = await executeStage({
@@ -518,6 +639,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           return r;
         };
 
+        const stageStartedAt = nowIso();
         try {
           for (;;) {
             const accountingSnapshot = {
@@ -525,6 +647,12 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               tokenUsage: runTokenUsage,
               cooldownFactor,
             };
+            // Count of stage records committed before this attempt. A panel
+            // attempt records each substage inline as it completes, so a later
+            // substage's rate limit (which retries the whole panel) must roll
+            // these back too — else stageSeq is monotonic and the retry
+            // re-records each lens, duplicating records.
+            const recordSnapshot = recordedStageFiles.length;
             try {
               sr = await runOnce();
               break;
@@ -544,6 +672,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               runCostUsd = accountingSnapshot.costUsd;
               runTokenUsage = accountingSnapshot.tokenUsage;
               cooldownFactor = accountingSnapshot.cooldownFactor;
+              // Mirror the accounting rollback for evidence records: drop the
+              // failed attempt's inline panel substage records so the retry
+              // re-records into the same seqs instead of duplicating them.
+              const discardedRecords = recordedStageFiles.splice(recordSnapshot);
+              if (discardedRecords.length > 0) {
+                removeStageRecords(workspaceDir, runId, discardedRecords);
+              }
               const resetsAt = (err as RateLimitError).resetsAt;
 
               // Auto-switch on limit: when a fallback runtime is configured and
@@ -649,6 +784,11 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
         // Cost/pacing accounting is handled by accountStage — called once per
         // non-panel stage above, and once per sub-agent inside runPanel.
+
+        // Record this stage's evidence. A panel stage already recorded its own
+        // substages (lens/verify/synth) via the threaded recordStage, so skip
+        // the umbrella record to avoid double-counting the synth result.
+        if (!usePanel) recordStage(i, stage.name, sr!, stageStartedAt);
 
         if (s === 0) {
           if (sr!.result.includes(SENTINEL)) {

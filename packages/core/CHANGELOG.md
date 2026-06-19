@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.9.0...otto-core-v0.10.0) (2026-06-19)
+
+
+### Features
+
+* **ghafk:** expand --issue to implement native + markdown sub-issues ([#28](https://github.com/phamvuhoang/otto/issues/28)) ([#49](https://github.com/phamvuhoang/otto/issues/49)) ([654cdbf](https://github.com/phamvuhoang/otto/commit/654cdbff0d2b86b7a44cbd00dbee25b16b373fda))
+
 ## [0.9.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.8.2...otto-core-v0.9.0) (2026-06-19)
 
 

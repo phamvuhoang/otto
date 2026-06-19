@@ -2,6 +2,13 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
+import {
+  checkCommand,
+  DEFAULT_POLICY,
+  type PolicyViolation,
+  type SafetyPolicy,
+} from "./safety-policy.js";
+
 // SECURITY INVARIANT: the command bodies of the !`cmd`, !?`cmd`, and @spill tags
 // are executed on the HOST shell (see execSync calls below). Templates are trusted
 // (shipped in the npm tarball) and only ever embed STATIC command strings; {{ INPUTS }}
@@ -31,6 +38,16 @@ export type RenderOptions = {
   spillHostDir?: string;
   // POSIX path the agent uses to reach spillHostDir from its working dir.
   spillRefPath?: string;
+  // Safety policy (issue #43 P4) evaluated against every host-shell/@spill command
+  // body before it runs. Absent → DEFAULT_POLICY (all rule lists empty), so the
+  // checks are a no-op and rendering behaves exactly as before — a repo opts into
+  // enforcement by populating `.otto/policy.json`. A command matching a blocked
+  // pattern is SKIPPED (neutralized to its fallback / empty output), never run.
+  policy?: SafetyPolicy;
+  // Sink for each policy violation found at the shell/@spill boundary, so the
+  // caller can surface it as a trajectory safety event. Called before the
+  // offending command is skipped.
+  onPolicyViolation?: (violation: PolicyViolation) => void;
 };
 
 export function resolveShell(): string {
@@ -53,6 +70,18 @@ export function renderTemplate(
   const raw = readFileSync(templatePath, "utf8");
   const templateDir = dirname(templatePath);
   const shell = resolveShell();
+
+  // Policy gate at the host-shell boundary (issue #43 P4). Returns true when the
+  // command matches a blocked pattern — every violation is reported through the
+  // sink and the caller then SKIPS the command instead of executing it. Under
+  // DEFAULT_POLICY (empty deny-list, the no-`.otto/policy.json` case) this is
+  // always false, so trusted local workflows render unchanged.
+  const policy = opts.policy ?? DEFAULT_POLICY;
+  const blockedByPolicy = (command: string): boolean => {
+    const violations = checkCommand(policy, command);
+    for (const v of violations) opts.onPolicyViolation?.(v);
+    return violations.length > 0;
+  };
 
   // Expand @include directives recursively until no directives remain.
   // Each pass resolves relative paths against the including file's directory.
@@ -102,17 +131,24 @@ export function renderTemplate(
         }
       }
       let out: string;
-      try {
-        out = execSync(cmd, {
-          shell,
-          encoding: "utf8",
-          maxBuffer: SPILL_MAX_BUFFER,
-          cwd: opts.cwd,
-          stdio: ["ignore", "pipe", tryMode ? "ignore" : "pipe"],
-        });
-      } catch (err) {
-        if (!tryMode) throw err;
+      if (blockedByPolicy(cmd)) {
+        // Denied by policy: skip execution and write the neutralized output
+        // (the try-mode fallback, else empty) so the run continues without the
+        // command ever running.
         out = fallback;
+      } else {
+        try {
+          out = execSync(cmd, {
+            shell,
+            encoding: "utf8",
+            maxBuffer: SPILL_MAX_BUFFER,
+            cwd: opts.cwd,
+            stdio: ["ignore", "pipe", tryMode ? "ignore" : "pipe"],
+          });
+        } catch (err) {
+          if (!tryMode) throw err;
+          out = fallback;
+        }
       }
       mkdirSync(opts.spillHostDir, { recursive: true });
       writeFileSync(join(opts.spillHostDir, name), out, "utf8");
@@ -126,6 +162,8 @@ export function renderTemplate(
       const sep = body.lastIndexOf(TRY_SEP);
       const cmd = sep >= 0 ? body.slice(0, sep) : body;
       const fallback = sep >= 0 ? body.slice(sep + TRY_SEP.length) : "";
+      // Denied by policy → behave as a failed try-shell: substitute the fallback.
+      if (blockedByPolicy(cmd)) return fallback;
       try {
         const out = execSync(cmd, {
           shell,
@@ -142,6 +180,9 @@ export function renderTemplate(
   );
 
   const afterShell = afterShellTry.replace(SHELL_TAG, (_match, cmd: string) => {
+    // Denied by policy: skip the required command, substituting empty output.
+    // (The run continues with a degraded prompt rather than executing it.)
+    if (blockedByPolicy(cmd)) return "";
     const out = execSync(cmd, {
       shell,
       encoding: "utf8",

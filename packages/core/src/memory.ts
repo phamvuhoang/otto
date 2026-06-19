@@ -147,6 +147,56 @@ export function parseMemoryRecord(raw: unknown): MemoryRecord | null {
   return rec;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Parse an ISO timestamp to epoch ms; unparseable → null (never throws). */
+function epoch(iso: string | undefined): number | null {
+  if (typeof iso !== "string") return null;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * Derive a record's effective lifecycle status from its freshness policy at the
+ * given instant. `superseded` is terminal (set by contradiction handling) and is
+ * preserved untouched. Otherwise the record is `stale` once it has reached its
+ * absolute `expiresAt`, or once `revalidateAfterDays` have elapsed since it was
+ * last used (`lastUsedAt`, falling back to `createdAt`); else `active`.
+ * Unparseable timestamps are ignored rather than treated as expired. Pure.
+ */
+export function memoryStatus(
+  record: MemoryRecord,
+  now: Date = new Date()
+): MemoryStatus {
+  if (record.status === "superseded") return "superseded";
+  const t = now.getTime();
+  const expiry = epoch(record.expiresAt);
+  if (expiry !== null && t >= expiry) return "stale";
+  if (record.revalidateAfterDays !== undefined) {
+    const since = epoch(record.lastUsedAt) ?? epoch(record.createdAt);
+    if (since !== null && t - since > record.revalidateAfterDays * DAY_MS) {
+      return "stale";
+    }
+  }
+  return "active";
+}
+
+/**
+ * Return a copy of the record marked as just used: `lastUsedAt` stamped at `now`
+ * and `useCount` incremented. Pure — the input is not mutated. A run calls this
+ * when it consumes a record, sliding the revalidation window forward.
+ */
+export function touchMemory(
+  record: MemoryRecord,
+  now: Date = new Date()
+): MemoryRecord {
+  return {
+    ...record,
+    lastUsedAt: now.toISOString(),
+    useCount: record.useCount + 1,
+  };
+}
+
 /** Write one memory record (creates `.otto/memory/`). */
 export function writeMemoryRecord(
   workspaceDir: string,

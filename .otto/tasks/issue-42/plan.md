@@ -10,10 +10,10 @@ regress existing runs.
       `writeMemoryRecord`/`readMemoryRecord`/`listMemoryIds`/`readMemoryRecords`
       (absent/malformed → `null`/`[]`, never throws). Export from `index.ts`.
       Inert. Pinned by `memory.test.ts`. *(this run)*
-- [ ] **2. Freshness policy.** Pure `memoryStatus(record, now)` deriving
+- [x] **2. Freshness policy.** Pure `memoryStatus(record, now)` deriving
       `active`/`stale` from `expiresAt`/`revalidateAfterDays` vs `now`/`createdAt`/
       `lastUsedAt`; `touchMemory(record, now)` bumping `lastUsedAt`/`useCount`.
-      Inert. Pinned by `memory.test.ts`.
+      Inert. Pinned by `memory.test.ts`. *(this run)*
 - [ ] **3. Contradiction handling.** Pure `supersede(newer, older)` (sets
       `older.status="superseded"`, `newer.supersedes=older.id`) and
       `detectConflicts(records)` (same `scope`+`category`, both `active`,

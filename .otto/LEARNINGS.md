@@ -26,6 +26,24 @@
   (`supersede`/`detectConflicts`), audit (`auditMemory`), an `otto-memory audit`
   bin, and the LEARNINGS.md projection + compaction tiers. Spec/plan:
   `.otto/tasks/issue-42/`. Pinned by `memory.test.ts`.
+- **Memory freshness is DERIVED, not stored (issue #42 P3 slice 2).** Pure
+  `memoryStatus(record, now)` recomputes lifecycle from the policy — it does NOT
+  trust the stored `status` except for `superseded`, which is TERMINAL (set by
+  the slice-3 contradiction handler, not derivable from time) and returned
+  untouched. A non-superseded record is `stale` once `now >= expiresAt`
+  (absolute, inclusive — reaching the instant counts) OR once
+  `revalidateAfterDays` have elapsed since `lastUsedAt ?? createdAt` (sliding,
+  strict `>`); else `active`. **Unparseable timestamps are IGNORED, never treated
+  as expired** (via a local `epoch()` that returns null on `Date.parse` NaN) — so
+  a malformed `expiresAt`/`createdAt` keeps a record active rather than silently
+  staling it (same never-throw philosophy as the readers). `touchMemory(record,
+  now)` is PURE (returns a copy, no mutation): stamps `lastUsedAt=now` + bumps
+  `useCount`, which slides the revalidation window forward; it does NOT change
+  `status` (that's `memoryStatus`'s job) or `expiresAt` (absolute). Still INERT
+  (exported from `index.ts`, wired by no bin/loop). Pinned by `memory.test.ts`
+  ("memoryStatus (freshness)" + "touchMemory"). Test gotcha: to exercise the
+  unparseable-timestamp path you must corrupt BOTH `lastUsedAt` AND `createdAt`,
+  else the valid `createdAt` fallback drives revalidation.
 - **The harness evaluation suite (issue #40 P1) starts as a PURE scoring
   substrate over the #39 evidence bundle, deterministic-first.** `eval.ts`
   exports `EvalSignals` + `scoreTrajectory(manifest, stages)` — derives ONLY the

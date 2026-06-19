@@ -8,9 +8,11 @@ import {
   listMemoryIds,
   memoryDir,
   memoryRecordPath,
+  memoryStatus,
   parseMemoryRecord,
   readMemoryRecord,
   readMemoryRecords,
+  touchMemory,
   writeMemoryRecord,
   type MemoryRecord,
 } from "../memory.js";
@@ -91,6 +93,94 @@ describe("parseMemoryRecord", () => {
     const r = parseMemoryRecord({ id: "a", content: "b", trust: "bogus", status: "weird" });
     expect(r?.trust).toBe("unverified");
     expect(r?.status).toBe("active");
+  });
+});
+
+describe("memoryStatus (freshness)", () => {
+  const base: MemoryRecord = {
+    ...record,
+    status: "active",
+    expiresAt: undefined,
+    revalidateAfterDays: undefined,
+    lastUsedAt: undefined,
+    createdAt: "2026-06-01T00:00:00.000Z",
+  };
+
+  it("a record with no freshness policy is active", () => {
+    expect(memoryStatus(base, new Date("2027-01-01T00:00:00.000Z"))).toBe(
+      "active"
+    );
+  });
+
+  it("expiresAt in the past → stale, in the future → active", () => {
+    const r = { ...base, expiresAt: "2026-07-01T00:00:00.000Z" };
+    expect(memoryStatus(r, new Date("2026-08-01T00:00:00.000Z"))).toBe("stale");
+    expect(memoryStatus(r, new Date("2026-06-15T00:00:00.000Z"))).toBe(
+      "active"
+    );
+  });
+
+  it("reaching the expiry instant counts as stale", () => {
+    const r = { ...base, expiresAt: "2026-07-01T00:00:00.000Z" };
+    expect(memoryStatus(r, new Date("2026-07-01T00:00:00.000Z"))).toBe("stale");
+  });
+
+  it("revalidateAfterDays elapsed since lastUsedAt → stale", () => {
+    const r = {
+      ...base,
+      lastUsedAt: "2026-06-10T00:00:00.000Z",
+      revalidateAfterDays: 30,
+    };
+    // 31 days after lastUsedAt
+    expect(memoryStatus(r, new Date("2026-07-11T00:00:00.000Z"))).toBe("stale");
+    // 10 days after lastUsedAt
+    expect(memoryStatus(r, new Date("2026-06-20T00:00:00.000Z"))).toBe(
+      "active"
+    );
+  });
+
+  it("revalidation window measures from createdAt when lastUsedAt is absent", () => {
+    const r = {
+      ...base,
+      createdAt: "2026-06-01T00:00:00.000Z",
+      revalidateAfterDays: 10,
+    };
+    expect(memoryStatus(r, new Date("2026-06-15T00:00:00.000Z"))).toBe("stale");
+    expect(memoryStatus(r, new Date("2026-06-05T00:00:00.000Z"))).toBe(
+      "active"
+    );
+  });
+
+  it("a superseded record stays superseded regardless of freshness", () => {
+    const r = { ...base, status: "superseded" as const };
+    expect(memoryStatus(r, new Date("2026-06-02T00:00:00.000Z"))).toBe(
+      "superseded"
+    );
+  });
+
+  it("ignores an unparseable timestamp rather than throwing", () => {
+    const r = {
+      ...base,
+      expiresAt: "not-a-date",
+      revalidateAfterDays: 5,
+      lastUsedAt: "also-bad",
+      createdAt: "still-bad",
+    };
+    expect(memoryStatus(r, new Date("2027-01-01T00:00:00.000Z"))).toBe(
+      "active"
+    );
+  });
+});
+
+describe("touchMemory", () => {
+  it("bumps useCount and stamps lastUsedAt without mutating the input", () => {
+    const r: MemoryRecord = { ...record, useCount: 2 };
+    const touched = touchMemory(r, new Date("2027-01-02T03:04:05.000Z"));
+    expect(touched.useCount).toBe(3);
+    expect(touched.lastUsedAt).toBe("2027-01-02T03:04:05.000Z");
+    // original is untouched (pure)
+    expect(r.useCount).toBe(2);
+    expect(r.lastUsedAt).toBe(record.lastUsedAt);
   });
 });
 

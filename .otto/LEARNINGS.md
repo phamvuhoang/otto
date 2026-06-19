@@ -611,6 +611,17 @@
   gate-clearing verdicts. **Test gotcha:** RELEASING.md line-wraps prose, so a
   verdict phrase like "Needs human review" can split across a newline — normalize
   whitespace (`section.replace(/\s+/g, " ")`) before matching multi-word phrases.
+- **A rate-limited panel attempt rolls back BOTH accounting AND evidence
+  records.** Panel substages (`recordStage`) write inline as each lens/verify/
+  synth completes, but a later substage's limit retries the WHOLE panel
+  (`loop.ts` `for(;;)`), so the loop must undo the failed attempt's records too —
+  else seq is monotonic and the retry re-records each lens, duplicating records.
+  `recordStage` derives seq from `recordedStageFiles.length` (contiguous), the
+  retry catch snapshots that length next to the accounting snapshot, and on
+  `RateLimitError` `splice`s + `removeStageRecords` the attempt's files so the
+  retry reuses the freed seqs. Any future inline-write-during-attempt artifact
+  needs the same snapshot/rollback parity. Pinned by `loop.test.ts` "rolls back
+  panel sub-stage records when a panel attempt is retried after a rate limit".
 
 ## Gotchas
 

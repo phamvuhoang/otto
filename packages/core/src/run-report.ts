@@ -2,6 +2,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -144,6 +145,28 @@ export function writeStageRecord(
   const name = `${String(seq).padStart(4, "0")}-iter${record.iteration}-${safeStage}.json`;
   writeFileSync(join(dir, name), JSON.stringify(record, null, 2) + "\n");
   return name;
+}
+
+/**
+ * Delete the named stage-record files (basenames from {@link writeStageRecord})
+ * from a run's `stages/` dir. Used to roll back records written by a panel
+ * attempt that later rate-limited and is being retried, so the bundle keeps one
+ * record per stage rather than a duplicate per retry. Best-effort: a missing or
+ * unremovable file is skipped (never throws).
+ */
+export function removeStageRecords(
+  workspaceDir: string,
+  runId: string,
+  names: string[]
+): void {
+  const dir = stagesDir(workspaceDir, runId);
+  for (const name of names) {
+    try {
+      rmSync(join(dir, name), { force: true });
+    } catch {
+      // Best-effort: never fail a run because a stale record could not be removed.
+    }
+  }
 }
 
 /**

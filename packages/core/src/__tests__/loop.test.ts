@@ -779,6 +779,54 @@ describe("runLoop", () => {
       );
     });
 
+    it("rolls back panel sub-stage records when a panel attempt is retried after a rate limit", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const reviewer: Stage = { name: "reviewer", template: "stage.md" };
+      const { RateLimitError } = await import("../rate-limit.js");
+      mocks.runStage.mockResolvedValue(ok("keep going"));
+      type PanelOpts = {
+        recordStage: (n: string, sr: ReturnType<typeof ok>, t: string) => void;
+      };
+      mocks.runPanel
+        .mockImplementationOnce((opts: PanelOpts) => {
+          // First attempt records a lens substage, then a later substage limits.
+          opts.recordStage("correctness", ok("lens"), "2026-01-01T00:00:00.000Z");
+          throw new RateLimitError(
+            "session limit",
+            Math.floor(Date.now() / 1000)
+          );
+        })
+        .mockImplementationOnce((opts: PanelOpts) => {
+          const sr = ok("<review>OK</review>");
+          opts.recordStage("correctness", ok("lens"), "2026-01-01T00:00:01.000Z");
+          opts.recordStage("review-synth", sr, "2026-01-01T00:00:02.000Z");
+          return sr;
+        });
+
+      await runLoop(
+        loopOptions(dirs, {
+          stages: [stage, reviewer] as [Stage, Stage],
+          reviewLenses: ["correctness"],
+          maxRetries: 0,
+        })
+      );
+
+      expect(mocks.runPanel).toHaveBeenCalledTimes(2);
+      const { runsDir, readStageRecords } = await import("../run-report.js");
+      const ids = (await import("node:fs")).readdirSync(
+        runsDir(dirs.workspaceDir)
+      );
+      const records = readStageRecords(dirs.workspaceDir, ids[0]);
+      // The failed attempt's lens record is rolled back: just the gate plus the
+      // successful attempt's two substages, no duplicate `correctness` record.
+      expect(records.map((r) => r.stage)).toEqual([
+        "implementer",
+        "correctness",
+        "review-synth",
+      ]);
+    });
+
     it("reports a budget exit with the iterations run and cost", async () => {
       const dirs = makeDirs();
       roots.push(dirs.root);

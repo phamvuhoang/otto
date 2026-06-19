@@ -10,7 +10,12 @@ import { RateLimitError, computeWaitMs } from "./rate-limit.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { cleanScratch } from "./scratch.js";
 import { getAgentRuntime, stageLogPath, type StageResult } from "./runner.js";
-import { allocateRunId, writeManifest, writeStageRecord } from "./run-report.js";
+import {
+  allocateRunId,
+  removeStageRecords,
+  writeManifest,
+  writeStageRecord,
+} from "./run-report.js";
 import { executeStage } from "./stage-exec.js";
 import {
   clearState,
@@ -347,7 +352,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // write must never break the run. The panel records its own substages via the
   // same closure (threaded as `recordStage`), so lens/verify/synth each get a
   // record named for the substage rather than one umbrella "reviewer" record.
-  let stageSeq = 0;
+  // Basenames of the records written so far, in seq order — the array length is
+  // the next seq, so records stay contiguous, and a failed panel attempt's
+  // records can be rolled back by truncating + deleting (see the retry catch).
+  const recordedStageFiles: string[] = [];
   const recordStage = (
     recIteration: number,
     stageName: string,
@@ -355,7 +363,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     startedAt: string
   ): void => {
     try {
-      writeStageRecord(workspaceDir, runId, stageSeq++, {
+      const name = writeStageRecord(workspaceDir, runId, recordedStageFiles.length, {
         iteration: recIteration,
         stage: stageName,
         runtimeId: sr.runtimeId ?? activeAgentId,
@@ -366,6 +374,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         startedAt,
         finishedAt: nowIso(),
       });
+      recordedStageFiles.push(name);
     } catch {
       // Best-effort: never fail a run because a stage record could not be written.
     }
@@ -581,6 +590,12 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               tokenUsage: runTokenUsage,
               cooldownFactor,
             };
+            // Count of stage records committed before this attempt. A panel
+            // attempt records each substage inline as it completes, so a later
+            // substage's rate limit (which retries the whole panel) must roll
+            // these back too — else stageSeq is monotonic and the retry
+            // re-records each lens, duplicating records.
+            const recordSnapshot = recordedStageFiles.length;
             try {
               sr = await runOnce();
               break;
@@ -600,6 +615,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               runCostUsd = accountingSnapshot.costUsd;
               runTokenUsage = accountingSnapshot.tokenUsage;
               cooldownFactor = accountingSnapshot.cooldownFactor;
+              // Mirror the accounting rollback for evidence records: drop the
+              // failed attempt's inline panel substage records so the retry
+              // re-records into the same seqs instead of duplicating them.
+              const discardedRecords = recordedStageFiles.splice(recordSnapshot);
+              if (discardedRecords.length > 0) {
+                removeStageRecords(workspaceDir, runId, discardedRecords);
+              }
               const resetsAt = (err as RateLimitError).resetsAt;
 
               // Auto-switch on limit: when a fallback runtime is configured and

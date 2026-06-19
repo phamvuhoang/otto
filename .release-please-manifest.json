@@ -1,4 +1,4 @@
 {
-  "packages/core": "0.8.2",
-  "apps/cli": "0.3.7"
+  "packages/core": "0.9.0",
+  "apps/cli": "0.3.8"
 }

@@ -1675,5 +1675,50 @@ describe("runLoop", () => {
       );
       expect(stderrText()).not.toContain("adaptive router");
     });
+
+    it("stops early after consecutive iterations produce no diff", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      // Implementer never emits the sentinel; the router sees no file change each
+      // iteration, so it stops on low progress before exhausting all 3.
+      mocks.runStage.mockResolvedValue(ok("still working"));
+      await runLoop(
+        loopOptions(dirs, {
+          iterations: 3,
+          adaptiveRouter: true,
+          resolveChangedPaths: () => [],
+        })
+      );
+      expect(mocks.runStage).toHaveBeenCalledTimes(2); // stopped after iteration 2
+      expect(stderrText()).toContain("stop-low-progress"); // router decision marker
+      expect(stdoutText()).toContain("stopped (low progress)"); // run summary line
+    });
+
+    it("does not early-stop when the flag is off", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(ok("still working"));
+      await runLoop(loopOptions(dirs, { iterations: 3, resolveChangedPaths: () => [] }));
+      expect(mocks.runStage).toHaveBeenCalledTimes(3); // ran every iteration
+      expect(stderrText()).not.toContain("stop-low-progress");
+    });
+
+    it("resets the stall counter when an iteration makes a change", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(ok("still working"));
+      // no-change, then a change, then no-change → never 2 stalls in a row.
+      const seq = [[], ["a.ts"], []];
+      let n = 0;
+      await runLoop(
+        loopOptions(dirs, {
+          iterations: 3,
+          adaptiveRouter: true,
+          resolveChangedPaths: () => seq[n++] ?? [],
+        })
+      );
+      expect(mocks.runStage).toHaveBeenCalledTimes(3); // ran every iteration
+      expect(stderrText()).not.toContain("stop-low-progress");
+    });
   });
 });

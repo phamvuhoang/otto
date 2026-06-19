@@ -7,6 +7,8 @@ import { acquire, type Releaser } from "./keepalive.js";
 import { notifyComplete, notifyError } from "./notify.js";
 import { changedFilesSince, headSha } from "./git.js";
 import { sleep, isThrottle, nextCooldownFactor } from "./pacing.js";
+import { decide } from "./policy.js";
+import { deriveProgress, type IterationObservation } from "./progress.js";
 import { routeReview } from "./risk.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
@@ -68,6 +70,10 @@ const NEXT_ACTION: Record<string, string> = {
   "halted (rate limit)": "re-run after the limit resets to resume",
   aborted: "re-run to resume from the saved iteration",
   "stopped (error)": "inspect the error above, then re-run",
+  "stopped (low progress)":
+    "the run stopped making changes — refine the plan/prompt, then re-run",
+  "paused (needs human)":
+    "a repeated failure needs a decision — inspect the logs, then re-run",
 };
 
 export function nextActionFor(reason: string): string {
@@ -554,6 +560,12 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     finalizeManifest(reason, iterations);
   };
   let sawFailure = false;
+  // Adaptive compute router (issue #41): per-iteration progress state. The loop
+  // observes the diff a change produced and the cumulative cost; failing-check
+  // and failure-signature observability is future work, so the active policy
+  // outcome today is the diff-stall early stop (a run that stops changing files).
+  let prevObservation: IterationObservation | null = null;
+  let stalledIterations = 0;
 
   if (resuming) {
     resumeNote = `Resumed run (iteration ${startIteration} of ${total}). Prior work may already be committed or partially applied. Reconcile against git history and the working tree before acting; do not redo completed tasks.`;
@@ -839,6 +851,44 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       }
       completedIterations = i;
       await keyboardControls.pauseIfRequested();
+
+      // Adaptive iteration control: feed this iteration's progress signals into
+      // the policy and act on early-stop / escalate / confident-finish. Off by
+      // default; the static fixed-N behavior is unchanged when the flag is absent.
+      if (adaptiveRouter && i < total) {
+        const iterChanged = resolveChangedPaths
+          ? resolveChangedPaths(workspaceDir)
+          : changedFilesSince(workspaceDir, iterStartSha);
+        const cur: IterationObservation = {
+          diffSignature: [...iterChanged].sort().join("|"),
+          failingChecks: null,
+          failureSignature: null,
+          findingSignatures: [],
+          cumulativeCostUsd: runCostUsd,
+        };
+        stalledIterations = iterChanged.length === 0 ? stalledIterations + 1 : 0;
+        const signals = deriveProgress(cur, prevObservation);
+        prevObservation = cur;
+        const decision = decide(signals, {
+          stalledIterations,
+          repeatedFailureStreak: 0,
+          failingChecks: null,
+        });
+        if (decision.action !== "continue") {
+          process.stderr.write(
+            `${dim(`↳ adaptive router: ${decision.action} — ${decision.reason}`)}\n`
+          );
+          const reason =
+            decision.action === "stop-low-progress"
+              ? "stopped (low progress)"
+              : decision.action === "escalate-pause"
+                ? "paused (needs human)"
+                : "complete";
+          summarize(reason, i);
+          clearState(workspaceDir);
+          return outcome();
+        }
+      }
 
       // Cooldown between iterations.
       if (cooldownMs > 0 && i < total) {

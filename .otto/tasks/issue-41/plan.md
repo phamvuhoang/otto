@@ -22,7 +22,7 @@ Check one off per run.
   `OTTO_ADAPTIVE_ROUTER`), resolve review lenses from `classifyRisk` of the
   iteration's changed paths instead of the static list. Off by default; static
   behavior unchanged when the flag is absent. Pinned by `run-bin`/loop tests.
-- [ ] **5. Adaptive iteration control.** Behind the same flag, feed progress
+- [x] **5. Adaptive iteration control.** Behind the same flag, feed progress
   signals into the policy each iteration and act on the decision (early-stop,
   escalate-pause-with-report, confident-finish). Pinned by loop tests.
 - [ ] **6. Benchmark entry.** Add an `adaptive-router on/off` config to the #40

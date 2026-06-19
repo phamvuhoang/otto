@@ -50,6 +50,7 @@ export {
   writeStageRecord,
   type RunArtifact,
   type RunManifest,
+  type SafetyEvent,
   type StageRecord,
 } from "./run-report.js";
 export {
@@ -57,6 +58,33 @@ export {
   runInspect,
   type InspectDeps,
 } from "./inspect.js";
+export {
+  formatAuditReport,
+  runMemory,
+  type MemoryDeps,
+} from "./memory-cli.js";
+export {
+  allocateMemoryId,
+  auditMemory,
+  detectConflicts,
+  DEFAULT_FREQUENT_USE,
+  listMemoryIds,
+  memoryDir,
+  memoryRecordPath,
+  memoryStatus,
+  parseMemoryRecord,
+  projectLearnings,
+  readMemoryRecord,
+  readMemoryRecords,
+  supersede,
+  touchMemory,
+  writeMemoryRecord,
+  type AuditReport,
+  type MemoryRecord,
+  type MemoryStatus,
+  type MemoryTrust,
+  type Supersession,
+} from "./memory.js";
 export {
   parseEvalConfigs,
   runEval,
@@ -87,6 +115,24 @@ export {
   type PolicyContext,
   type PolicyDecision,
 } from "./policy.js";
+export {
+  checkApprovalRequired,
+  checkCommand,
+  checkNetworkDomain,
+  checkWritePath,
+  DEFAULT_POLICY,
+  parseSafetyPolicy,
+  readSafetyPolicy,
+  type PolicyViolation,
+  type PolicyViolationKind,
+  type SafetyPolicy,
+} from "./safety-policy.js";
+export {
+  TAINT_SOURCES,
+  UNTRUSTED_WARNING,
+  wrapUntrusted,
+  type TaintSource,
+} from "./taint.js";
 export {
   compareTrajectories,
   scoreTrajectory,

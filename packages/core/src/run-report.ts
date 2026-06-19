@@ -8,7 +8,41 @@ import {
 import { dirname, join } from "node:path";
 
 import type { AgentRuntimeId } from "./agent-runtime.js";
+import type { PolicyViolationKind } from "./safety-policy.js";
+import type { TaintSource } from "./taint.js";
 import type { TokenUsage } from "./tokens.js";
+
+/**
+ * A safety-relevant occurrence recorded in a run's trajectory so policy
+ * violations and untrusted-input handling are visible to evaluation scoring and
+ * to a maintainer reading the bundle (issue #43 P4).
+ *
+ * Discriminated by `category`: a `policy-violation` carries the
+ * {@link PolicyViolationKind} an evaluation predicate flagged; a `taint` event
+ * records that an untrusted {@link TaintSource} was wrapped/surfaced. `blocked`
+ * captures the issue's "blocked or reported" distinction — `true` when Otto
+ * prevented the action, `false` when it only reported it (taint is always
+ * reported, never blocked).
+ *
+ * INERT this slice: the type and the optional `safetyEvents` fields exist, but no
+ * bin/loop populates them yet — the boundary checks that emit them land in a
+ * later slice, so a recorded trajectory simply carries none today.
+ */
+export type SafetyEvent =
+  | {
+      category: "policy-violation";
+      kind: PolicyViolationKind;
+      subject: string;
+      message: string;
+      blocked: boolean;
+    }
+  | {
+      category: "taint";
+      kind: TaintSource;
+      subject: string;
+      message: string;
+      blocked: boolean;
+    };
 
 /**
  * A named pointer to a file Otto produced during a run (rendered prompt, NDJSON
@@ -34,6 +68,8 @@ export type StageRecord = {
   apiErrorStatus: string | null;
   /** Workspace-relative NDJSON log path for this stage, when known. */
   logPath?: string;
+  /** Safety events emitted while this stage ran (issue #43); absent = none. */
+  safetyEvents?: SafetyEvent[];
   startedAt: string;
   finishedAt: string;
 };
@@ -63,6 +99,8 @@ export type RunManifest = {
   /** Maintainer-facing next-action hint for that exit reason. */
   nextAction?: string;
   artifacts: RunArtifact[];
+  /** Run-level safety events not tied to a single stage (issue #43); absent = none. */
+  safetyEvents?: SafetyEvent[];
   startedAt: string;
   finishedAt?: string;
 };

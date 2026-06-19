@@ -90,6 +90,8 @@ If, while doing the task, you discover a NEW durable, reusable learning — a re
 
 Dedupe against existing entries and prune anything no longer true. This file is committed WITH your task commit (it is git-tracked) — do NOT make a separate commit for it. The bar is durable AND reusable: do NOT record routine or one-off task details.
 
+@include:governed-memory.md
+
 # FINAL RULES
 
 ONLY WORK ON A SINGLE TASK.

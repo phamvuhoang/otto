@@ -1,0 +1,16 @@
+{
+  "id": "2026-06-20T00-41-30-000Z-43-1",
+  "content": "Safety policy (issue #43 P4) starts as a PURE permissive substrate safety-policy.ts, modelled on state.ts/memory.ts. NOTE the name: existing policy.ts is the #41 adaptive-ROUTER policy (unrelated); #43's config is .otto/policy.json and its module is safety-policy.ts to avoid the collision. SafetyPolicy carries EXACTLY the six issue-scoped rule lists (allowedWriteRoots, blockedCommands, allowedNetworkDomains, secretPatterns, highRiskGlobs, approvalRequiredActions), all string[]. Crux: an EMPTY list means 'no restriction', so DEFAULT_POLICY (all empty, frozen) leaves trusted local plan/PRD workflows unchanged (metric #3) — a repo opts INTO governance by populating the file. parseSafetyPolicy never throws (non-object/array → defaults, non-array field → [], non-string elements filtered) and returns a FRESH object. readSafetyPolicy reads .otto/policy.json, absent/malformed → DEFAULT_POLICY (fails OPEN). INERT this slice (exported from index.ts, wired by no bin/loop). Pinned by safety-policy.test.ts.",
+  "category": "convention",
+  "sourceRun": "2026-06-20T00-40-00-000Z-12323",
+  "taskKey": "issue-43",
+  "scope": [
+    "packages/core/src/safety-policy.ts",
+    "packages/core/src/__tests__/safety-policy.test.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T00:41:30.000Z",
+  "useCount": 0
+}

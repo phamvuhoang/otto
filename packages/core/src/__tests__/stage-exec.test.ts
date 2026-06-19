@@ -122,3 +122,69 @@ describe("executeStage token mode", () => {
     );
   });
 });
+
+describe("executeStage safety policy", () => {
+  let root: string;
+  let workspaceDir: string;
+  let packageDir: string;
+  const policyStage: Stage = { name: "implementer", template: "policy.md" };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "otto-stage-policy-"));
+    workspaceDir = join(root, "workspace");
+    packageDir = join(root, "pkg");
+    mkdirSync(join(packageDir, "templates"), { recursive: true });
+    mkdirSync(join(workspaceDir, ".otto"), { recursive: true });
+    writeFileSync(
+      join(packageDir, "templates", policyStage.template),
+      "x=!`echo hi`\n",
+      "utf8"
+    );
+    mocks.runStage.mockReset().mockResolvedValue(ok);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("emits no safety events under an absent policy", async () => {
+    const sr = await executeStage({
+      stage: policyStage,
+      vars: {},
+      workspaceDir,
+      packageDir,
+      iteration: 1,
+      maxRetries: 0,
+    });
+    expect(sr.safetyEvents).toBeUndefined();
+    expect(mocks.runStage.mock.calls[0][1]).toBe("x=hi\n");
+  });
+
+  it("records a blocked policy-violation safety event for a denied command", async () => {
+    writeFileSync(
+      join(workspaceDir, ".otto", "policy.json"),
+      JSON.stringify({ blockedCommands: ["echo"] }),
+      "utf8"
+    );
+    const sr = await executeStage({
+      stage: policyStage,
+      vars: {},
+      workspaceDir,
+      packageDir,
+      iteration: 1,
+      maxRetries: 0,
+    });
+    expect(mocks.runStage.mock.calls[0][1]).toBe("x=\n"); // command skipped
+    expect(sr.safetyEvents).toEqual([
+      {
+        category: "policy-violation",
+        kind: "blocked-command",
+        subject: "echo hi",
+        message: 'command matches blocked pattern "echo"',
+        blocked: true,
+      },
+    ]);
+  });
+});

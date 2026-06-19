@@ -1,0 +1,40 @@
+# Issue #42 — Governed memory lifecycle: plan
+
+Bite-sized, testable slices. Each ships a deterministic, CI-safe module that is
+inert (exported, unwired) until a later slice consumes it — so no slice can
+regress existing runs.
+
+- [x] **1. Data substrate (`memory.ts`).** `MemoryRecord` type + `MemoryTrust`/
+      `MemoryStatus` enums; `allocateMemoryId(date, suffix)`; `memoryDir`/path
+      helpers; `parseMemoryRecord` (safe defaults, rejects non-objects);
+      `writeMemoryRecord`/`readMemoryRecord`/`listMemoryIds`/`readMemoryRecords`
+      (absent/malformed → `null`/`[]`, never throws). Export from `index.ts`.
+      Inert. Pinned by `memory.test.ts`. *(this run)*
+- [x] **2. Freshness policy.** Pure `memoryStatus(record, now)` deriving
+      `active`/`stale` from `expiresAt`/`revalidateAfterDays` vs `now`/`createdAt`/
+      `lastUsedAt`; `touchMemory(record, now)` bumping `lastUsedAt`/`useCount`.
+      Inert. Pinned by `memory.test.ts`. *(this run)*
+- [x] **3. Contradiction handling.** Pure `supersede(newer, older)` (sets
+      `older.status="superseded"`, `newer.supersedes=older.id`) and
+      `detectConflicts(records)` (same `scope`+`category`, both `active`,
+      different `content`). Inert. Pinned by `memory.test.ts`. *(this run)*
+- [x] **4. Audit.** Pure `auditMemory(records, now)` → `AuditReport`
+      (`stale[]`, `conflicting[]`, `frequentlyUsed[]`, counts). Inert. Pinned by
+      `memory.test.ts`. *(this run)*
+- [x] **5. `otto-memory` bin.** `runMemory(argv, deps)` with an `audit`
+      subcommand → `formatAuditReport(report)`, mirroring `runInspect`. Wire
+      `apps/cli/bin/otto-memory.js` + `package.json` `bin`. Pinned by
+      `memory-cli.test.ts` + `scripts/otto-memory-bin.test.mjs`. *(this run)*
+- [x] **6a. LEARNINGS projection.** Pure `projectLearnings(records, now)`
+      rendering the ACTIVE records (derived-stale + superseded excluded) into the
+      canonical `# Otto learnings` four-section view; `otto-memory project`
+      subcommand prints it raw (redirectable into `.otto/LEARNINGS.md`). Pinned by
+      `memory.test.ts` + `memory-cli.test.ts`. *(this run)*
+- [x] **6b. Compaction rules + record-writing.** Document the compaction tiers
+      (active context / summarized state / reconstructable artifacts / durable
+      memory). Define how a run writes a record on a new learning (template prose).
+      Shipped as a shared fragment `templates/governed-memory.md`, `@include`d by
+      both LEARNINGS sections (`prompt.md` + `ghprompt-workflow.md`); pinned by
+      `governed-memory.test.ts`. *(this run)*
+- [x] **7. Docs.** README feature bullet + `otto-memory audit` example;
+      ARCHITECTURE module rows + a "Governed memory lifecycle" section. *(this run)*

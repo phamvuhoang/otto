@@ -18,6 +18,8 @@ Full issue detail (body + comments) spilled to: @spill?:issue.json=`otto-linear 
 
 `Read` that file to get the full body and comments before acting on the issue.
 
+@include:untrusted-content.md
+
 </issue>
 
 # THE TASK

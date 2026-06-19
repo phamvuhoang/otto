@@ -1,0 +1,21 @@
+{
+  "id": "2026-06-20T04-43-00-000Z-43-4",
+  "content": "Surfacing taint in prompts (issue #43 P4 slice 4) is template PROSE, not code — and the first slice that touches a live prompt (but NOT the runner). There is no render.ts tag that calls wrapUntrusted (templates can't call TS), so taint is surfaced the same way governed-memory/quality-report are: ONE shared fragment templates/untrusted-content.md @include'd at every untrusted entry block. The five blocks an unattended run ingests externally-authored content through: ghafk-issue.md <issue>, ghafk.md <issues-full-file>, linearafk-issue.md <issue>, linearafk.md <issues-full-file>, apply-review.md <review-doc>. CRUX: the fragment repeats the canonical UNTRUSTED_WARNING from taint.ts VERBATIM on a single unwrapped line — untrusted-content.test.ts imports the constant and asserts the rendered fragment toContain's it, so prompt surfacing can never drift from the slice-3 code substrate; a '> ' blockquote prefix or mid-sentence line-wrap BREAKS that toContain (the warning sentence must be one contiguous line). The plan/PRD {{ INPUTS }} in afk.md is NOT wrapped — plan/PRD is the TRUSTED local input (success metric #3); only externally-authored sources are tainted. Shell tag bodies untouched, so the ghafk/linear RCE render-contract invariants still hold (an @include line is not a shell tag). Pinned by untrusted-content.test.ts.",
+  "category": "convention",
+  "sourceRun": "2026-06-20T04-42-00-000Z-12323",
+  "taskKey": "issue-43",
+  "scope": [
+    "packages/core/templates/untrusted-content.md",
+    "packages/core/templates/ghafk-issue.md",
+    "packages/core/templates/ghafk.md",
+    "packages/core/templates/linearafk-issue.md",
+    "packages/core/templates/linearafk.md",
+    "packages/core/templates/apply-review.md",
+    "packages/core/src/__tests__/untrusted-content.test.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T04:43:00.000Z",
+  "useCount": 0
+}

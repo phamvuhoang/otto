@@ -2,362 +2,85 @@
 
 ## Conventions
 
-- **The harness evaluation suite (issue #40 P1) starts as a PURE scoring
-  substrate over the #39 evidence bundle, deterministic-first.** `eval.ts`
-  exports `EvalSignals` + `scoreTrajectory(manifest, stages)` — derives ONLY the
-  signals computable from a recorded trajectory (succeeded [exitReason ∈
-  {complete,done}], exitReason, completedIterations, stageCount, errorStageCount,
-  costUsd, totalTokens, elapsedMs). No I/O, no model calls → this IS the "cheap
-  deterministic subset" the issue wants in CI. **The split that matters:**
-  trajectory-derived signals (here) vs. fixture-derived ones (tests-passed,
-  diff-correctness, safety-events) that need the runner replaying a fixture — the
-  latter are LATER plan tasks, kept out of this module so it stays pure/CI-safe.
-  `elapsedMs` is `null` (never NaN) when un-finalized or a timestamp is
-  unparseable. Kept INERT (re-exported from `index.ts` like `run-report.ts`/
-  `task-key.ts`, but not wired into any bin/loop) so it can't regress runs;
-  later tasks build the comparison report → benchmark-task model → `otto-eval`
-  runner → fixtures on top. `succeeded` deliberately excludes `done with
-  failures` (matches the loop's own `sawFailure` distinction). Pinned by
-  `eval.test.ts` (in-memory manifest/stage fixtures, no fs). Plan/spec:
-  `.otto/tasks/issue-40/`. **Task 2 added the comparison formatter
-  `compareTrajectories(LabelledSignals[])`** — a pure markdown table (one row per
-  labelled run, one column per `EvalSignals` field) that marks best/worst per
-  DIRECTIONAL signal: `succeeded` higher-is-better, `errorStageCount`/`costUsd`/
-  `totalTokens`/`elapsedMs` lower-is-better; `exitReason`/`completedIterations`/
-  `stageCount` are shown but NOT ranked (no natural direction). A column is marked
-  only with a real spread (≥2 comparable runs AND min!==max), so single-run /
-  all-tied tables carry no `(best)`/`(worst)`; `null` values (e.g. un-finalized
-  `elapsedMs`/`completedIterations`) are excluded from ranking and rendered `—`.
-  Numbers are rendered EXACT (`String(...)`, cost as `$<raw>`) — no rounding — so
-  a marked-best cell never displays equal to a marked-worst one. Still INERT
-  (exported, not wired). Adding an export means editing `index.ts`'s NAMED eval
-  re-export (it's `export { ... } from "./eval.js"`, not `export *`). Pinned by
-  `eval.test.ts` "compareTrajectories" (empty / table shape / best-worst /
-  succeeded-direction / tie / single-run / null-excluded).
-- **The run bundle is rendered by a standalone `otto-inspect` bin, not a loop
-  flag (issue #39 P0 task 5).** `inspect.ts` splits into a PURE
-  `formatRunReport(manifest, stages)` → string (the testable core, no I/O) and
-  `runInspect(argv, deps)` → exit code (resolves `OTTO_WORKSPACE ?? cwd`, reads
-  the bundle, prints). Run-id resolution: an explicit id, else `latest`/no-arg →
-  `listRunIds(workspaceDir).at(-1)` (run ids are lexicographically sortable, so
-  the LAST of the ascending sort is newest — that's why `allocateRunId` is
-  timestamp-prefixed). `listRunIds` lives in `run-report.ts` (the I/O module,
-  beside the other `.otto/runs` helpers), filters to DIRECTORIES, absent →
-  `[]`. The report deliberately suppresses the `exit:`/`next:` lines when
-  `finishedAt` is absent (un-finalized/interrupted run — see the finalize
-  bullet's interrupt gap) rather than inventing an exit reason; it shows
-  `? / <planned>` iterations instead. `runInspect` follows the
-  `runLinearAuth` shape (injectable `{env,cwd,out,err}` deps,
-  returns an exit code the thin bin `process.exit`s) — NOT `runBin`, because
-  inspect is a read-only reader with no loop/stages/preflight. New bin wired in
-  `apps/cli/package.json` `bin` + `apps/cli/bin/otto-inspect.js`; exported from
-  `index.ts`. Pinned by `inspect.test.ts` (format finalized/un-finalized +
-  runInspect explicit/latest/unknown-id/no-runs) and `run-report.test.ts`
-  (`listRunIds`). **Issue-39 is COMPLETE — task 6 (docs) landed the run-evidence-bundle
-  prose in README ("Why Otto" bullet + `otto-inspect latest` example + the bin in
-  "How it works") and a `## Run evidence bundle` section in `docs/ARCHITECTURE.md`
-  (layout / run-id format / inspect command) + `run-report.ts`/`inspect.ts`
-  module-map and index-re-export rows. Prose-only, NO doc-contract test: a stable
-  bundle layout + a single read-only command is low drift risk, and the plan
-  explicitly scoped task 6 as "doc-contract test if a drift risk emerges, otherwise
-  prose only" — adding one would be over-engineering. The existing
-  `agent-runtime-doc-contract`/`linear-cli-docs`/`quality-report-samples` doc tests
-  do NOT cover the bundle, and the additive prose did not trip them.**
-- **The run manifest is finalized inside `summarize`, NOT at each return site
-  (issue #39 P0 task 4).** `runLoop` writes the initial manifest at loop start
-  (task 2) and re-writes the WHOLE manifest on exit via a best-effort
-  `finalizeManifest(reason, completed)` closure (`writeManifest` overwrites, so
-  finalize reconstructs every field — there is no partial update). Crux: every
-  terminal path already funnels through the `summarize(reason, iterations)`
-  helper, so finalize is called from INSIDE `summarize` (one call site) rather
-  than threading it through all 8 `return outcome()` sites — `reason` →
-  `exitReason` + `nextActionFor(reason)` → `nextAction`, the `iterations` arg →
-  `completedIterations`, plus live `runCostUsd`/`runTokenUsage`, the ACTIVE
-  runtime (post-auto-switch), `collectArtifacts()`, and `finishedAt`.
-  `startedAt` is captured once into `manifestStartedAt` and reused by both the
-  initial write and finalize (so the bundle's span is honest). **Finalize is
-  `try/catch`-swallowed** like the initial write + `recordStage` (a bundle write
-  must never break a run). **`collectArtifacts()` always links the NDJSON logs
-  DIR** (`.otto-tmp/logs`, workspace-relative — durable, unlike the per-stage
-  rendered prompts which are cleaned in `finally` before finalize runs) and
-  conditionally `.otto/review-followups.md` when it exists. **Scope gap to know:
-  the `process.exit()` interrupt paths (SIGINT/SIGTERM/keyboard quit via
-  `gracefulExit`) do NOT call `summarize`, so an interrupted run leaves only the
-  INITIAL (un-finalized) manifest** — acceptable for "100% have a manifest", but
-  finalizing interrupts is deferred (would need a synchronous finalize in
-  `gracefulExit`). **Test interaction:** the task-2 "writes an initial run
-  manifest" test completes via the sentinel, so it now reads the FINALIZED
-  manifest — its `artifacts).toEqual([])` assertion was dropped (finalize
-  populates artifacts); the identity fields (bin/mode/inputs/runtime/
-  branchStrategy/iterations/startedAt) survive both writes unchanged. Pinned by
-  `loop.test.ts` "finalizes the run manifest on terminal paths" (complete / done
-  / budget / done-with-failures / review-followups artifact).
-- **Per-stage records are written by a `recordStage` closure in `runLoop`, with
-  the panel recording its own substages (issue #39 P0 task 3).** `runLoop` holds
-  a monotonic `stageSeq` counter + a `recordStage(iteration, stageName, sr,
-  startedAt)` closure that normalizes a `StageResult` into a `StageRecord` and
-  `writeStageRecord`s it under the bundle's `stages/`. **Recording is wrapped in
-  `try/catch` and swallows — a bundle write must NEVER break a run** (mirrors the
-  initial-manifest write). It captures `startedAt = nowIso()` BEFORE the retry
-  loop (so the timestamp spans all retries/waits) and stamps `finishedAt` at
-  write time; `runtimeId` is `sr.runtimeId ?? activeAgentId` (test `ok()` helpers
-  omit `runtimeId`, so the fallback matters). **The gate stage is recorded BEFORE
-  the sentinel early-return**, so a run that completes on iteration 1 still leaves
-  a gate record. **Panel split:** a panel stage is NOT given an umbrella
-  "reviewer" record (`if (!usePanel) recordStage(...)`); instead the loop threads
-  the same closure into `runPanel` as `recordStage?: (stageName, sr, startedAt)`,
-  and the panel calls it once per substage — **by lens NAME** for each lens
-  (free text from `OTTO_REVIEW_LENSES`, sanitized into the filename by
-  `writeStageRecord`), then `review-verify`, then `review-synth`. Each panel
-  substage captures its own `startedAt` before its `executeStage`; the verify
-  record is written BEFORE the budget-stop check so a budget-halted verify is
-  still recorded. **`StageRecord.logPath` is left undefined for now** — the real
-  NDJSON path is computed inside `executeStage` (its filename embeds a fresh
-  `new Date()` timestamp, so re-deriving it in the loop would NOT match the
-  actual file); surfacing it needs `executeStage` to return the path, deferred to
-  a later task (manifest-level artifact links are task 4). Failed stages (retries
-  exhausted → throw → `break`) are not recorded here either (no `StageResult`);
-  that terminal-failure record is task-4 scope. Pinned by `loop.test.ts` ("writes
-  one stage record per executed stage", "records the gate stage even when it hits
-  the sentinel", "hands the panel a recordStage callback and does not
-  double-record") + `panel.test.ts` ("records each substage via recordStage").
-- **Run evidence bundle lives under `.otto/runs/<run-id>/` (issue #39 P0).** Pure
-  module `run-report.ts` mirrors `state.ts` (fs + JSON, absent/malformed → safe
-  null/`[]`, injectable `Date`/`pid`): `RunManifest` (manifest.json: bin/mode/
-  inputs/runtime/branchStrategy/iterations/cost/tokens/exitReason/nextAction/
-  artifacts/timestamps) + per-stage `StageRecord`s under `stages/`. **Key shape
-  decision: the `stages/` DIRECTORY is the stage list — the manifest does NOT
-  duplicate it** (`readStageRecords` discovers by sorted filename), so there's no
-  two-source sync. `allocateRunId(date?,pid?)` = ISO timestamp (`:`/`.`→`-`) +
-  `-<pid>` → lexicographically sortable (so "latest" is a plain string sort) and
-  collision-safe per host. Stage filenames are `<seq4>-iter<n>-<stage>.json` with
-  the stage segment sanitized to `[A-Za-z0-9_-]` (panel lens names from
-  `OTTO_REVIEW_LENSES` are free text → a filename). Bundles go in `.otto/` (durable
-  like `state.json`), NOT `.otto-tmp/`; raw `.otto-tmp/logs` is untouched. Pinned by
-  `run-report.test.ts`. **Task 2 wired it into the loop:** `runLoop` calls
-  `allocateRunId()` + `writeManifest()` ONCE at loop start (right after the version
-  banner, after the resume/runtime-restore block so the manifest's `runtime` matches
-  the live `activeAgentId`/`activeAgentDisplayName`, incl. a fallback restored on
-  resume). `branchStrategy` is a new optional `LoopOptions` field threaded from
-  run-bin's `resolved.strategy`. The initial manifest seeds `costUsd:0`,
-  `tokenUsage:emptyTokenUsage()`, `artifacts:[]`, `iterations:total` (the planned/
-  resumed total, not the arg) + `startedAt` — later tasks (4) finalize the cost/token/
-  exit fields and (3) write stage records. **runId is allocated fresh per `runLoop`
-  invocation, NOT reused across resume** (RunState has no runId); a resumed run starts
-  a new bundle. `.otto/runs/` is added to the workspace `.gitignore` by
-  run-bin's `ensureStateGitignored` (now loops over `[".otto/state.json",
-  ".otto/runs/"]`, tracking `existing` so the second append sees the first). The
-  watch path's inner `runLoop` is NOT threaded `branchStrategy` (optional → undefined
-  in watch-run manifests; out of task-2 scope). Pinned by `loop.test.ts`
-  "writes an initial run manifest at loop start".
-- **Agent-runtime docs span 5 surfaces, pinned by one doc-contract test, and
-  document Codex HONESTLY (issue #24 P5).** The runtime feature is documented in
-  README (flags/env lists + a `--print-config` example), `docs/CLI.md` (a
-  `## Agent runtime (--agent)` section — anchor `#agent-runtime---agent`, also in
-  the TOC), `docs/CONFIG.md` (env-var rows + a runtime-aware preflight note),
-  `SECURITY.md` (per-runtime credential/sandbox: claude `~/.claude`+`--settings`;
-  codex `~/.codex/auth.json`/`OPENAI_API_KEY`+its own `--sandbox`), and
-  `docs/ARCHITECTURE.md` (a `### Agent runtime abstraction` subsection). All five
-  are drift-proofed by `scripts/agent-runtime-doc-contract.test.mjs`, which
-  **parses `AGENT_DISPLAY_NAMES`/`DEFAULT_AGENT` + the flag names from source**
-  (not hardcoded) so adding a runtime id forces the docs to grow — same pattern as
-  `security-doc-contract`/`quality-report-samples`/`migration-doc-contract`. **The
-  framing decision to preserve:** Codex is documented as *selectable* (flag/env/
-  config), *preflighted*, *model-env-aware*, and *fallback-configurable*, but its
-  **execution adapter is explicitly "not yet shipped"** (a real `--agent codex`
-  run exits "not implemented yet") — do NOT let a future doc edit claim Codex
-  *runs* until the BLOCKED adapter lands. The test's "no doc claims Otto runs only
-  Claude" case guards the opposite drift. **The four P5 smoke scenarios needed no
-  new harness — they were already unit-tested** (`cli-help.test.ts`/`loop.test.ts`
-  for default config/banner + runtime visibility, `preflight.test.ts` for
-  codex-preflight-fails-clean, `loop.test.ts` for the auto-switch mocked-limit
-  path); the doc-contract test is the only net-new test (YAGNI on redundant smoke).
-- **Switch-on-limit is loop-orchestration, not a runner change (issue #24 P4).**
-  `runLoop` gained `fallbackAgentId`/`fallbackAgentDisplayName`/`autoSwitchOnLimit`
-  (from run-bin's resolved `fallback.*`, threaded through `runWatch` too). The
-  active runtime is a **mutable** `activeAgentId`/`activeAgentDisplayName` (starts
-  at the primary `agentId`); EVERY downstream seam that used `agentId`/
-  `agentDisplayName` now reads the `active*` vars (stage banner, executeStage +
-  panel `agentId`, failure `stageLogPath`, summary) so they track the live runtime
-  after a switch. The switch happens **inside the existing rate-limit catch** in
-  `loop.ts`, AFTER the accounting rollback to `accountingSnapshot` (so budget/token
-  totals survive) and BEFORE the wait/halt path: `if (autoSwitchOnLimit &&
-  fallbackAgentId && activeAgentId !== fallbackAgentId)` → reassign `activeAgentId`
-  to the fallback, set `switched=true`, print `↪ auto-switch on rate limit: <from>
-  → <to> for iteration N <stage>`, `persist(i,"running")`, `continue` the `for(;;)`
-  retry loop (runOnce closes over the mutable `activeAgentId`, so the retry runs on
-  the fallback). **Only ONE switch** — once `activeAgentId === fallbackAgentId` the
-  guard is false, so a fallback that ALSO limits falls through to the normal
-  wait/halt (no ping-pong, matches the "switched once" summary). `RunState.agent`
-  (new optional field, `state.ts`) persists the active runtime each `persist()`;
-  on resume, `if (resuming && prior.agent && prior.agent !== agentId)` restores it
-  (`switched=true`, display from `AGENT_DISPLAY_NAMES`) so a resumed run keeps the
-  fallback — `--fresh` clears state → back to primary. Summary shows `runtime:
-  <primary> -> <active> (switched once: rate limit)` when switched, else `<active>`.
-  Pinned by `loop.test.ts` "auto-switch on limit" (claude→codex, codex→claude,
-  off→wait, fallback-also-limits→wait, resume-keeps-fallback); the test reads the
-  retry's runtime via `runStage.mock.calls[n][6].runtime.id` (the mocked
-  `getAgentRuntime` returns `{id}`). **End-to-end cross-provider switching is still
-  gated on the BLOCKED Codex adapter** — a real switch to codex hits
-  `getAgentRuntime`'s "not implemented" throw; the orchestration is provider-neutral
-  and fully unit-tested with mocks, and becomes runnable when the codex adapter lands.
-- **Fallback-on-limit config is parsed + reported but inert (issue #24 P4,
-  config slice).** `agent-runtime.ts` adds `resolveFallback({flagAgent, envAgent,
-  configAgent, flagAutoSwitch, envAutoSwitch, configAutoSwitch})` →
-  `{agent?: ResolvedAgentRuntime, autoSwitch}` and `readFallbackConfig(workspaceDir)`
-  → `{agent?, autoSwitch?}` (reads `.otto/config.json` `fallbackAgent` string +
-  `autoSwitchOnLimit` boolean; wrong-typed dropped). **Two deliberate asymmetries
-  vs. `resolveAgentRuntime`:** (1) the fallback agent has **NO default** — unset =
-  no fallback (returns `{autoSwitch}` with no `agent`), because switching
-  providers must be explicit; (2) auto-switch is a boolean with precedence
-  flag(true)→env-truthy→config→false, where env-truthy = `1|true|yes|on`
-  (case-insensitive, via `isTruthyEnv`) and an explicit falsy env (`0`/`false`)
-  WINS over a `true` config (blank env falls through). The fallback agent reuses
-  `parseAgentId` so an invalid `OTTO_FALLBACK_AGENT`/config `fallbackAgent` throws
-  (named for `--print-config` reporting). Wiring **mirrors the `agent` block in
-  run-bin exactly**: resolved into `fallback`/`fallbackError`, reported by
-  `--print-config` (exit 0), **fatal (exit 1) on a real run** right after the
-  agentError guard. `--print-config` shows one `fallback` line:
-  `<id> (<name>, <source>) · auto-switch on|off` when an agent is set, else
-  `auto-switch on · no fallback agent set` (misconfig warning) when only switch is
-  on, else `off`, else `invalid (<err>)`. This slice resolved config only; the
-  actual switch-on-limit at the retry/stage boundary now lives in `loop.ts` (see
-  the switch-on-limit bullet above). Default-off keeps Claude behavior unchanged.
-  Pinned by `agent-runtime.test.ts`
-  (resolveFallback precedence/truthy/no-default/throw + readFallbackConfig),
-  `cli-help.test.ts` (`--fallback-agent`/`--auto-switch-on-limit` parse +
-  print-config fallback line incl. the no-agent warning), `run-bin.test.ts`
-  (env selection + invalid-reported + invalid-fatal).
-- **Provider-specific model env is runtime-aware via `resolveModelSelection`
-  (issue #24 P3).** `runner.ts`'s `resolveModelSelection(runtimeId, env)` picks
-  `OTTO_<RUNTIME>_MODEL` (e.g. `OTTO_CLAUDE_MODEL` / `OTTO_CODEX_MODEL`) over the
-  provider-neutral `OTTO_MODEL`; an empty/whitespace override falls THROUGH to
-  the generic value (so an unset-but-present var doesn't suppress `OTTO_MODEL`).
-  It returns `{spec, source}` — `source` is the literal env var name, used by
-  `--print-config`'s model line (`<value> (<source>)`, else
-  `<runtime> CLI default (OTTO_<RUNTIME>_MODEL / OTTO_MODEL unset)`). `runStage`
-  feeds `resolveModelSelection(runtime.id)?.spec` into the EXISTING
-  `resolveModelArgs` (kept as the single `--model` arg builder; not duplicated),
-  so the per-runtime override reaches the spawned CLI — `runStage`'s old
-  `resolveModelArgs(process.env.OTTO_MODEL)` call is the only wiring that
-  changed. `cli-help.ts` imports `resolveModelSelection` from `runner.js` (no
-  cycle: runner doesn't import cli-help). Pinned by `runner.test.ts`
-  (precedence/leak/empty/trim) + `cli-help.test.ts` (print-config model line).
-  Comprehensive README/CLI.md/CONFIG.md docs deferred to P5 (help text +
-  print-config touched here, mirroring the scope-flag commits).
-- **Runtime-aware preflight: `runPreflight(opts.agentId)` shows the SELECTED
-  runtime's CLI/auth rows, not both (issue #24 P3).** `runPreflight` takes an
-  optional `agentId`; default/`claude` → `claude CLI`+`claude auth` rows
-  (unchanged), `codex` → `codex CLI`+`codex auth` rows INSTEAD (Claude-specific
-  checks are not shown blindly for a codex run). The git/gh/linear rows are
-  per-bin and runtime-independent. Threaded from `printConfig`'s `agentId` into
-  the `runPreflight` call. **The codex CLI row probes runnability, not PATH
-  presence:** it requires `codex --version` to exit 0 via a new injectable
-  `probeVersion` probe (default `probeVersionBin` = `spawnSync(name,["--version"])
-  .status===0`, never throws) — because the `@openai/codex` npm shim sits on PATH
-  while its vendored native binary can be missing/broken, so `which codex`
-  succeeds but the binary is unusable (spike gap #5). New `PreflightProbes`
-  fields: `probeVersion(name)` and `env` (for `OPENAI_API_KEY`); the
-  `allPresentProbes` test helper must supply both. Codex auth = `~/.codex/auth.json`
-  OR `OPENAI_API_KEY`. Pinned by `preflight.test.ts` (injected probes: usable /
-  shim-broken / missing / auth-file / api-key / none) + `cli-help.test.ts`
-  (host-independent: match preflight rows by the `[✓✗] <label>` glyph prefix, NOT
-  bare `claude CLI` — the model line `"claude CLI default (OTTO_MODEL unset)"`
-  also contains that substring). The full codex `AgentRuntime` adapter
-  (`parseResultEvent`) stays BLOCKED until the `exec --json` schema is verified on
-  a host that can run codex — see the gotcha below.
-- **Codex spike lives in `scripts/`, not `src/` (issue #24 P2).** The Codex CLI
-  adapter spike is a *throwaway harness* + findings doc, NOT production code:
-  `scripts/codex-spike.mjs` (candidate `parseCodexEvents`/`detectCodexRateLimit`/
-  `codexPreflight`/`buildCodexArgs` + a runnable smoke) pinned by
-  `scripts/codex-spike.test.mjs` (auto-globbed by `pnpm test`), findings in
-  `docs/spikes/codex-runtime-spike.md`. Deliberately OUTSIDE `packages/core/src/`
-  so (a) the unverified Codex parsing doesn't pollute the runner hot path (honours
-  the P0 "stays generic until the spike reveals the shape" call) and (b) it ships
-  in no tarball (`scripts/` isn't in core's package `files`). **P3 promotes** the
-  verified pieces into a real `codexRuntime` `AgentRuntime` adapter + preflight
-  rows. Key spike findings the P3 adapter must act on: Codex is driven by
-  `codex exec --json` (JSONL thread/item events — **schema UNVERIFIED**, the live
-  smoke was BLOCKED because Codex 0.104.0's vendored native binary is missing here,
-  ENOENT/empty `vendor/`); Codex emits **no USD cost** (only token counts → budget
-  reports $0 until cost is derived); it has **no `--settings` sandbox** (uses its
-  own `--sandbox <mode> --ask-for-approval never`, so codex's adapter sets
-  `supportsSandboxSettings:false`); auth is `~/.codex/auth.json` OR `OPENAI_API_KEY`;
-  and preflight must check `codex --version` succeeds, not just PATH presence (the
-  npm shim is on PATH even when its native binary is broken).
-- **`AgentRuntime` adapter boundary (issue #24 P0 step 3)** — the runner no
-  longer hardcodes `claude`; everything Claude-specific lives behind an
-  `AgentRuntime` object in `runner.ts`: `{ id, displayName, command,
-  supportsSandboxSettings, buildArgs(stage,promptRel,modelArgs,settings?),
-  parseResultEvent(ev) }`. `claudeRuntime` is the sole adapter (delegates
-  `buildArgs`→`buildClaudeArgs`, `parseResultEvent`→`resultFromEvent(ev,"claude")`);
-  `getAgentRuntime(id)` selects it from a `Partial<Record<AgentRuntimeId,…>>`
-  registry and **throws a clean "not implemented" for `codex`** (defensive
-  backstop — real codex runs are already blocked upstream in run-bin, so this is
-  belt-and-suspenders, NOT the primary guard). `streamClaude`→`streamRuntime`
-  gained a `runtime` param and routes the final result through
-  `runtime.parseResultEvent`, stamping the new **`StageResult.runtimeId`** (the
-  contract's "StageResult identifies the runtime that produced it"); all
-  `claude`-literal log/error strings now use `runtime.command` so claude output
-  is byte-for-byte identical. `runStage` takes the adapter via a new optional
-  `RunStageOptions.runtime` (defaults `claudeRuntime`, so old callers/test mocks
-  are unchanged); `stage-exec` selects it with `getAgentRuntime(opts.agentId ??
-  DEFAULT_AGENT)`. **Test gotcha:** any test that `vi.mock("../runner.js")` must
-  now also stub `getAgentRuntime` (loop.test.ts + stage-exec.test.ts both mock
-  the module) or `executeStage` throws on the undefined import; a `(id)=>({id})`
-  stub suffices since the mocked `runStage` ignores it. **Scope call:** rate-limit
-  detection (`isLimitResult`/`resetsAtFromEvent` in `rate-limit.ts`) was NOT moved
-  behind the adapter — it stays generic until the P2 Codex spike reveals Codex's
-  signal shape (YAGNI; the plan bullet listed it but P0 acceptance doesn't).
-  `supportsSandboxSettings` gates writing the `--settings` file (claude=true →
-  unchanged). Pinned by `runner.test.ts` (`getAgentRuntime` selection + throw,
-  `claudeRuntime` adapter output, `resultFromEvent` runtimeId stamp). The next
-  P0/P2 task is the throwaway Codex spike.
-- **Runtime visibility threading (issue #24 P1 step 2)** — the resolved
-  `{id,displayName}` reaches `runLoop` via two new `LoopOptions`
-  (`agentId`/`agentDisplayName`, default `claude`/`Claude Code`) wired from
-  run-bin's `agent.id`/`agent.displayName`, surfacing on FOUR seams: the version
-  banner (`… (core x) · runtime: <displayName>`), the per-stage banner
-  (`… (stage n/m) · <displayName>`, both color + plain), the NDJSON log filename
-  (`stageLogPath` gained an optional 4th `runtimeId` arg → `-<id>` suffix; passed
-  by `stage-exec.ts` via a new `ExecuteStageOptions.agentId` and by loop's
-  failure-marker call), and the summary line (`· runtime: <id>`). The panel
-  threads it too (`RunPanelOptions.agentId` → each `executeStage`), so lens/synth
-  logs are runtime-labelled. `runWatch` carries `agentId`/`agentDisplayName`
-  through to its inner `runLoop`. **The log suffix is ALWAYS applied on a real
-  run** (claude → `-claude.ndjson`); the "Claude behavior byte-for-byte" rule is
-  about the spawned CLI args/output, not internal artifact filenames, and the
-  roadmap explicitly wants the runtime in the log path. `stageLogPath`'s param is
-  optional so test mocks/older callers stay back-compatible (no suffix when
-  omitted). Pinned by `runner.test.ts` (suffix present/absent), `loop.test.ts`
-  (banner+summary show runtime; claude default), `stage-exec.test.ts` (agentId →
-  filename). The runner still spawns `claude` — adapter extraction is the next
-  plan task (P0 boundary).
-- **Agent runtime selection (`--agent`/`OTTO_AGENT`/config `agent`, issue #24
-  P0/P1 step 1)** is config-parsing + visibility ONLY — the runner still spawns
-  `claude` (no adapter yet). Pure module `agent-runtime.ts`: `AgentRuntimeId =
-  "claude"|"codex"`, `DEFAULT_AGENT="claude"`, `AGENT_DISPLAY_NAMES`,
-  `parseAgentId(raw,source)` (throws clean `… must be one of claude|codex`),
-  `resolveAgentRuntime({flag,env,config})` → `{id,displayName,source}` with
-  precedence **flag → env → config → default** (blank env/config skipped, not an
-  error), and `readAgentConfig(workspaceDir)` reading the `.otto/config.json`
-  `agent` string (never throws; kept separate from `readBranchConfig` to
-  decouple). Wiring **mirrors the OTTO_TOKEN_MODE pattern exactly**: the
-  `--agent` flag is validated in `parseFlags` (throws → clean); an invalid
-  `OTTO_AGENT`/config value is caught in run-bin into `agentError`, **reported by
-  `--print-config` without a stack trace (exit 0) but fatal (exit 1) on a real
-  run**. `--print-config` shows `runtime <id> (<displayName>)` + `runtime source
-  <source>`. Crux: a real run whose resolved `id !== "claude"` **exits 1 with a
-  "not implemented yet" message** rather than silently running Claude — this
-  preserves the issue's "user always knows the active runtime" contract before
-  the Codex adapter exists; `--print-config` still reports the codex selection
-  (read-only diagnostic, no guard). Default stays Claude → behavior unchanged.
-  Pinned by `agent-runtime.test.ts` (parse/resolve/read), `cli-help.test.ts`
-  (`parseFlags --agent` + print-config runtime lines), `run-bin.test.ts`
-  (env-selection + invalid-reported + not-implemented-fatal; the fatal test
-  spies on `console.error` and mocks `process.exit` to throw — `process.stderr.write`
-  spy does NOT capture `console.error`). Spec/plan: `.otto/tasks/issue-24/`.
-
+- **Governed memory (#42 P3) — `memory.ts` + `memory-cli.ts`, modelled on
+  `run-report.ts`; full design in `docs/ARCHITECTURE.md` "Governed memory
+  lifecycle".** Records are one JSON file per id under `.otto/memory/<id>.json`
+  (git-tracked, the **directory IS the list**, no index). Durable gotchas:
+  **three orthogonal axes — `trust` (provenance) vs `confidence` (scalar) vs
+  `status` (lifecycle) — don't collapse them.** Freshness is **DERIVED, not
+  stored** (`memoryStatus`): stale once past `expiresAt` (inclusive) or
+  `revalidateAfterDays` since `lastUsedAt ?? createdAt`, EXCEPT `superseded`
+  which is terminal; **unparseable timestamps are ignored, never staled** (to
+  test that path corrupt BOTH `lastUsedAt` AND `createdAt`, else the
+  `createdAt` fallback drives it). `auditMemory` mixes status on purpose —
+  `stale[]`/counts use DERIVED status, `conflicting[]` (`detectConflicts`)
+  uses STORED status; **don't "fix" the asymmetry.** `counts.conflicting` is
+  PAIRS; `frequentlyUsed` is status-independent (a stale/superseded record can
+  still be frequent). All helpers are PURE (return copies, never mutate); all
+  readers never throw (absent/malformed → safe `null`/`[]`). Pinned by
+  `memory.test.ts` / `memory-cli.test.ts` / `governed-memory.test.ts`.
+- **Memory is INERT on the READ path by design (#42).** `projectLearnings`
+  renders only DERIVED-active records into the canonical four-section
+  `# Otto learnings` view (carrying NO governance metadata — that stays in
+  `otto-memory audit`); `otto-memory project` prints it **raw, no header
+  line**, so `otto-memory project > .otto/LEARNINGS.md` is a clean redirect —
+  but it is **NOT auto-run** (would clobber the hand-curated LEARNINGS superset).
+  The loop still injects `LEARNINGS.md` verbatim via `cat`; records are
+  written by the shared `templates/governed-memory.md` fragment (`@include`d
+  ONCE in BOTH playbook LEARNINGS sections — `prompt.md` + `ghprompt-workflow.md`,
+  disjoint per rendered prompt) and read only by the read-only `otto-memory`
+  bin, so a memory read can't regress a run. Issue #42 COMPLETE (slice 7 = docs;
+  prose-only, no doc-contract test — low drift, substrate already unit-pinned).
+- **Harness eval (#40 P1) — `eval.ts`, pure scoring over the #39 bundle; design
+  in `docs/ARCHITECTURE.md`.** `scoreTrajectory` derives only
+  TRAJECTORY-computable signals (no I/O, no model — the CI-safe subset);
+  fixture-derived signals (tests-passed/diff) are the runner's job. `elapsedMs`
+  is `null` never NaN when un-finalized/unparseable. `succeeded` deliberately
+  EXCLUDES "done with failures" (matches the loop's `sawFailure`).
+  `compareTrajectories` marks best/worst only on DIRECTIONAL signals and only
+  with a real spread (≥2 comparable, min!==max); numbers render EXACT (no
+  rounding) so a marked-best never displays equal to a marked-worst. Pinned by
+  `eval.test.ts`.
+- **Run evidence bundle (#39 P0) — `run-report.ts` + `otto-inspect`; design in
+  `docs/ARCHITECTURE.md` "Run evidence bundle".** `.otto/runs/<run-id>/` =
+  `manifest.json` + per-stage records under `stages/`; **the `stages/`
+  DIRECTORY IS the list — the manifest never duplicates it.** `allocateRunId` is
+  a sortable ISO stamp + pid, so "latest" = `listRunIds().at(-1)` (plain string
+  sort). Durable gotchas: the manifest is finalized INSIDE the single
+  `summarize` helper (one call site, not per return), and finalize +
+  `recordStage` are **try/catch-swallowed — a bundle write must NEVER break a
+  run**; `recordStage` captures `startedAt` BEFORE the retry loop and the GATE
+  stage is recorded BEFORE the sentinel early-return; a panel records its
+  substages by LENS NAME (not an umbrella "reviewer" record). **Known gap: the
+  `process.exit` interrupt paths (SIGINT/SIGTERM) leave only the un-finalized
+  initial manifest** (no synchronous finalize in `gracefulExit`).
+  `StageRecord.logPath` is left undefined (its filename embeds a fresh `Date`,
+  so re-deriving wouldn't match). Pinned by `run-report.test.ts` /
+  `inspect.test.ts` / `loop.test.ts`.
+- **Agent runtime abstraction (#24) — `agent-runtime.ts` + the `runner.ts`
+  `AgentRuntime` adapter; design in `docs/ARCHITECTURE.md`.** Everything
+  Claude-specific lives behind an `AgentRuntime` object; `claudeRuntime` is the
+  sole shipped adapter and `getAgentRuntime("codex")` **throws "not
+  implemented"**. **Test gotcha: any test that `vi.mock("../runner.js")` must
+  ALSO stub `getAgentRuntime`** (a `(id)=>({id})` stub) or `executeStage`
+  throws on the undefined import. Selection precedence is flag→env→config→default;
+  a resolved non-claude id is reported by `--print-config` (read-only, exit 0)
+  but **fatal on a real run** until the adapter ships. Auto-switch-on-limit: **ONE
+  switch only** (inside the rate-limit catch, AFTER the accounting rollback so
+  budget survives); `RunState.agent` persists the active runtime, `--fresh`
+  resets to primary; the fallback agent has **NO default** (switching providers
+  must be explicit). `resolveModelSelection` picks `OTTO_<RUNTIME>_MODEL` over
+  `OTTO_MODEL` (empty falls through). Rate-limit detection stays GENERIC (not
+  behind the adapter — YAGNI until a second runtime's signal shape is known). The
+  runtime suffixes the NDJSON log filename (`-claude.ndjson`) ALWAYS —
+  "byte-for-byte Claude" is about spawned CLI args/output, not artifact filenames.
+  **Codex specifics (from the spike, schema still UNVERIFIED): no USD cost (budget
+  reads $0), no `--settings` sandbox (its own `--sandbox … --ask-for-approval
+  never`, so `supportsSandboxSettings:false`), auth `~/.codex/auth.json` OR
+  `OPENAI_API_KEY`, preflight probes `codex --version` (the npm shim is on PATH
+  even when its native binary is broken).** Pinned by `agent-runtime.test.ts` /
+  `runner.test.ts` / `cli-help.test.ts` / `loop.test.ts` / `run-bin.test.ts`
+  / `preflight.test.ts`.
 - **Branch convention vs. branch prefix (`--branch-convention`, issue #21 P2)** —
   there are now TWO branch-namespace flags and the newer one is canonical. The
   pre-existing `--branch-prefix`/`OTTO_BRANCH_PREFIX`/`config.branchPrefix` is a
@@ -712,6 +435,46 @@
   retry reuses the freed seqs. Any future inline-write-during-attempt artifact
   needs the same snapshot/rollback parity. Pinned by `loop.test.ts` "rolls back
   panel sub-stage records when a panel attempt is retried after a rate limit".
+- **Safety policy (#43 P4) — `safety-policy.ts` + `taint.ts`; full design in
+  `docs/ARCHITECTURE.md` "Safety policy & taint".** **Name gotcha: it's
+  `safety-policy.ts`, NOT `policy.ts`** (that's the #41 adaptive-router
+  policy); the config is `.otto/policy.json`. `SafetyPolicy` is the six
+  issue-scoped `string[]` rule lists; **an empty list = "no restriction" for
+  that axis**, so `DEFAULT_POLICY` (all empty, frozen) leaves trusted local
+  workflows unchanged (success metric #3) — `parseSafetyPolicy` never throws and
+  returns a FRESH object, `readSafetyPolicy` fails OPEN (absent/malformed →
+  permissive). The four pure predicates split **deny-list vs allow-list, don't
+  conflate them**: `checkCommand`/`checkApprovalRequired` flag a violation per
+  MATCH; `checkWritePath`/`checkNetworkDomain` flag when the subject matches NO
+  allowed entry (empty = unrestricted). Match boundaries the tests pin: write
+  paths are slash-trimmed prefix-at-boundary (`srcfoo` is NOT under `src`);
+  domains are exact-or-subdomain (`notgithub.com` is NOT under `github.com`).
+  No predicate for `secretPatterns`/`highRiskGlobs` yet (YAGNI). Taint is
+  orthogonal (policy = what a run may DO; taint = which INPUTS are untrusted):
+  `wrapUntrusted` fences content in `<untrusted source="…">` with
+  `UNTRUSTED_WARNING` and **defangs an embedded closing fence** so text can't
+  break out. Surfaced as PROSE — the shared `templates/untrusted-content.md`
+  fragment (`@include`d once in the 5 untrusted entry blocks) repeats
+  `UNTRUSTED_WARNING` VERBATIM on one unbroken line (a `> ` prefix or mid-line
+  wrap breaks the `toContain` test); the trusted plan/PRD `{{ INPUTS }}` is
+  deliberately NOT wrapped. Pinned by `safety-policy.test.ts` / `taint.test.ts`
+  / `untrusted-content.test.ts`.
+- **Safety boundary enforcement is the first NON-INERT safety slice (#43 P4
+  slice 6).** `stage-exec.ts` reads `.otto/policy.json` once per stage and
+  threads it into `render.ts`, which runs `checkCommand` on every `!\`…\`` /
+  `!?\`…\`` / `@spill` body BEFORE executing it: a blocked command is **skipped
+  (neutralized to its fallback/empty output), never run**, and recorded as a
+  `blocked` `policy-violation` `SafetyEvent` on the stage record
+  (`StageResult.safetyEvents` → loop's `recordStage`). Under the absent/default
+  policy `checkCommand` returns nothing, so the gate is a no-op (metric #3).
+  Trajectory plumbing: `SafetyEvent` is a discriminated union on `category`
+  (`policy-violation`/`taint`), optional on BOTH `RunManifest` and
+  `StageRecord`; `taint` is always `blocked:false`. `eval.ts` sums them into
+  an **UNRANKED `safetyEventCount` column — do NOT add a `rank`** (a count
+  conflates blocked-violation with detected-injection, no honest direction).
+  Pinned by `render.test.ts` / `stage-exec.test.ts` / `run-report.test.ts` /
+  `eval.test.ts`.
+
 
 ## Gotchas
 

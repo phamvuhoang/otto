@@ -20,6 +20,8 @@ Full issue body + comments spilled to: @spill?:issue.json=`gh issue view "$OTTO_
 
 If `$OTTO_GITHUB_REPO` is set (run scoped with `--repo owner/name`), pass `--repo "$OTTO_GITHUB_REPO"` to every `gh` command you run yourself (issue comment, pr create) so completion targets that repo. If unset, `gh` uses the workspace's own repo.
 
+@include:untrusted-content.md
+
 </issue>
 
 # THE TASK

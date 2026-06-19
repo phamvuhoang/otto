@@ -1,0 +1,19 @@
+{
+  "id": "2026-06-20T05-00-00-000Z-43-5",
+  "content": "Safety events join the trajectory + eval, still INERT (issue #43 P4 slice 5). run-report.ts gains a SafetyEvent type — a discriminated union on `category` (policy-violation → PolicyViolationKind from safety-policy.ts; taint → TaintSource from taint.ts; both type-only imports, no cycle) plus subject/message/blocked — and an OPTIONAL safetyEvents?: SafetyEvent[] on BOTH RunManifest (run-level) and StageRecord (per-stage). `blocked` carries the issue's 'blocked or reported' distinction; taint is always blocked:false (reported, never blocked). eval.ts adds safetyEventCount to EvalSignals = manifest.safetyEvents.length + sum over stage records (both ?? 0, absent = none), and a `Safety events` comparison column that is deliberately UNRANKED (no rank key) — a single count conflates a blocked violation (bad) with a detected/reported injection (good detection), so there is no honest best/worst direction; do NOT add a rank to it. Adding the column shifts the table to 10 columns — the eval.test.ts header + separator assertions were updated. Updated the EvalSignals doc comment: safety events are now trajectory-derived (recorded during the run), moved OUT of the 'fixture-dependent signals scored separately by the runner' parenthetical. Still INERT — nothing in the loop/bin populates safetyEvents yet; slice 6 (first non-inert) wires the boundary checks that emit them. Records are JSON-cast on read (no normalizer — Otto's own trusted output), so the union is authoring-time only. Pinned by run-report.test.ts (round-trip on manifest + stage) + eval.test.ts (count aggregation, zero-when-none, unranked column).",
+  "category": "convention",
+  "sourceRun": "2026-06-20T05-00-00-000Z-12323",
+  "taskKey": "issue-43",
+  "scope": [
+    "packages/core/src/run-report.ts",
+    "packages/core/src/eval.ts",
+    "packages/core/src/index.ts",
+    "packages/core/src/__tests__/run-report.test.ts",
+    "packages/core/src/__tests__/eval.test.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T05:00:00.000Z",
+  "useCount": 0
+}

@@ -7,8 +7,10 @@ import { tokenUsageTotal } from "./tokens.js";
  * {@link StageRecord}s). These are the signals that need no fixture re-run — the
  * deterministic, CI-runnable subset of the harness evaluation suite (issue #40).
  *
- * Fixture-dependent signals (tests passed, diff correctness, safety events) are
- * scored separately by the runner against a benchmark task's expected outcome.
+ * Fixture-dependent signals (tests passed, diff correctness) are scored
+ * separately by the runner against a benchmark task's expected outcome. Safety
+ * events are trajectory-derived — recorded into the bundle during the run — so
+ * they are counted here.
  */
 export type EvalSignals = {
   /** Run reached a success exit reason (`complete`/`done`). */
@@ -27,6 +29,8 @@ export type EvalSignals = {
   totalTokens: number;
   /** Wall-clock run duration in ms, or `null` when it cannot be computed. */
   elapsedMs: number | null;
+  /** Safety events recorded across the manifest and stage records (issue #43). */
+  safetyEventCount: number;
 };
 
 const SUCCESS_REASONS = new Set(["complete", "done"]);
@@ -51,6 +55,9 @@ export function scoreTrajectory(
     costUsd: manifest.costUsd,
     totalTokens: tokenUsageTotal(manifest.tokenUsage),
     elapsedMs: elapsedMs(manifest.startedAt, manifest.finishedAt),
+    safetyEventCount:
+      (manifest.safetyEvents?.length ?? 0) +
+      stages.reduce((n, s) => n + (s.safetyEvents?.length ?? 0), 0),
   };
 }
 
@@ -111,6 +118,10 @@ const COMPARE_COLUMNS: CompareColumn[] = [
     cell: (s) => (s.elapsedMs == null ? "—" : String(s.elapsedMs)),
     rank: { value: (s) => s.elapsedMs, better: "lower" },
   },
+  // Shown but NOT ranked: a single count conflates blocked violations (bad) with
+  // detected/reported injections (good detection), so there is no honest
+  // direction to mark best/worst.
+  { header: "Safety events", cell: (s) => String(s.safetyEventCount) },
 ];
 
 /**

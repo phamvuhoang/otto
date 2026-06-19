@@ -11,6 +11,7 @@ import { createInterface } from "node:readline";
 import { join, posix } from "node:path";
 
 import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
+import type { SafetyEvent } from "./run-report.js";
 import type { Stage } from "./stages.js";
 import {
   boldOut,
@@ -41,6 +42,9 @@ export type StageResult = {
   usage: TokenUsage;
   /** The agent runtime that produced this result (Claude's stream-json shape today). */
   runtimeId: AgentRuntimeId;
+  /** Safety events emitted while rendering/running this stage (issue #43 P4);
+   *  absent when none — e.g. a policy violation blocked at a shell/@spill tag. */
+  safetyEvents?: SafetyEvent[];
 };
 
 /**

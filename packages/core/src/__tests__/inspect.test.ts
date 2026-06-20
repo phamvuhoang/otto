@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { formatRunReport, runInspect } from "../inspect.js";
 import {
   writeManifest,
+  writeRunReport,
   writeStageRecord,
   type RunManifest,
   type StageRecord,
@@ -162,5 +163,85 @@ describe("runInspect", () => {
     const code = await runInspect([], d);
     expect(code).toBe(1);
     expect(errs.join("\n")).toMatch(/no runs/i);
+  });
+
+  it("--plain with an explicit id prints the plain report and exits 0", async () => {
+    const ws = tmp();
+    writeManifest(ws, finalized);
+    writeRunReport(ws, finalized.runId, "# Otto quality report\nAll good.\n");
+    const { d, lines } = deps(ws);
+    const code = await runInspect(["--plain", finalized.runId], d);
+    expect(code).toBe(0);
+    const out = lines.join("\n");
+    // plain report contains the persisted prose
+    expect(out).toContain("All good.");
+    // run-facts footer is present
+    expect(out).toContain("Run facts");
+    expect(out).toContain("otto-ghafk");
+    // engineer detail is NOT the primary render (no stage table)
+    expect(out).not.toContain("Stages (");
+  });
+
+  it("--plain after the run-id also works (flag may appear anywhere)", async () => {
+    const ws = tmp();
+    writeManifest(ws, finalized);
+    writeRunReport(ws, finalized.runId, "# Otto quality report\nDone.\n");
+    const { d, lines } = deps(ws);
+    const code = await runInspect([finalized.runId, "--plain"], d);
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toContain("Done.");
+  });
+
+  it("--plain with no run-id defaults to the latest run", async () => {
+    const ws = tmp();
+    const older: RunManifest = {
+      ...finalized,
+      runId: "2026-06-19T00-00-00-000Z-1",
+    };
+    const newer: RunManifest = {
+      ...finalized,
+      runId: "2026-06-19T09-00-00-000Z-1",
+    };
+    writeManifest(ws, older);
+    writeManifest(ws, newer);
+    writeRunReport(ws, newer.runId, "# Otto quality report\nNewest run.\n");
+    const { d, lines } = deps(ws);
+    const code = await runInspect(["--plain"], d);
+    expect(code).toBe(0);
+    const out = lines.join("\n");
+    expect(out).toContain("Newest run.");
+    // Facts footer identifies the newer run's bin/mode
+    expect(out).toContain("otto-ghafk");
+  });
+
+  it("--plain with an unknown id still errors and exits 1", async () => {
+    const ws = tmp();
+    writeManifest(ws, finalized);
+    const { d, errs } = deps(ws);
+    const code = await runInspect(["--plain", "does-not-exist"], d);
+    expect(code).toBe(1);
+    expect(errs.join("\n")).toMatch(/does-not-exist/);
+  });
+
+  it("--plain falls back gracefully when no report was persisted", async () => {
+    const ws = tmp();
+    writeManifest(ws, finalized);
+    // No writeRunReport — run emitted no quality report
+    const { d, lines } = deps(ws);
+    const code = await runInspect(["--plain", finalized.runId], d);
+    expect(code).toBe(0);
+    // should still print something (fallback message + facts)
+    expect(lines.join("\n")).toMatch(/Run facts|no.*report|plain-language/i);
+  });
+
+  it("without --plain the engineer report is unchanged (byte-for-byte same path)", async () => {
+    const ws = tmp();
+    writeManifest(ws, finalized);
+    writeStageRecord(ws, finalized.runId, 0, implStage);
+    const { d, lines } = deps(ws);
+    const code = await runInspect([finalized.runId], d);
+    expect(code).toBe(0);
+    // Engineer report still has stage table
+    expect(lines.join("\n")).toContain("Stages (");
   });
 });

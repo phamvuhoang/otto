@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { emptyTokenUsage } from "../tokens.js";
 import { runBin, type RunBinConfig } from "../run-bin.js";
+import { writeStageRecord, type StageRecord } from "../run-report.js";
 import type { Stage } from "../stages.js";
 
 const mocks = vi.hoisted(() => ({
@@ -320,5 +321,63 @@ describe("runBin --include-sub-issues", () => {
 
     expect(err).toHaveBeenCalledWith("--include-sub-issues requires --issue");
     expect(exit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("runBin --context-report", () => {
+  const oldWorkspace = process.env.OTTO_WORKSPACE;
+  let workspace: string | undefined;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (workspace) rmSync(workspace, { recursive: true, force: true });
+    workspace = undefined;
+    if (oldWorkspace === undefined) delete process.env.OTTO_WORKSPACE;
+    else process.env.OTTO_WORKSPACE = oldWorkspace;
+  });
+
+  function record(): StageRecord {
+    return {
+      iteration: 1,
+      stage: "implementer",
+      runtimeId: "claude",
+      costUsd: 0,
+      usage: emptyTokenUsage(),
+      isError: false,
+      apiErrorStatus: null,
+      contextBreakdown: {
+        totalChars: 400,
+        estimatedTokens: 100,
+        segments: [{ category: "playbook", chars: 400, estimatedTokens: 100 }],
+      },
+      startedAt: "2026-06-20T00:00:00.000Z",
+      finishedAt: "2026-06-20T00:00:01.000Z",
+    };
+  }
+
+  it("propagates exit 1 when there is no run to report on", async () => {
+    workspace = makeWorkspace();
+    process.env.OTTO_WORKSPACE = workspace;
+    captureStdout();
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("exit");
+    }) as any);
+
+    await expect(runBin(["--context-report"], cfg)).rejects.toThrow("exit");
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("exits 0 (does not call process.exit) when a run can be reported", async () => {
+    workspace = makeWorkspace();
+    process.env.OTTO_WORKSPACE = workspace;
+    writeStageRecord(workspace, "2026-06-20T00-00-00-000Z-1", 0, record());
+    captureStdout();
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("exit");
+    }) as any);
+
+    await expect(runBin(["--context-report"], cfg)).resolves.toBeUndefined();
+    expect(exit).not.toHaveBeenCalled();
   });
 });

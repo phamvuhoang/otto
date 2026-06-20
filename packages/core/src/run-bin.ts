@@ -137,7 +137,8 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   // exits without running a stage, so it needs none of the resolution below.
   if (flags.contextReport) {
     const { runContextReport } = await import("./context-report-cli.js");
-    await runContextReport();
+    const code = await runContextReport();
+    if (code !== 0) process.exit(code);
     return;
   }
 

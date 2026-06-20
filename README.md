@@ -60,7 +60,22 @@ New to it? The **[QUICKSTART](./QUICKSTART.md)** walks zero-to-first-loop. No Gi
 
 ## Why Otto
 
-More than a `while`-loop around `claude`:
+A naïve harness just loops `claude` until the iteration count runs out. Otto is the loop **plus the harness around it** — the parts that make an unattended run safe, affordable, and trustworthy:
+
+| Concern         | A bare `while` loop around `claude` | **Otto**                                                                            |
+| --------------- | ----------------------------------- | ----------------------------------------------------------------------------------- |
+| When to stop    | a fixed count, or never             | senses completion (`NO MORE TASKS`); early-stops on stalled progress                |
+| Rate limits     | the loop dies                       | waits out the reset and resumes the same iteration; optional provider auto-switch   |
+| Crash / restart | redoes everything                   | resumes from `.otto/state.json`; never redoes committed work                        |
+| Code review     | none                                | self-review + an adversarial lens panel; only confirmed fixes land                  |
+| Cost            | blind                               | per-run `--budget` ceiling, pacing, and token accounting                            |
+| Memory          | none                                | git-tracked, governed learnings injected into every prompt                          |
+| Safety          | full blast radius                   | native-OS sandbox + repo-local `.otto/policy.json` + prompt-injection taint-fencing |
+| Observability   | terminal scrollback                 | an evidence bundle per run you can `inspect`, `compare`, and benchmark              |
+| Compute spend   | same review depth always            | adaptive routing by change risk                                                     |
+| Reuse           | copy-pasted prompts                 | validated, retrievable skills                                                        |
+
+The rest of this section is the detail behind each row:
 
 - 🧠 **It remembers.** Otto keeps a git-tracked `.otto/LEARNINGS.md` in your repo and injects it into every prompt. As it works it appends durable, reusable knowledge — conventions, gotchas, decisions _and their why_, dead ends — so each iteration starts smarter. The file rides in the work commit; delete it to reset Otto's memory.
 - 📐 **It thinks before it codes.** Every iteration runs an adaptive **brainstorm → spec → plan → TDD** workflow. Hand it a crisp plan and it implements directly; hand it a vague one and it plays both sides of a brainstorm — generating clarifying questions, answering each with the most reasonable repo-grounded default, recording assumptions to `.otto/specs/`, then implementing test-first. Autonomously: it records its reasoning and proceeds rather than stopping to ask.

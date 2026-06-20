@@ -360,6 +360,7 @@ export {
   readPlanTasks,
   type PlanTask,
 } from "./plan-tasks.js";
+export { createWorktree, reapWorktrees } from "./worktree.js";
 export {
   buildRunView,
   formatDoneCard,

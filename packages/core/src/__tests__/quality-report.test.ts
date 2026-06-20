@@ -161,6 +161,45 @@ describe("ghafk completion adopts the quality report contract", () => {
   });
 });
 
+describe("afk (plan/PRD) completion adopts the quality report contract", () => {
+  // The FINISHING handoff lives in prompt.md (the afk implementer playbook
+  // included by afk.md). The include must be in the "FINISHING THE RUN" section
+  // so the report is emitted at completion, not per-iteration — the same finishing
+  // point as the <promise>NO MORE TASKS</promise> sentinel.
+  it("includes the shared fragment in prompt.md rather than re-describing it", () => {
+    const body = readFileSync(tpl("prompt.md"), "utf8");
+    expect(body).toContain("@include:quality-report.md");
+  });
+
+  it("places the include in the FINISHING THE RUN section (completion, not per-iteration)", () => {
+    const body = readFileSync(tpl("prompt.md"), "utf8");
+    const finishingIdx = body.indexOf("# FINISHING THE RUN");
+    const includeIdx = body.indexOf("@include:quality-report.md");
+    expect(finishingIdx).toBeGreaterThan(-1);
+    expect(includeIdx).toBeGreaterThan(finishingIdx);
+  });
+
+  it("surfaces the contract sections end-to-end when the afk template renders", () => {
+    // Render the afk template through its include chain
+    // (afk.md -> prompt.md -> quality-report.md) in a throwaway non-git
+    // workspace: the !? / @spill shell tags fall back and the included
+    // contract resolves.
+    const dir = mkdtempSync(join(tmpdir(), "otto-aq-"));
+    try {
+      const out = renderTemplate(
+        tpl("afk.md"),
+        { INPUTS: "plan prd", RESUME: "" },
+        { cwd: dir, spillHostDir: dir, spillRefPath: "./.otto-tmp/spill" }
+      );
+      for (const section of CONTRACT_SECTIONS) {
+        expect(out).toContain(section);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("per-mode human acceptance prompts", () => {
   // Feature 2: the generic Human Acceptance Checklist is mode-agnostic, but a
   // maintainer reviewing a plan/PRD run needs different acceptance questions than

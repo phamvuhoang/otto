@@ -98,6 +98,12 @@ Dedupe against existing entries and prune anything no longer true. This file is 
 
 Committing the code is NOT necessarily the end of the run. How work "ships" depends on THIS repo's conventions — consult `<learnings>` / `./.otto/LEARNINGS.md`. If the repo ships via pull request, keep all work (including later review-fix rounds) on the SAME feature branch, and when it is complete `git push` the branch and open or refresh a single PR into the default branch — never spin up a second branch per round. Otherwise, committing to the working branch is the end-state.
 
+## Quality report (completion handoff)
+
+When the work is done and you are about to output `<promise>NO MORE TASKS</promise>`, hand the maintainer **one readable Otto quality report** as your final output — do NOT emit it per-iteration. This is the completion handoff: the loop persists it so `otto-explain` can surface it. Map the contract below onto this run's outcomes (What Changed, Evidence, Gaps, etc.).
+
+@include:quality-report.md
+
 # FINAL RULES
 
 ONLY WORK ON A SINGLE TASK.

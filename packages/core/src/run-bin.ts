@@ -21,6 +21,7 @@ import {
 import { detachAndExit } from "./detach.js";
 import { runLoop } from "./loop.js";
 import { getAgentRuntime } from "./runner.js";
+import { resolveTierLadder } from "./model-tier.js";
 import type { Stage } from "./stages.js";
 import { parseGithubRepo, describeScope, type WorkScope } from "./task-key.js";
 import type { TokenMode } from "./tokens.js";
@@ -246,6 +247,16 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       (process.env.OTTO_EXPLAIN_ROUTING ?? "").trim().toLowerCase()
     );
 
+  // Model routing (issue #66 P11): route each stage to a model tier by
+  // difficulty + change risk, escalating on repeated failure. Opt-in via
+  // --model-routing or OTTO_MODEL_ROUTING; a pinned --model/OTTO_MODEL wins.
+  const modelRouting =
+    flags.modelRouting ||
+    ["1", "true", "yes", "on"].includes(
+      (process.env.OTTO_MODEL_ROUTING ?? "").trim().toLowerCase()
+    );
+  const tierLadder = resolveTierLadder(process.env);
+
   const DEFAULT_LENSES = ["correctness", "security", "tests"];
   const envLenses = (process.env.OTTO_REVIEW_LENSES ?? "")
     .split(",")
@@ -408,6 +419,8 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       reviewLenses: reviewLenses ?? [],
       adaptiveRouter,
       explainRouting,
+      modelRouting,
+      tierLadder: modelRouting ? tierLadder : undefined,
       watch: flags.watch,
       watchIntervalSec: flags.watchIntervalSec,
       watchLabel,
@@ -653,6 +666,8 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     reviewLenses,
     adaptiveRouter,
     explainRouting,
+    modelRouting,
+    tierLadder,
     verbose: flags.verbose,
     mode: runMode,
     branchStrategy: resolved.strategy,

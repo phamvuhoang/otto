@@ -492,6 +492,25 @@ describe("printConfig routing", () => {
     const out = configOutput({ adaptiveRouter: false, explainRouting: true });
     expect(out).toMatch(/routing\s+off \(--explain-routing needs --adaptive-router\)/);
   });
+  it("shows model routing off by default", () => {
+    expect(configOutput({})).toMatch(/model routing\s+off/);
+  });
+  it("shows model routing on with the resolved ladder", () => {
+    const out = configOutput({
+      modelRouting: true,
+      tierLadder: { cheap: "haiku", mid: "sonnet", strong: "opus" },
+    });
+    expect(out).toMatch(/model routing\s+on \(cheap=haiku, mid=sonnet, strong=opus\)/);
+  });
+});
+
+describe("parseFlags --model-routing", () => {
+  it("defaults modelRouting to false", () => {
+    expect(parseFlags(["5"]).modelRouting).toBe(false);
+  });
+  it("sets modelRouting when the flag is present", () => {
+    expect(parseFlags(["--model-routing", "5"]).modelRouting).toBe(true);
+  });
 });
 
 describe("parseFlags --verbose", () => {

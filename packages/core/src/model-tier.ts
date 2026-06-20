@@ -64,18 +64,41 @@ export function resolveModelSelection(
   return undefined;
 }
 
+/** Tier ordering, low → high; bumps clamp to this range. */
+const ORDER: ModelTier[] = ["cheap", "mid", "strong"];
+
+function bump(tier: ModelTier, by: number): ModelTier {
+  const i = Math.min(ORDER.length - 1, Math.max(0, ORDER.indexOf(tier) + by));
+  return ORDER[i];
+}
+
 /**
- * Modulate a base tier by change-risk and failure escalation. Pure.
- *
- * (Task 1 ships the identity body — the full rules land in slice 2. Kept here so
- * `resolveStageModel` has a stable seam from the first slice.)
+ * Modulate a base tier by change-risk and failure escalation (issue #66 P11).
+ * Pure. Rules: docs-only / test-only → one tier cheaper (floor cheap);
+ * security-sensitive / cross-module → strong; each prior escalation → one tier
+ * stronger. All bumps clamp to [cheap, strong].
  */
 export function routeModel(opts: {
   baseTier: ModelTier;
   assessment?: RiskAssessment;
   escalations?: number;
 }): { tier: ModelTier; reasons: string[] } {
-  return { tier: opts.baseTier, reasons: [] };
+  const reasons: string[] = [`base tier ${opts.baseTier}`];
+  let tier = opts.baseTier;
+  const cls = opts.assessment?.class;
+  if (cls === "docs-only" || cls === "test-only") {
+    tier = bump(tier, -1);
+    reasons.push(`risk-down (${cls}) → ${tier}`);
+  } else if (cls === "security-sensitive" || cls === "cross-module") {
+    tier = "strong";
+    reasons.push(`risk-up (${cls}) → strong`);
+  }
+  const esc = opts.escalations ?? 0;
+  if (esc > 0) {
+    tier = bump(tier, esc);
+    reasons.push(`escalated ×${esc} → ${tier}`);
+  }
+  return { tier, reasons };
 }
 
 /** The model decision for one stage: the spec, the tier (when routed), and why. */

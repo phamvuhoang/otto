@@ -9,6 +9,7 @@ import {
 } from "./agent-runtime.js";
 import { runPreflight } from "./preflight.js";
 import { resolveModelSelection } from "./runner.js";
+import type { TierLadder } from "./model-tier.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { parseTokenMode, type TokenMode } from "./tokens.js";
 
@@ -54,6 +55,9 @@ export type CliFlags = {
   /** `--explain-routing` toggle (default false; issue #45 P6). Prints the
    *  adaptive router's per-iteration reasoning; no effect without the router. */
   explainRouting: boolean;
+  /** `--model-routing` toggle (default false; opt-in, issue #66 P11). Routes each
+   *  stage to a model tier by difficulty + change risk + failure escalation. */
+  modelRouting: boolean;
   watch: boolean;
   watchIntervalSec?: number;
   /**
@@ -199,6 +203,7 @@ export function parseFlags(
   let verbose = false;
   let adaptiveRouter = false;
   let explainRouting = false;
+  let modelRouting = false;
   let watch = false;
   let watchIntervalSec: number | undefined;
   let expectingWatchInterval = false;
@@ -350,6 +355,7 @@ export function parseFlags(
     else if (a === "--verbose") verbose = true;
     else if (a === "--adaptive-router") adaptiveRouter = true;
     else if (a === "--explain-routing") explainRouting = true;
+    else if (a === "--model-routing") modelRouting = true;
     else if (a === "--watch") watch = true;
     else if (a === "--watch-interval") expectingWatchInterval = true;
     else if (a === "--issue") expectingIssue = true;
@@ -438,6 +444,7 @@ export function parseFlags(
     verbose,
     adaptiveRouter,
     explainRouting,
+    modelRouting,
     watch,
     watchIntervalSec,
     issue,
@@ -517,6 +524,7 @@ Flags:
   --review-panel      replace the single reviewer stage with correctness/security/tests lens reviewers + one synth commit (default: off)
   --adaptive-router   route review depth by per-iteration change risk: single reviewer (low) / lens subset (medium) / full panel (high) (or OTTO_ADAPTIVE_ROUTER=1; default: off)
   --explain-routing   print the adaptive router's per-iteration reasoning (change class, risk, chosen depth/lenses); requires --adaptive-router (or OTTO_EXPLAIN_ROUTING=1; default: off)
+  --model-routing     route each stage to a model tier by difficulty + change risk, escalating on repeated failure; a pinned --model/OTTO_MODEL overrides it (or OTTO_MODEL_ROUTING=1; default: off)
   --branch <mode>     where Otto commits: current (default) | branch (new branch) | worktree (isolated checkout)
   --branch-prefix <p> branch name prefix for branch/worktree modes (default: otto/)
   --branch-convention <c>  validated branch namespace <c>/<task-key> (e.g. feat, feature, fix); normalizes a trailing slash; overrides --branch-prefix (or OTTO_BRANCH_CONVENTION; default: otto)
@@ -602,6 +610,10 @@ export type PrintConfigOptions = {
   adaptiveRouter?: boolean;
   /** Explain-routing enabled (issue #45 P6); no effect without the router. */
   explainRouting?: boolean;
+  /** Model routing enabled (issue #66 P11). */
+  modelRouting?: boolean;
+  /** Resolved tier → model ladder, shown when model routing is on (issue #66 P11). */
+  tierLadder?: TierLadder;
   watch?: boolean;
   watchIntervalSec?: number;
   /**
@@ -655,6 +667,8 @@ export function printConfig(
     reviewLenses = [],
     adaptiveRouter = false,
     explainRouting = false,
+    modelRouting = false,
+    tierLadder,
     watch = false,
     watchIntervalSec,
     watchLabel = process.env.OTTO_WATCH_LABEL?.trim() || "otto",
@@ -715,6 +729,11 @@ export function printConfig(
     : explainRouting
       ? "off (--explain-routing needs --adaptive-router)"
       : "off";
+  const modelRoutingStatus = modelRouting
+    ? tierLadder
+      ? `on (cheap=${tierLadder.cheap ?? "default"}, mid=${tierLadder.mid ?? "default"}, strong=${tierLadder.strong ?? "default"})`
+      : "on"
+    : "off";
   const watchStatus = watch
     ? `on (every ${watchIntervalSec ?? 300}s, label "${watchLabel}")`
     : "off";
@@ -751,6 +770,7 @@ export function printConfig(
   verbose               ${verbose}
   review                ${reviewStatus}
   routing               ${routingStatus}
+  model routing         ${modelRoutingStatus}
   branch                ${branchStatus}
   watch                 ${watchStatus}
   scope                 ${scopeStatus}

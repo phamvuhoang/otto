@@ -6,6 +6,7 @@ import {
   resolveTierLadder,
   routeModel,
 } from "../model-tier.js";
+import type { RiskAssessment } from "../risk.js";
 import { STAGES } from "../stages.js";
 
 describe("resolveTierLadder", () => {
@@ -80,8 +81,45 @@ describe("resolveStageModel", () => {
   });
 });
 
-describe("routeModel (identity until slice 2)", () => {
-  it("returns the base tier", () => {
+describe("routeModel", () => {
+  const risk = (cls: string): RiskAssessment =>
+    ({ class: cls, level: "medium", reasons: [] }) as RiskAssessment;
+
+  it("returns the base tier with no signals", () => {
     expect(routeModel({ baseTier: "mid" }).tier).toBe("mid");
+  });
+  it("downgrades docs-only / test-only one tier (floor cheap)", () => {
+    expect(routeModel({ baseTier: "mid", assessment: risk("docs-only") }).tier).toBe(
+      "cheap"
+    );
+    expect(
+      routeModel({ baseTier: "cheap", assessment: risk("test-only") }).tier
+    ).toBe("cheap");
+  });
+  it("upgrades security-sensitive / cross-module to strong", () => {
+    expect(
+      routeModel({ baseTier: "mid", assessment: risk("security-sensitive") }).tier
+    ).toBe("strong");
+    expect(
+      routeModel({ baseTier: "cheap", assessment: risk("cross-module") }).tier
+    ).toBe("strong");
+  });
+  it("escalation raises one tier per prior escalation, capped at strong", () => {
+    expect(routeModel({ baseTier: "cheap", escalations: 1 }).tier).toBe("mid");
+    expect(routeModel({ baseTier: "mid", escalations: 1 }).tier).toBe("strong");
+    expect(routeModel({ baseTier: "mid", escalations: 5 }).tier).toBe("strong");
+  });
+  it("risk-up then escalation both clamp at strong", () => {
+    expect(
+      routeModel({
+        baseTier: "strong",
+        assessment: risk("security-sensitive"),
+        escalations: 2,
+      }).tier
+    ).toBe("strong");
+  });
+  it("records the reasons that drove the decision", () => {
+    const r = routeModel({ baseTier: "mid", assessment: risk("docs-only"), escalations: 1 });
+    expect(r.reasons.length).toBeGreaterThanOrEqual(2);
   });
 });

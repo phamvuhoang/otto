@@ -728,6 +728,20 @@
   instead assert the template enumerates each criterion's section/keyword (one
   check per `PLAN_CRITERIA` entry, so adding a criterion forces a template
   update). Pinned by `plan-stage.test.ts`.
+- **`--plan` one-shot wiring (#63 P8, slice 5) — `run-bin.ts`/`main.ts`.** The
+  plan stage canNOT be prepended to `[implementer, reviewer]` — the FIRST stage is
+  the gate, and the plan template emits `NO MORE TASKS` when already planned, which
+  would wrongly exit the loop. So `--plan` is a one-shot that REPLACES the chain
+  with `[cfg.planStage!]` (author the plan, then a normal run implements it),
+  modelled exactly on `--verify`: afk-only via `cfg.planStage` (set in `main.ts`
+  only — `--plan is only supported by otto-afk`), added to the `modeCount` mutual
+  exclusivity, input-taking, iterations forced to 1. Refactor: the duplicated
+  verify input/iteration handling is now keyed on `const oneShot = flags.verify ||
+  flags.plan` with `oneShotFlag` for the usage/one-shot messages. `runMode` gains a
+  `"plan"` label (threaded into runLoop state + `--print-config`). Flag added in
+  `cli-help.ts` (`CliFlags.plan` + parse + help line). Pinned by `cli-help.test.ts`
+  (parse) + `run-bin.test.ts` (runs only the plan stage one-shot; rejects a bin
+  without `planStage`). OTTO_PLAN env left as a follow-up (flag-only this slice).
 
 
 ## Gotchas

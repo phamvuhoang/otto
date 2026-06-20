@@ -65,6 +65,9 @@ export type CliFlags = {
   maxWaitMs?: number;
   fresh: boolean;
   verify: boolean;
+  /** `--plan` one-shot (issue #63 P8): author a spec + plan for human review,
+   *  make no source edits, then exit (otto-afk). */
+  plan: boolean;
   applyReview?: string;
   branch?: "current" | "branch" | "worktree";
   branchPrefix?: string;
@@ -202,6 +205,7 @@ export function parseFlags(
   let expectingMaxWait = false;
   let fresh = false;
   let verify = false;
+  let plan = false;
   let applyReview: string | undefined;
   let expectingApplyReview = false;
   let branch: "current" | "branch" | "worktree" | undefined;
@@ -348,6 +352,7 @@ export function parseFlags(
     else if (a === "--max-wait") expectingMaxWait = true;
     else if (a === "--fresh") fresh = true;
     else if (a === "--verify") verify = true;
+    else if (a === "--plan") plan = true;
     else if (a === "--apply-review") expectingApplyReview = true;
     else if (a === "--branch") expectingBranch = true;
     else if (a === "--branch-prefix") expectingBranchPrefix = true;
@@ -434,6 +439,7 @@ export function parseFlags(
     maxWaitMs,
     fresh,
     verify,
+    plan,
     applyReview,
     branch,
     branchPrefix,
@@ -516,6 +522,7 @@ Flags:
   --max-wait <dur>    cap the wait when rate-limited before halting (e.g. 90m, 6h; default 6h)
   --fresh             ignore any saved resume state and start from iteration 1
   --verify            read-only: reconcile the plan against git, run the suites, write a report; make no commits (otto-afk)
+  --plan              one-shot: author a spec + plan under .otto/tasks/ for human review, make no source edits, then exit (otto-afk)
   --apply-review <doc>  fix the actionable findings of a code-review document; track follow-ups (otto-afk)
 
 Environment variables:

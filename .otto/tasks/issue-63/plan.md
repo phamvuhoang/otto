@@ -35,10 +35,12 @@ wired it.
   gate-compatible (emits `NO MORE TASKS` when already planned). Wiring it into a
   chain is slice 5, so it is inert on real runs for now. Pinned by
   `plan-stage.test.ts` (render-contract).
-- [ ] **5. Wire the `plan` stage into the chain (opt-in).** Make the `plan` stage
-  run before the implementer behind a flag (`--plan` / `OTTO_PLAN`), so an
-  autonomous run can author the plan first; default off until proven. Pinned by a
-  `run-bin` test.
+- [x] **5. Wire the `plan` stage into the chain (opt-in).** Added a `--plan`
+  one-shot (otto-afk), mirroring `--verify`: `cfg.planStage` (set only in
+  `main.ts`), mutually exclusive with the other modes, input-taking, iterations
+  forced to 1, chain replaced with `[planStage]`, `runMode` → `"plan"`. A planning
+  run authors the spec+plan for human review, then exits — implementation is a
+  separate normal run. Pinned by `cli-help.test.ts` + `run-bin.test.ts`.
 - [ ] **6. Optional human checkpoint.** Render the generated plan and let the
   operator approve/edit before implementation begins (ties to the interactive
   approval-gate candidate); skipped in autonomous mode ("record assumptions and

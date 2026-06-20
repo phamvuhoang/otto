@@ -382,6 +382,52 @@ describe("runBin --context-report", () => {
   });
 });
 
+describe("runBin --plan (author spec+plan, one-shot)", () => {
+  const oldWorkspace = process.env.OTTO_WORKSPACE;
+  let workspace: string | undefined;
+  const planCfg: RunBinConfig = {
+    ...cfg,
+    planStage: { name: "plan", template: "plan.md", permissionMode: "bypassPermissions" },
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (workspace) rmSync(workspace, { recursive: true, force: true });
+    workspace = undefined;
+    if (oldWorkspace === undefined) delete process.env.OTTO_WORKSPACE;
+    else process.env.OTTO_WORKSPACE = oldWorkspace;
+  });
+
+  it("runs only the plan stage, one-shot, for a bin that sets planStage", async () => {
+    workspace = makeWorkspace();
+    process.env.OTTO_WORKSPACE = workspace;
+    mockBranch(workspace);
+    captureStdout();
+
+    await expect(
+      runBin(["--plan", "build a thing"], planCfg)
+    ).resolves.toBeUndefined();
+
+    expect(mocks.runLoop).toHaveBeenCalledTimes(1);
+    const opts = mocks.runLoop.mock.calls[0][0];
+    expect(opts.stages.map((s: { name: string }) => s.name)).toEqual(["plan"]);
+    expect(opts.iterations).toBe(1);
+    expect(opts.inputs).toBe("build a thing");
+  });
+
+  it("rejects --plan for a bin without a plan stage", async () => {
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(() => undefined as never);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await runBin(["--plan", "x"], cfg).catch(() => {});
+
+    expect(err).toHaveBeenCalledWith("--plan is only supported by otto-afk");
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+});
+
 describe("runBin --plan-report", () => {
   const oldWorkspace = process.env.OTTO_WORKSPACE;
   let workspace: string | undefined;

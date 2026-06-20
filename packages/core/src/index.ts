@@ -367,7 +367,6 @@ export {
   type FanoutTaskOutcome,
   type FanoutTaskStatus,
   type RunFanoutOptions,
-  type RunTask,
 } from "./fanout.js";
 export {
   buildRunView,

@@ -4,6 +4,15 @@ export { runLinearAfk, type RunLinearAfkOptions } from "./linear-main.js";
 export { runLoop, type LoopOptions, type LoopOutcome } from "./loop.js";
 export { STAGES, type Stage } from "./stages.js";
 export {
+  DEFAULT_LADDER,
+  resolveStageModel,
+  resolveTierLadder,
+  routeModel,
+  type ModelTier,
+  type StageModel,
+  type TierLadder,
+} from "./model-tier.js";
+export {
   deriveTaskKey,
   describeScope,
   parseGithubRepo,

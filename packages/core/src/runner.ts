@@ -11,6 +11,7 @@ import { createInterface } from "node:readline";
 import { join, posix } from "node:path";
 
 import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
+import { resolveModelSelection } from "./model-tier.js";
 import type { ContextBreakdown } from "./context-report.js";
 import type { SafetyEvent } from "./run-report.js";
 import type { Stage } from "./stages.js";
@@ -35,6 +36,10 @@ export type RunStageOptions = {
   /** In-run console sink (issue #65 P10). Absent → a fresh VerboseSink, so a
    *  sink-less run renders exactly as before. */
   sink?: EventSink;
+  /** Per-stage model spec (issue #66 P11). When set, overrides the env-based
+   *  resolveModelSelection — the caller (executeStage) has already applied the
+   *  pin > route > default precedence. Absent ⇒ today's env-based resolution. */
+  modelSpec?: string;
 };
 
 export type StageResult = {
@@ -51,6 +56,13 @@ export type StageResult = {
   /** Composition of the rendered prompt that drove this stage (issue #62 P7);
    *  attributed by `analyzeContext` in `stage-exec.ts`, absent when not measured. */
   contextBreakdown?: ContextBreakdown;
+  /** Model tier this stage was routed to (issue #66 P11); absent when routing
+   *  off or the stage has no declared tier. */
+  routedTier?: import("./model-tier.js").ModelTier;
+  /** Concrete model spec the routed tier resolved to (undefined ⇒ runtime default). */
+  routedModel?: string;
+  /** Where the model came from: "pin" | "route" | "default". */
+  modelSource?: string;
 };
 
 /**
@@ -271,26 +283,10 @@ export function resolveModelArgs(raw: string | undefined): string[] {
   return ["--model", trimmed];
 }
 
-/**
- * Resolve the model spec for the active runtime (issue #24 P3). A
- * provider-specific override (`OTTO_CLAUDE_MODEL` / `OTTO_CODEX_MODEL`) wins
- * over the provider-neutral `OTTO_MODEL`, so a user who keeps both runtimes
- * configured can pin a model per runtime. Returns the resolved spec plus the
- * env var it came from (for `--print-config`), or `undefined` when nothing is
- * set (the runtime's CLI default applies). Empty/whitespace overrides are
- * ignored so they fall through to the generic value.
- */
-export function resolveModelSelection(
-  runtimeId: AgentRuntimeId,
-  env: NodeJS.ProcessEnv = process.env
-): { spec: string; source: string } | undefined {
-  const specificVar = `OTTO_${runtimeId.toUpperCase()}_MODEL`;
-  const specific = env[specificVar]?.trim();
-  if (specific) return { spec: specific, source: specificVar };
-  const generic = env.OTTO_MODEL?.trim();
-  if (generic) return { spec: generic, source: "OTTO_MODEL" };
-  return undefined;
-}
+// Re-exported for back-compat: `resolveModelSelection` moved to model-tier.ts
+// (issue #66 P11) to decouple the pin check from this mocked module, but
+// existing importers (cli-help.ts, runner.test.ts) still reach it here.
+export { resolveModelSelection };
 
 export type Runner = "sandbox" | "host";
 
@@ -578,10 +574,12 @@ export async function runStage(
   process.stderr.write(`${dim("log → " + logPath)}\n`);
 
   try {
+    const modelSpec =
+      options.modelSpec ?? resolveModelSelection(runtime.id)?.spec;
     const argv = runtime.buildArgs(
       stage,
       promptRelPath,
-      resolveModelArgs(resolveModelSelection(runtime.id)?.spec),
+      resolveModelArgs(modelSpec),
       settingsHostPath
     );
     return await streamRuntime(argv, workspaceDir, logPath, runtime, options);

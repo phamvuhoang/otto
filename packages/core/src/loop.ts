@@ -9,7 +9,15 @@ import { changedFilesSince, headSha } from "./git.js";
 import { sleep, isThrottle, nextCooldownFactor } from "./pacing.js";
 import { decide } from "./policy.js";
 import { deriveProgress, type IterationObservation } from "./progress.js";
-import { explainRouting as formatRouting, routeReview } from "./risk.js";
+import {
+  classifyRisk,
+  explainRouting as formatRouting,
+  routeReview,
+} from "./risk.js";
+import { resolveTierLadder, type TierLadder } from "./model-tier.js";
+import { discoverPlanTasks } from "./plan-tasks.js";
+import { runFanout } from "./fanout.js";
+import { reapWorktrees } from "./worktree.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { cleanScratch } from "./scratch.js";
@@ -151,6 +159,18 @@ export type LoopOptions = {
   /** Injectable resolver for an iteration's changed paths (default: git diff since
    *  the iteration-start HEAD). Used only when `adaptiveRouter` is on. */
   resolveChangedPaths?: (workspaceDir: string) => string[];
+  /** Opt-in per-stage model routing (issue #66 P11): route each stage to a model
+   *  tier by difficulty + change risk, escalating on repeated failure. A pinned
+   *  model overrides it. When off, every stage uses the runtime default model. */
+  modelRouting?: boolean;
+  /** tier → model ladder consulted when `modelRouting` resolves a tier. */
+  tierLadder?: TierLadder;
+  /** Opt-in sub-agent fan-out (issue #66 P11): on the first iteration, run the
+   *  independent tasks of a `.otto/tasks/<key>/tasks.json` as isolated worktree
+   *  sub-agents before the sequential loop. No valid tasks.json → no-op. */
+  fanOut?: boolean;
+  /** Max concurrent sub-agents per fan-out wave (default 3). */
+  fanOutConcurrency?: number;
   /** Injected AbortSignal for daemon callers (e.g. watch mode). When provided,
    *  runLoop skips wake-lock acquisition and process signal handler installation;
    *  the caller owns both. */
@@ -289,6 +309,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     reviewLenses,
     adaptiveRouter = false,
     explainRouting = false,
+    modelRouting = false,
+    tierLadder,
+    fanOut = false,
+    fanOutConcurrency = 3,
     resolveChangedPaths,
     signal: externalSignal,
     mode = "afk",
@@ -345,9 +369,9 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   );
   // --explain-routing only has decisions to explain when the router is on; say so
   // once rather than silently no-op the flag (issue #45 operator clarity).
-  if (explainRouting && !adaptiveRouter) {
+  if (explainRouting && !adaptiveRouter && !modelRouting) {
     process.stderr.write(
-      `${dim("note: --explain-routing has no effect without --adaptive-router")}\n`
+      `${dim("note: --explain-routing has no effect without --adaptive-router or --model-routing")}\n`
     );
   }
 
@@ -469,6 +493,12 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   let runCostUsd = 0;
   let runTokenUsage = emptyTokenUsage();
   let cooldownFactor = 1;
+  // Model-routing escalation (issue #66 P11): count consecutive iterations whose
+  // gate stage (the implementer) returned an error, then escalate the routed tier
+  // by `streak - 1` — the current tier gets one retry before the first bump, and
+  // a persistently wedged run climbs toward the strong tier (capped in routeModel).
+  let gateFailureStreak = 0;
+  let modelEscalations = 0;
   const outcome = (): LoopOutcome => ({
     costUsd: runCostUsd,
     sentinelHit,
@@ -667,9 +697,48 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   try {
     for (let i = startIteration; i <= total; i++) {
       persist(i, "running");
-      // Adaptive router: snapshot HEAD at iteration start so the reviewer stage
-      // can classify the change this iteration produced before routing its depth.
-      const iterStartSha = adaptiveRouter ? headSha(workspaceDir) : null;
+      // Adaptive router / model routing: snapshot HEAD at iteration start so a
+      // stage can classify the change this iteration produced before routing its
+      // review depth (P2) or model tier (P11).
+      const iterStartSha =
+        adaptiveRouter || modelRouting ? headSha(workspaceDir) : null;
+
+      // Sub-agent fan-out (issue #66 P11): on the first iteration only, land the
+      // plan's independent tasks in parallel worktrees before the sequential
+      // loop. Deferred or absent work flows through the normal implementer below
+      // — fan-out is an accelerator, never a correctness dependency.
+      if (fanOut && i === startIteration) {
+        const planTasks = discoverPlanTasks(workspaceDir);
+        if (planTasks.length === 0) {
+          process.stderr.write(
+            `${dim("fan-out: no valid .otto/tasks/<key>/tasks.json — running sequentially")}\n`
+          );
+        } else {
+          reapWorktrees(workspaceDir);
+          process.stderr.write(
+            `${bold(SYM.bullet)} ${bold("fan-out")} ${dim(`· ${planTasks.length} task(s), concurrency ${fanOutConcurrency}`)}\n`
+          );
+          const fr = await runFanout({
+            tasks: planTasks,
+            workspaceDir,
+            packageDir,
+            iteration: i,
+            maxRetries,
+            cooldownMs,
+            concurrency: fanOutConcurrency,
+            ladder: tierLadder ?? resolveTierLadder(),
+            routing: modelRouting,
+            runtimeId: activeAgentId,
+            signal: activeSignal,
+            onSubAgent: accountStage,
+          });
+          const landed = fr.outcomes.filter((o) => o.status === "landed").length;
+          process.stderr.write(
+            `${dim(SYM.cont)} ${greenOut(String(landed))} landed, ${fr.deferred.length} deferred ${dim("(deferred tasks continue in the sequential loop)")}\n`
+          );
+        }
+      }
+
       for (let s = 0; s < stages.length; s++) {
         const stage = stages[s];
 
@@ -684,6 +753,19 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           : `== iteration ${i}/${total} · ${stage.name} (stage ${s + 1}/${stages.length}) · ${activeAgentDisplayName} ==`;
         process.stderr.write(`\n${banner}\n`);
         sink.setStage(i, stage.name);
+
+        // Model routing (issue #66 P11): classify this iteration's change so
+        // routeModel can modulate the per-stage tier (security/cross-module up,
+        // docs/test down). Computed when model routing is on, independent of the
+        // review router. The single reviewer/implementer/plan/verify stages route
+        // through executeStage below; panel sub-agents stay on the default model.
+        const riskAssessment = modelRouting
+          ? classifyRisk(
+              resolveChangedPaths
+                ? resolveChangedPaths(workspaceDir)
+                : changedFilesSince(workspaceDir, iterStartSha)
+            )
+          : undefined;
 
         // Adaptive router: route this iteration's review depth by change risk,
         // selecting a per-iteration subset of the lens pool. Off → static pool.
@@ -748,8 +830,21 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             signal: activeSignal,
             agentId: activeAgentId,
             sink,
+            modelRouting,
+            tierLadder,
+            riskAssessment,
+            escalations: modelEscalations,
           });
           accountStage(r);
+          if (explainRouting && modelRouting && r.routedTier) {
+            const note =
+              r.modelSource === "route"
+                ? ""
+                : ` [${r.modelSource}]`;
+            process.stderr.write(
+              `${dim(`↳ model route: ${stage.name} → ${r.routedTier} (${r.routedModel ?? "default"})${note}`)}\n`
+            );
+          }
           return r;
         };
 
@@ -919,6 +1014,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             clearState(workspaceDir);
             return outcome();
           }
+          // Gate stage did not finish the work — track failures to escalate the
+          // model tier on a persistently wedged run (issue #66 P11).
+          gateFailureStreak = sr!.isError ? gateFailureStreak + 1 : 0;
+          modelEscalations = Math.max(0, gateFailureStreak - 1);
         }
         await keyboardControls.pauseIfRequested();
       }

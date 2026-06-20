@@ -492,6 +492,47 @@ describe("printConfig routing", () => {
     const out = configOutput({ adaptiveRouter: false, explainRouting: true });
     expect(out).toMatch(/routing\s+off \(--explain-routing needs --adaptive-router\)/);
   });
+  it("shows model routing off by default", () => {
+    expect(configOutput({})).toMatch(/model routing\s+off/);
+  });
+  it("shows model routing on with the resolved ladder", () => {
+    const out = configOutput({
+      modelRouting: true,
+      tierLadder: { cheap: "haiku", mid: "sonnet", strong: "opus" },
+    });
+    expect(out).toMatch(/model routing\s+on \(cheap=haiku, mid=sonnet, strong=opus\)/);
+  });
+});
+
+describe("parseFlags --model-routing", () => {
+  it("defaults modelRouting to false", () => {
+    expect(parseFlags(["5"]).modelRouting).toBe(false);
+  });
+  it("sets modelRouting when the flag is present", () => {
+    expect(parseFlags(["--model-routing", "5"]).modelRouting).toBe(true);
+  });
+});
+
+describe("parseFlags --fan-out", () => {
+  it("defaults fanOut off and concurrency 3", () => {
+    const f = parseFlags(["5"]);
+    expect(f.fanOut).toBe(false);
+    expect(f.fanOutConcurrency).toBe(3);
+  });
+  it("parses --fan-out and --fan-out-concurrency", () => {
+    const f = parseFlags(["--fan-out", "--fan-out-concurrency", "4", "5"]);
+    expect(f.fanOut).toBe(true);
+    expect(f.fanOutConcurrency).toBe(4);
+  });
+  it("rejects a non-positive fan-out concurrency", () => {
+    expect(() => parseFlags(["--fan-out-concurrency", "0"])).toThrow(/positive integer/);
+  });
+  it("shows fan-out in print-config", () => {
+    expect(configOutput({ fanOut: true, fanOutConcurrency: 4 })).toMatch(
+      /fan-out\s+on \(concurrency 4\)/
+    );
+    expect(configOutput({})).toMatch(/fan-out\s+off/);
+  });
 });
 
 describe("parseFlags --verbose", () => {

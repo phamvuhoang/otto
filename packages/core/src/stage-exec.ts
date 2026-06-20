@@ -4,6 +4,8 @@ import { DEFAULT_AGENT, type AgentRuntimeId } from "./agent-runtime.js";
 import { analyzeContext } from "./context-report.js";
 import { applyPromptReduction } from "./prompt-reduction.js";
 import { renderTemplate } from "./render.js";
+import { resolveStageModel, type TierLadder } from "./model-tier.js";
+import type { RiskAssessment } from "./risk.js";
 import { DEFAULT_BACKOFF_MS, backoffFor, withRetries } from "./retry.js";
 import {
   getAgentRuntime,
@@ -36,6 +38,25 @@ export type ExecuteStageOptions = {
   agentId?: AgentRuntimeId;
   /** In-run console sink (issue #65 P10), threaded to runStage. Absent → runner default. */
   sink?: EventSink;
+  /** Model routing on (issue #66 P11). Off ⇒ runtime default model (today's behavior). */
+  modelRouting?: boolean;
+  /** tier → model ladder; consulted only when routing resolves a tier. */
+  tierLadder?: TierLadder;
+  /** Change-risk assessment that modulates the routed tier (reused from the P2 router). */
+  riskAssessment?: RiskAssessment;
+  /** Repeated-failure escalation count that bumps the routed tier. */
+  escalations?: number;
+  /** Extra sandbox write roots (issue #66 P11): a fan-out sub-agent passes its
+   *  parent repo so `git commit` from the worktree reaches the shared `.git`. */
+  sandboxWriteRoots?: string[];
+};
+
+/** Fallback ladder when routing is requested without one — every tier resolves
+ *  to the runtime default (issue #66 P11). The real ladder comes from run-bin. */
+const EMPTY_LADDER: TierLadder = {
+  cheap: undefined,
+  mid: undefined,
+  strong: undefined,
 };
 
 /** A policy violation found at a shell/@spill tag becomes a `blocked` trajectory
@@ -100,6 +121,16 @@ export async function executeStage(
           `${dim(`prompt reduce ${originalChars} -> ${reducedChars} chars | cache hits ${cacheHits}`)}\n`
         );
       }
+      // Route the model for this stage (issue #66 P11): a pin wins, else the
+      // declared tier through the ladder when routing is on, else runtime default.
+      const model = resolveStageModel({
+        runtimeId: opts.agentId ?? DEFAULT_AGENT,
+        stage,
+        routing: opts.modelRouting === true,
+        ladder: opts.tierLadder ?? EMPTY_LADDER,
+        assessment: opts.riskAssessment,
+        escalations: opts.escalations,
+      });
       const result = await runStage(
         stage,
         prompt,
@@ -107,13 +138,26 @@ export async function executeStage(
         iteration,
         spillHostDir,
         stageLog,
-        { signal, runtime, sink: opts.sink }
+        {
+          signal,
+          runtime,
+          sink: opts.sink,
+          modelSpec: model.spec,
+          sandboxWriteRoots: opts.sandboxWriteRoots,
+        }
       );
       // Attribute the *final* prompt's window footprint by category (issue #62
       // P7). `prompt` is post-reduction, so the breakdown reflects what was sent.
       return {
         ...result,
         contextBreakdown: analyzeContext(prompt),
+        ...(model.tier
+          ? {
+              routedTier: model.tier,
+              routedModel: model.spec,
+              modelSource: model.source,
+            }
+          : {}),
         ...(violations.length > 0
           ? { safetyEvents: violations.map(violationToSafetyEvent) }
           : {}),

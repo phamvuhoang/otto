@@ -268,6 +268,13 @@ describe("buildSandboxSettings", () => {
       },
     });
   });
+  it("appends extra write roots so a fan-out sub-agent can reach the shared .git", () => {
+    expect(
+      buildSandboxSettings("/ws/.otto-tmp/wt/t1", [], ["/ws"]).sandbox
+    ).toMatchObject({
+      filesystem: { allowWrite: ["/ws/.otto-tmp/wt/t1", "/ws"] },
+    });
+  });
 });
 
 describe("resultFromEvent", () => {

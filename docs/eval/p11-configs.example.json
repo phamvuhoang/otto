@@ -1,0 +1,6 @@
+[
+  { "label": "baseline", "args": [], "env": {} },
+  { "label": "model-routing", "args": ["--model-routing"], "env": {} },
+  { "label": "fan-out", "args": ["--plan", "--fan-out"], "env": {} },
+  { "label": "routing+fan-out", "args": ["--model-routing", "--plan", "--fan-out"], "env": {} }
+]

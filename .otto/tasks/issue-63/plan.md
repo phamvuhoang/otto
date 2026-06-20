@@ -48,8 +48,16 @@ wired it.
   auto-approves and records the decision ("record assumptions and proceed"),
   otherwise reads one line. Exported from `index.ts`. Live interactive wiring is a
   follow-up (Otto is AFK). Pinned by `plan-checkpoint.test.ts`.
-- [ ] **7. Plan-quality gate / feedback.** Optionally re-plan when the rubric
-  `ratio` is below a threshold (a self-healing plan loop), reporting the score and
-  what was missing. Pinned by a loop test.
+- [x] **7. Plan-quality gate / feedback.** `plan-gate.ts` (pure): `assessPlanGate`
+  turns a rubric score into a PASS/FAIL verdict vs `DEFAULT_PLAN_QUALITY_THRESHOLD`
+  (0.75), reporting the `shortfall` (criteria needed to clear the bar) and the
+  `missing` set — the re-plan target; `formatPlanGate` renders it. Wired into
+  `--plan-report` so each task shows PASS/FAIL. The automated self-healing re-plan
+  loop (re-run the plan stage on FAIL) is a documented follow-up. Pinned by
+  `plan-gate.test.ts` + `plan-report-cli.test.ts`.
 
-This run implements **task 1**.
+All 7 plan tasks are complete: the P8 plan-authoring substrate (rubric → eval
+signal → `--plan-report` → the `plan` stage → `--plan` wiring → human checkpoint →
+quality gate) ships across this branch. Remaining follow-ups (not blocking): live
+interactive checkpoint wiring, an automated re-plan loop, `OTTO_PLAN` env, and a
+ghafk plan flow with issue-fetch.

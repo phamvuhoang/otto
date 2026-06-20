@@ -259,6 +259,12 @@ export {
   type PlanCheckpointDeps,
 } from "./plan-checkpoint.js";
 export {
+  DEFAULT_PLAN_QUALITY_THRESHOLD,
+  assessPlanGate,
+  formatPlanGate,
+  type PlanGateVerdict,
+} from "./plan-gate.js";
+export {
   evaluateExpectation,
   parseBenchmarkSuite,
   parseBenchmarkTask,

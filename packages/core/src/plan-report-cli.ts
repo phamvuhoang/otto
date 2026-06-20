@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { assessPlanGate, formatPlanGate } from "./plan-gate.js";
 import {
   formatPlanRubric,
   scorePlanQuality,
@@ -43,7 +44,12 @@ export type TaskPlanScore = { taskKey: string; score: PlanRubricScore };
 export function formatPlanReport(tasks: TaskPlanScore[]): string {
   const lines: string[] = ["Plan report"];
   for (const t of tasks) {
-    lines.push("", `Task ${t.taskKey}`, formatPlanRubric(t.score));
+    lines.push(
+      "",
+      `Task ${t.taskKey}`,
+      formatPlanRubric(t.score),
+      formatPlanGate(assessPlanGate(t.score))
+    );
   }
   return lines.join("\n");
 }

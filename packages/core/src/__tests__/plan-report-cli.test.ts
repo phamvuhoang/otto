@@ -71,6 +71,10 @@ describe("formatPlanReport", () => {
     expect(out).toContain("Task issue-2");
     expect(out).toMatch(/8\/8/);
     expect(out).toMatch(/0\/8/);
+    // the gate flags each task PASS/FAIL (slice 7): the complete plan passes,
+    // the thin one fails.
+    expect(out).toMatch(/plan gate: PASS/);
+    expect(out).toMatch(/plan gate: FAIL/);
   });
 });
 

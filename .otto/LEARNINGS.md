@@ -755,6 +755,20 @@
   real TTY/stdin. Exported from index.ts. Live interactive wiring (and the
   task-key plumbing run-bin would need) deferred — substrate, matching how P7
   shipped pure-then-wired. Pinned by `plan-checkpoint.test.ts`.
+- **Plan-quality gate (#63 P8, slice 7) — `plan-gate.ts`, WIRED into
+  `--plan-report`.** `assessPlanGate(score, {threshold})` turns the slice-1 rubric
+  ratio into a PASS/FAIL verdict vs `DEFAULT_PLAN_QUALITY_THRESHOLD` (0.75 = ¾ of
+  criteria); `shortfall = max(0, ceil(threshold*maxScore) - metCount)` is how many
+  more criteria a re-plan must add (0 when passed), `missing` (from the score) is
+  what to add. `formatPlanGate` → `plan gate: PASS|FAIL (X% vs Y% threshold)` + a
+  `re-plan to add N more: …` line on FAIL. Unlike slices 2/6 this one is WIRED:
+  `formatPlanReport` (slice 3) now appends the gate line per task, so
+  `otto-afk --plan-report` flags sub-threshold plans (updated its test to expect
+  PASS for the complete fixture + FAIL for the thin one). The automated self-healing
+  re-plan LOOP (re-run the plan stage on FAIL) is a documented follow-up — the gate
+  DECISION is substrate; the loop trigger is not. Exported from index.ts. Pinned by
+  `plan-gate.test.ts` + `plan-report-cli.test.ts`. P8 (#63) plan-authoring substrate
+  now complete across slices 1–7 on branch otto/63.
 
 
 ## Gotchas

@@ -364,3 +364,12 @@ export {
   type GateContext,
   type GateResult,
 } from "./journal-gate.js";
+export {
+  createThreadsClient,
+  resolveThreadsAuth,
+  threadsConfigPath,
+  ThreadsApiError,
+  type ThreadsAuth,
+  type ThreadsClient,
+  type ThreadsErrorKind,
+} from "./threads-api.js";

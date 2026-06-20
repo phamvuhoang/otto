@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.16.0...otto-core-v0.17.0) (2026-06-20)
+
+
+### Features
+
+* **core:** human-legible run reports + otto-explain ([#64](https://github.com/phamvuhoang/otto/issues/64) P9) ([#73](https://github.com/phamvuhoang/otto/issues/73)) ([b5b0aab](https://github.com/phamvuhoang/otto/commit/b5b0aabfdbf9c2dbaf4c223d564f3873b250d923))
+
 ## [0.16.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.15.0...otto-core-v0.16.0) (2026-06-20)
 
 

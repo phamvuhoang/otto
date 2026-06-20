@@ -33,14 +33,15 @@ function breakdown(
 function stage(
   iteration: number,
   name: string,
-  b?: ContextBreakdown
+  b?: ContextBreakdown,
+  usage = emptyTokenUsage()
 ): StageRecord {
   return {
     iteration,
     stage: name,
     runtimeId: "claude",
     costUsd: 0,
-    usage: emptyTokenUsage(),
+    usage,
     isError: false,
     apiErrorStatus: null,
     contextBreakdown: b,
@@ -91,6 +92,33 @@ describe("formatContextReportRun", () => {
     ]);
     expect(out).toContain("flat");
     expect(out).not.toContain("growing");
+  });
+
+  it("reports cache-hit rate from per-stage usage (slice 4)", () => {
+    const out = formatContextReportRun("run-1", [
+      stage(1, "implementer", breakdown(400, [["playbook", 400]]), {
+        inputTokens: 1000,
+        outputTokens: 50,
+        cacheCreationInputTokens: 4000,
+        cacheReadInputTokens: 0,
+      }),
+      stage(2, "implementer", breakdown(400, [["playbook", 400]]), {
+        inputTokens: 1000,
+        outputTokens: 50,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 4000,
+      }),
+    ]);
+    expect(out).toMatch(/cache efficiency/i);
+    expect(out).toContain("40%");
+    expect(out).toContain("cache read 4,000");
+  });
+
+  it("omits the cache line when no input tokens were recorded", () => {
+    const out = formatContextReportRun("run-1", [
+      stage(1, "implementer", breakdown(400, [["playbook", 400]])),
+    ]);
+    expect(out).not.toMatch(/cache efficiency/i);
   });
 });
 

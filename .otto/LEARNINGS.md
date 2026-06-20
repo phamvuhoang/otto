@@ -550,6 +550,25 @@
   suffice. Pinned by `cli-help.test.ts` (flag parse) + `context-report-cli.test.ts`
   (composition/slope/no-runs). Remaining P7 slices: (4) prefix caching, (5) bounded
   learnings, (6) compaction, (7) read-dedup, (8) per-stage budget.
+- **Prompt-prefix caching is REPORT-ONLY in Otto (#62 P7, slice 4) — Otto cannot
+  set `cache_control` breakpoints.** Otto spawns the `claude` CLI (`claude --print`),
+  it does NOT call the Anthropic API, so it has no lever to "mark a cached prefix":
+  there is no `claude` flag for it (see `buildClaudeArgs`), and the rendered prompt
+  is delivered as a single `Read` tool-result, not an API content block — reordering
+  stable-vs-volatile text inside that file creates NO cacheable sub-prefix. The CLI
+  already auto-caches its stable system-prompt/tools, and Otto invokes it with
+  identical flags every iteration, so cache hits already occur. The feasible +
+  honest half (the issue's explicit success metric, "cache-hit rate reported and
+  non-trivial") is to REPORT it: pure `summarizeCacheEfficiency(usages)` →
+  `{inputTokens, cacheCreationInputTokens, cacheReadInputTokens, totalInputTokens,
+  hitRate}` + `formatCacheEfficiency` in `tokens.ts` (mirrors `formatTokenUsage`).
+  `hitRate = cacheRead / (input + cacheCreation + cacheRead)` — **input only, output
+  excluded** (generated, never cacheable). Surfaced as one extra line on the EXISTING
+  `--context-report` (it already reads the same stage records); drawn from **every**
+  stage's authoritative `StageRecord.usage` (NOT just `contextBreakdown`-measured
+  ones — cache usage is independent of the estimated composition), and **omitted when
+  `totalInputTokens === 0`**. Pinned by `tokens.test.ts` (summarize/format) +
+  `context-report-cli.test.ts` (line present w/ usage, omitted w/o).
 
 
 ## Gotchas

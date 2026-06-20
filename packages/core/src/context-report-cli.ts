@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 
 import { listRunIds, readStageRecords, type StageRecord } from "./run-report.js";
+import { formatCacheEfficiency, summarizeCacheEfficiency } from "./tokens.js";
 
 /**
  * `otto-afk --context-report` read-only surface (issue #62 P7, slice 3).
@@ -95,6 +96,14 @@ export function formatContextReportRun(
         deltaPct >= 0 ? "+" : ""
       }${pct.format(deltaPct)}%, ${trend})`
     );
+  }
+
+  // Cache efficiency (slice 4) — authoritative provider usage, independent of
+  // the estimated-token composition above. Drawn from EVERY stage's usage (not
+  // just measured ones); omitted when no input tokens were billed.
+  const cache = summarizeCacheEfficiency(stages.map((s) => s.usage));
+  if (cache.totalInputTokens > 0) {
+    lines.push("", `  ${formatCacheEfficiency(cache)}`);
   }
   return lines.join("\n");
 }

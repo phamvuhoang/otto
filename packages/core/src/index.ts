@@ -34,8 +34,11 @@ export {
 } from "./agent-runtime.js";
 export {
   emptyTokenUsage,
+  formatCacheEfficiency,
   parseTokenMode,
   parseTokenUsage,
+  summarizeCacheEfficiency,
+  type CacheEfficiency,
   type TokenMode,
   type TokenUsage,
 } from "./tokens.js";

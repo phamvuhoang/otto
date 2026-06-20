@@ -16,6 +16,7 @@ function signals(overrides: Partial<EvalSignals> = {}): EvalSignals {
     elapsedMs: 10_000,
     safetyEventCount: 0,
     skillUsageCount: 0,
+    planQualityRatio: null,
     ...overrides,
   };
 }
@@ -177,6 +178,23 @@ describe("scoreTrajectory", () => {
     expect(s.skillUsageCount).toBe(3);
     expect(scoreTrajectory(manifest(), [stage()]).skillUsageCount).toBe(0);
   });
+
+  it("captures the plan-quality ratio when a plan score is supplied (#63)", () => {
+    const planScore = {
+      results: [],
+      metCount: 6,
+      maxScore: 8,
+      ratio: 0.75,
+      missing: [],
+    };
+    expect(
+      scoreTrajectory(manifest(), [stage()], { planScore }).planQualityRatio
+    ).toBe(0.75);
+  });
+
+  it("leaves plan-quality null when no plan score is supplied", () => {
+    expect(scoreTrajectory(manifest(), [stage()]).planQualityRatio).toBeNull();
+  });
 });
 
 describe("compareTrajectories", () => {
@@ -191,10 +209,10 @@ describe("compareTrajectories", () => {
     ]);
     const lines = out.split("\n");
     expect(lines[0]).toBe(
-      "| Run | Succeeded | Exit | Iterations | Stages | Errors | Cost (USD) | Tokens | Elapsed (ms) | Safety events | Skills used |"
+      "| Run | Succeeded | Exit | Iterations | Stages | Errors | Cost (USD) | Tokens | Elapsed (ms) | Safety events | Skills used | Plan quality |"
     );
     expect(lines[1]).toBe(
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     );
     expect(lines).toHaveLength(4);
     expect(lines[2]).toContain("| baseline |");
@@ -258,5 +276,24 @@ describe("compareTrajectories", () => {
     // Only one run has a comparable elapsed value, so no best/worst marker on it.
     expect(out).toContain("| 12000 |");
     expect(out).toContain("| — |");
+  });
+
+  it("ranks plan quality as higher-is-better and renders a percent (#63)", () => {
+    const out = compareTrajectories([
+      { label: "rich", signals: signals({ planQualityRatio: 1 }) },
+      { label: "thin", signals: signals({ planQualityRatio: 0.5 }) },
+    ]);
+    expect(out).toContain("Plan quality");
+    expect(out).toContain("100% (best)");
+    expect(out).toContain("50% (worst)");
+  });
+
+  it("renders an unscored plan quality as a dash, excluded from ranking", () => {
+    const out = compareTrajectories([
+      { label: "scored", signals: signals({ planQualityRatio: 0.8 }) },
+      { label: "unscored", signals: signals({ planQualityRatio: null }) },
+    ]);
+    expect(out).toContain("80%");
+    expect(out).not.toContain("80% (best)");
   });
 });

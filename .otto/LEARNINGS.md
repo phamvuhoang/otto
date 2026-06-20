@@ -686,6 +686,18 @@
   surface, the `plan` stage + template, the human checkpoint) are later slices —
   substrate only, cannot regress a run. Pinned by `plan-rubric.test.ts`. Plan:
   `.otto/tasks/issue-63/{spec,plan}.md` (7 slices, this run = slice 1).
+- **Plan quality as an eval signal (#63 P8, slice 2) — `eval.ts`.** `EvalSignals`
+  gains `planQualityRatio: number | null` (the slice-1 rubric `ratio`, `null` when
+  no plan was scored). KEY purity move: `scoreTrajectory` stays pure (no I/O) by
+  taking the ALREADY-COMPUTED score via an optional 3rd arg `{ planScore?:
+  PlanRubricScore }` — the rubric reads a DOCUMENT, the trajectory scorer reads the
+  manifest/stages, so the document read happens at the call site (a later wiring
+  slice), never in eval.ts. `compareTrajectories` gains a higher-is-better "Plan
+  quality" column rendering `${round(ratio*100)}%` or `—` for null (excluded from
+  ranking, like `elapsedMs` null). Existing `scoreTrajectory` callers (`eval-run.ts`)
+  pass no `planScore` → `null`, so the A/B table is unaffected until plans are
+  scored. Pinned by `eval.test.ts`. Adding a field to `EvalSignals` requires the
+  test `signals()` helper default to include it (`planQualityRatio: null`).
 
 
 ## Gotchas

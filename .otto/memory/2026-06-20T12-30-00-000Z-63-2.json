@@ -1,0 +1,15 @@
+{
+  "id": "2026-06-20T12-30-00-000Z-63-2",
+  "content": "Plan quality as an eval signal (issue #63 P8, slice 2) — eval.ts. EvalSignals gains planQualityRatio: number | null (the slice-1 plan-rubric ratio in 0..1, null when no plan was scored). KEY purity move: scoreTrajectory(manifest, stages) stays PURE (no I/O, no model) by taking the ALREADY-COMPUTED PlanRubricScore via an optional 3rd arg `opts: { planScore?: PlanRubricScore } = {}`; planQualityRatio = opts.planScore ? opts.planScore.ratio : null. The rubric reads a DOCUMENT while scoreTrajectory reads the manifest+stage trajectory, so the document read stays at the call site (a later wiring slice), never inside eval.ts — preserving the pure-scorer-over-recorded-data contract. compareTrajectories gains a higher-is-better 'Plan quality' COMPARE_COLUMNS entry rendering `${Math.round(ratio*100)}%` or '—' for null (null excluded from ranking, same as elapsedMs). Existing scoreTrajectory callers in eval-run.ts (2 callsites) pass no planScore so they get null — the eval A/B comparison table is unaffected until a run actually scores its plan. GOTCHA: adding a required field to EvalSignals means the eval.test.ts signals() helper default must include planQualityRatio: null, and the pinned markdown-table header test must add the '| Plan quality |' column + an extra '| --- |' separator cell. Pinned by eval.test.ts (+4 tests: scoreTrajectory captures ratio from planScore; null without; compare ranks higher-is-better with percent; null renders dash excluded from ranking). Plan: .otto/tasks/issue-63/plan.md (this run = slice 2 of 7).",
+  "category": "convention",
+  "sourceRun": "2026-06-20T12-30-00-000Z-manual",
+  "taskKey": "issue-63",
+  "scope": [
+    "packages/core/src/eval.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T12:30:00.000Z",
+  "useCount": 0
+}

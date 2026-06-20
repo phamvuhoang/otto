@@ -1,3 +1,4 @@
+import type { PlanRubricScore } from "./plan-rubric.js";
 import type { RunManifest, StageRecord } from "./run-report.js";
 import { tokenUsageTotal } from "./tokens.js";
 
@@ -33,6 +34,13 @@ export type EvalSignals = {
   safetyEventCount: number;
   /** Skills applied across the manifest and stage records (issue #44). */
   skillUsageCount: number;
+  /**
+   * Plan-completeness rubric ratio (0..1) for the run's authored plan (issue #63
+   * P8), or `null` when no plan was scored. Supplied to {@link scoreTrajectory}
+   * by the caller (the rubric reads a document, not the trajectory), so this
+   * function stays pure.
+   */
+  planQualityRatio: number | null;
 };
 
 const SUCCESS_REASONS = new Set(["complete", "done"]);
@@ -45,7 +53,8 @@ const SUCCESS_REASONS = new Set(["complete", "done"]);
  */
 export function scoreTrajectory(
   manifest: RunManifest,
-  stages: StageRecord[]
+  stages: StageRecord[],
+  opts: { planScore?: PlanRubricScore } = {}
 ): EvalSignals {
   const exitReason = manifest.exitReason ?? null;
   return {
@@ -63,6 +72,7 @@ export function scoreTrajectory(
     skillUsageCount:
       (manifest.skillsUsed?.length ?? 0) +
       stages.reduce((n, s) => n + (s.skillsUsed?.length ?? 0), 0),
+    planQualityRatio: opts.planScore ? opts.planScore.ratio : null,
   };
 }
 
@@ -130,6 +140,14 @@ const COMPARE_COLUMNS: CompareColumn[] = [
   // Shown but NOT ranked: more skill reuse is usually good (less re-planning),
   // but a config can succeed with zero skills, so there is no honest best/worst.
   { header: "Skills used", cell: (s) => String(s.skillUsageCount) },
+  {
+    header: "Plan quality",
+    cell: (s) =>
+      s.planQualityRatio == null
+        ? "—"
+        : `${Math.round(s.planQualityRatio * 100)}%`,
+    rank: { value: (s) => s.planQualityRatio, better: "higher" },
+  },
 ];
 
 /**

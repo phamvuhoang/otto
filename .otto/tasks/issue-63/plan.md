@@ -13,11 +13,13 @@ wired it.
   returns per-criterion results, met-count / max score, a 0..1 `ratio`, and the
   `missing` list. `formatPlanRubric` renders a human-readable scorecard. Pure,
   INERT, exported from `index.ts`. Pinned by `plan-rubric.test.ts`.
-- [ ] **2. Capture the rubric as an eval signal.** Surface the plan-completeness
-  score next to the other run signals (extend `eval.ts` / the comparison surface
-  or thread a `planQuality` onto the evidence bundle) so "plan-completeness rubric
-  score ↑ across fixtures" is an actual measured signal. Pure; pinned by
-  `eval`/`run-report` tests.
+- [x] **2. Capture the rubric as an eval signal.** Surfaced the plan-completeness
+  score next to the other run signals: `EvalSignals.planQualityRatio` (0..1 or
+  `null` when no plan scored), set by `scoreTrajectory(manifest, stages, {
+  planScore })` — the caller passes the already-computed `PlanRubricScore` so the
+  scorer stays pure (the rubric reads a document, not the trajectory). Added a
+  higher-is-better "Plan quality" column to `compareTrajectories`. Pinned by
+  `eval.test.ts`.
 - [ ] **3. `otto-afk --plan-report` read-only surface.** A pure formatter that
   reads the persisted `.otto/tasks/<task-key>/{spec,plan}.md`, scores them with the
   rubric, and prints the scorecard (mirrors `--context-report`). Pinned by

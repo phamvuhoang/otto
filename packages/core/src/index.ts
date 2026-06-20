@@ -375,6 +375,13 @@ export {
 } from "./threads-api.js";
 export { forbiddenTermsFor, selectCandidate } from "./journal-source.js";
 export {
+  runJournal,
+  type JournalAction,
+  type JournalConfig,
+  type JournalDeps,
+  type JournalOutcome,
+} from "./journal.js";
+export {
   appendLedger,
   hashContent,
   readLedger,

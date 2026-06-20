@@ -428,6 +428,51 @@ describe("runBin --plan (author spec+plan, one-shot)", () => {
   });
 });
 
+describe("runBin --verbose", () => {
+  const oldWorkspace = process.env.OTTO_WORKSPACE;
+  let workspace: string | undefined;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (workspace) rmSync(workspace, { recursive: true, force: true });
+    workspace = undefined;
+    if (oldWorkspace === undefined) delete process.env.OTTO_WORKSPACE;
+    else process.env.OTTO_WORKSPACE = oldWorkspace;
+  });
+
+  it("passes verbose: true into runLoop when --verbose is set", async () => {
+    workspace = makeWorkspace();
+    process.env.OTTO_WORKSPACE = workspace;
+    mockBranch(workspace);
+    captureStdout();
+
+    await expect(runBin(["--verbose", "plan", "1"], cfg)).resolves.toBeUndefined();
+
+    expect(mocks.runLoop).toHaveBeenCalledWith(
+      expect.objectContaining({ verbose: true })
+    );
+  });
+
+  it("passes verbose: false into runLoop when --verbose is absent", async () => {
+    workspace = makeWorkspace();
+    process.env.OTTO_WORKSPACE = workspace;
+    mockBranch(workspace);
+    captureStdout();
+
+    await expect(runBin(["plan", "1"], cfg)).resolves.toBeUndefined();
+
+    expect(mocks.runLoop).toHaveBeenCalledWith(
+      expect.objectContaining({ verbose: false })
+    );
+  });
+
+  it("shows verbose in --print-config", async () => {
+    const stdout = captureStdout();
+    await expect(runBin(["--verbose", "--print-config"], cfg)).resolves.toBeUndefined();
+    expect(stdout.join("")).toMatch(/verbose\s+true/);
+  });
+});
+
 describe("runBin --plan-report", () => {
   const oldWorkspace = process.env.OTTO_WORKSPACE;
   let workspace: string | undefined;

@@ -46,6 +46,9 @@ export type CliFlags = {
   /** `--auto-switch-on-limit` toggle (default false; opt-in, issue #24 P4). */
   autoSwitchOnLimit: boolean;
   reviewPanel: boolean;
+  /** `--verbose` toggle (default false; issue #65 P10). Restores the full in-run
+   *  firehose instead of the quiet ConsoleUi. */
+  verbose: boolean;
   /** `--adaptive-router` toggle (default false; opt-in, issue #41 P2). */
   adaptiveRouter: boolean;
   /** `--explain-routing` toggle (default false; issue #45 P6). Prints the
@@ -193,6 +196,7 @@ export function parseFlags(
   let expectingFallbackAgent = false;
   let autoSwitchOnLimit = false;
   let reviewPanel = false;
+  let verbose = false;
   let adaptiveRouter = false;
   let explainRouting = false;
   let watch = false;
@@ -343,6 +347,7 @@ export function parseFlags(
     else if (a === "--fallback-agent") expectingFallbackAgent = true;
     else if (a === "--auto-switch-on-limit") autoSwitchOnLimit = true;
     else if (a === "--review-panel") reviewPanel = true;
+    else if (a === "--verbose") verbose = true;
     else if (a === "--adaptive-router") adaptiveRouter = true;
     else if (a === "--explain-routing") explainRouting = true;
     else if (a === "--watch") watch = true;
@@ -430,6 +435,7 @@ export function parseFlags(
     fallbackAgent,
     autoSwitchOnLimit,
     reviewPanel,
+    verbose,
     adaptiveRouter,
     explainRouting,
     watch,
@@ -507,6 +513,7 @@ Flags:
   --agent <runtime>   agent CLI runtime: claude | codex (or OTTO_AGENT / .otto/config.json "agent"; default: claude)
   --fallback-agent <runtime>  runtime to switch to on a usage/rate limit: claude | codex (or OTTO_FALLBACK_AGENT / config "fallbackAgent"; default: none)
   --auto-switch-on-limit  switch to the fallback runtime when the active one hits a limit (or OTTO_AUTO_SWITCH_ON_LIMIT=1 / config "autoSwitchOnLimit"; default: off)
+  --verbose           print the full in-run event firehose (default: off — quiet mode shows one terse line per meaningful action)
   --review-panel      replace the single reviewer stage with correctness/security/tests lens reviewers + one synth commit (default: off)
   --adaptive-router   route review depth by per-iteration change risk: single reviewer (low) / lens subset (medium) / full panel (high) (or OTTO_ADAPTIVE_ROUTER=1; default: off)
   --explain-routing   print the adaptive router's per-iteration reasoning (change class, risk, chosen depth/lenses); requires --adaptive-router (or OTTO_EXPLAIN_ROUTING=1; default: off)
@@ -589,6 +596,8 @@ export type PrintConfigOptions = {
   fallbackError?: string;
   /** Resolved review lenses (empty array = single reviewer). */
   reviewLenses?: string[];
+  /** Verbose mode enabled (issue #65 P10): restore full in-run firehose. */
+  verbose?: boolean;
   /** Adaptive router enabled (issue #41 P2). */
   adaptiveRouter?: boolean;
   /** Explain-routing enabled (issue #45 P6); no effect without the router. */
@@ -642,6 +651,7 @@ export function printConfig(
     fallbackSource,
     autoSwitchOnLimit = false,
     fallbackError,
+    verbose = false,
     reviewLenses = [],
     adaptiveRouter = false,
     explainRouting = false,
@@ -738,6 +748,7 @@ export function printConfig(
   cooldown              ${cooldownStatus}
   token mode            ${tokenModeStatus}
   max-wait              ${maxWaitMs != null ? `${Math.round(maxWaitMs / 60000)}m` : "6h (default)"}
+  verbose               ${verbose}
   review                ${reviewStatus}
   routing               ${routingStatus}
   branch                ${branchStatus}

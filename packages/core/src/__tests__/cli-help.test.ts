@@ -493,3 +493,25 @@ describe("printConfig routing", () => {
     expect(out).toMatch(/routing\s+off \(--explain-routing needs --adaptive-router\)/);
   });
 });
+
+describe("parseFlags --verbose", () => {
+  it("defaults verbose to false", () => {
+    expect(parseFlags(["5"]).verbose).toBe(false);
+  });
+  it("sets verbose when the flag is present", () => {
+    expect(parseFlags(["--verbose", "5"]).verbose).toBe(true);
+  });
+  it("consumes no value — trailing arg is still in rest", () => {
+    const f = parseFlags(["--verbose", "5"]);
+    expect(f.rest).toEqual(["5"]);
+  });
+});
+
+describe("printConfig verbose", () => {
+  it("shows verbose: false by default", () => {
+    expect(configOutput({})).toMatch(/verbose\s+false/);
+  });
+  it("shows verbose: true when set", () => {
+    expect(configOutput({ verbose: true })).toMatch(/verbose\s+true/);
+  });
+});

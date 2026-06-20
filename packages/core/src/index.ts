@@ -352,3 +352,4 @@ export {
   type RunView,
   type RunViewStage,
 } from "./run-view.js";
+export { runTail, type TailDeps } from "./tail.js";

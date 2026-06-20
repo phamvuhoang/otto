@@ -32,6 +32,18 @@ const CONTRACT_SECTIONS = [
   "## Gaps And Follow-Ups",
 ];
 
+// P9 (#64): the report is layperson-first. These prose sections lead the body so
+// a non-engineer can verify the run; the engineer-detail sections (Task Source,
+// Evidence, …) sit below a visible divider.
+const LAYPERSON_SECTIONS = [
+  "## What Changed",
+  "## Why",
+  "## How To Verify",
+  "## What To Watch",
+  "## What I Was Unsure About",
+];
+const ENGINEER_DIVIDER = "Engineer detail below";
+
 function renderFragment(): string {
   // Render the fragment standalone via an absolute @include so the real file is
   // read (matching the superpowers-include test pattern).
@@ -51,6 +63,32 @@ describe("quality report contract fragment", () => {
     for (const section of CONTRACT_SECTIONS) {
       expect(out).toContain(section);
     }
+  });
+
+  it("leads with layperson prose sections before the engineer-detail divider (P9 #64)", () => {
+    const out = renderFragment();
+    for (const section of LAYPERSON_SECTIONS) {
+      expect(out).toContain(section);
+    }
+    // A non-engineer can stop reading at the divider; engineer detail follows it.
+    const dividerAt = out.indexOf(ENGINEER_DIVIDER);
+    expect(dividerAt).toBeGreaterThan(-1);
+    for (const section of LAYPERSON_SECTIONS) {
+      expect(out.indexOf(section)).toBeLessThan(dividerAt);
+    }
+    for (const section of ["## Task Source", "## Evidence"]) {
+      expect(out.indexOf(section)).toBeGreaterThan(dividerAt);
+    }
+    // Verdict stays first of all; the layperson summary follows it.
+    expect(out.indexOf("## Verdict")).toBeLessThan(out.indexOf("## What Changed"));
+  });
+
+  it("asks for plain-language verification steps and uncertainty (P9 #64)", () => {
+    const out = renderFragment().toLowerCase();
+    // How-to-verify is for a non-engineer: steps, not just a command dump.
+    expect(out).toMatch(/non-technical|plain language|layperson|non-engineer/);
+    // Uncertainty is surfaced in human terms, not left implicit.
+    expect(out).toContain("## what i was unsure about");
   });
 
   it("offers the four-value verdict vocabulary", () => {
@@ -112,6 +150,45 @@ describe("ghafk completion adopts the quality report contract", () => {
       const out = renderTemplate(
         tpl("ghafk-issue.md"),
         { INPUTS: "19" },
+        { cwd: dir, spillHostDir: dir, spillRefPath: "./.otto-tmp/spill" }
+      );
+      for (const section of CONTRACT_SECTIONS) {
+        expect(out).toContain(section);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("afk (plan/PRD) completion adopts the quality report contract", () => {
+  // The FINISHING handoff lives in prompt.md (the afk implementer playbook
+  // included by afk.md). The include must be in the "FINISHING THE RUN" section
+  // so the report is emitted at completion, not per-iteration — the same finishing
+  // point as the <promise>NO MORE TASKS</promise> sentinel.
+  it("includes the shared fragment in prompt.md rather than re-describing it", () => {
+    const body = readFileSync(tpl("prompt.md"), "utf8");
+    expect(body).toContain("@include:quality-report.md");
+  });
+
+  it("places the include in the FINISHING THE RUN section (completion, not per-iteration)", () => {
+    const body = readFileSync(tpl("prompt.md"), "utf8");
+    const finishingIdx = body.indexOf("# FINISHING THE RUN");
+    const includeIdx = body.indexOf("@include:quality-report.md");
+    expect(finishingIdx).toBeGreaterThan(-1);
+    expect(includeIdx).toBeGreaterThan(finishingIdx);
+  });
+
+  it("surfaces the contract sections end-to-end when the afk template renders", () => {
+    // Render the afk template through its include chain
+    // (afk.md -> prompt.md -> quality-report.md) in a throwaway non-git
+    // workspace: the !? / @spill shell tags fall back and the included
+    // contract resolves.
+    const dir = mkdtempSync(join(tmpdir(), "otto-aq-"));
+    try {
+      const out = renderTemplate(
+        tpl("afk.md"),
+        { INPUTS: "plan prd", RESUME: "" },
         { cwd: dir, spillHostDir: dir, spillRefPath: "./.otto-tmp/spill" }
       );
       for (const section of CONTRACT_SECTIONS) {

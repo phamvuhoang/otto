@@ -855,6 +855,45 @@ describe("runLoop", () => {
       expect(stdoutText()).toContain("Otto done · 2 iterations · $0.20");
     });
 
+    it("persists an emitted quality report into the bundle and links it (P9 #64)", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const report = "# Otto quality report\n\n## Verdict\n\nNeeds human review\n";
+      // The gate stage emits the report AND the completion sentinel (the real
+      // ghafk implementer does both on the finishing iteration).
+      mocks.runStage.mockResolvedValue(ok(`${report}\n${sentinel}`));
+      await runLoop(loopOptions(dirs, { maxRetries: 0 }));
+
+      const { runsDir, readManifest, readRunReport } = await import(
+        "../run-report.js"
+      );
+      const ids = (await import("node:fs")).readdirSync(
+        runsDir(dirs.workspaceDir)
+      );
+      expect(readRunReport(dirs.workspaceDir, ids[0])).toContain(
+        "# Otto quality report"
+      );
+      const manifest = readManifest(dirs.workspaceDir, ids[0]);
+      expect(manifest?.artifacts.some((a) => a.kind === "report")).toBe(true);
+    });
+
+    it("persists no report when no stage emits one (P9 #64)", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      mocks.runStage.mockResolvedValue(ok(sentinel)); // gate completes, no marker
+      await runLoop(loopOptions(dirs, { maxRetries: 0 }));
+
+      const { runsDir, readManifest, readRunReport } = await import(
+        "../run-report.js"
+      );
+      const ids = (await import("node:fs")).readdirSync(
+        runsDir(dirs.workspaceDir)
+      );
+      expect(readRunReport(dirs.workspaceDir, ids[0])).toBeNull();
+      const manifest = readManifest(dirs.workspaceDir, ids[0]);
+      expect(manifest?.artifacts.some((a) => a.kind === "report")).toBe(false);
+    });
+
     it("flags failures in the done summary when a stage failed", async () => {
       const dirs = makeDirs();
       roots.push(dirs.root);

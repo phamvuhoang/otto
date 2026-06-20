@@ -1,8 +1,10 @@
 import { resolve } from "node:path";
 
+import { formatPlainReport } from "./report-explain.js";
 import {
   listRunIds,
   readManifest,
+  readRunReport,
   readStageRecords,
   type RunManifest,
   type StageRecord,
@@ -27,7 +29,7 @@ const defaultDeps: InspectDeps = {
   err: (m) => process.stderr.write(`${m}\n`),
 };
 
-const USAGE = "Usage: otto-inspect [<run-id>|latest]";
+const USAGE = "Usage: otto-inspect [--plain] [<run-id>|latest]";
 
 /**
  * Render one run's evidence bundle (manifest + stage records) into a compact,
@@ -105,7 +107,11 @@ export async function runInspect(
   argv: string[],
   deps: InspectDeps = defaultDeps
 ): Promise<number> {
-  const arg = argv[0];
+  // Parse --plain out of argv first; it may appear before or after the run-id.
+  const plain = argv.includes("--plain");
+  const positional = argv.filter((a) => a !== "--plain");
+
+  const arg = positional[0];
   if (arg === "-h" || arg === "--help") {
     deps.out(USAGE);
     return 0;
@@ -137,6 +143,10 @@ export async function runInspect(
     return 1;
   }
 
-  deps.out(formatRunReport(manifest, readStageRecords(workspaceDir, runId)));
+  if (plain) {
+    deps.out(formatPlainReport(manifest, readRunReport(workspaceDir, runId)));
+  } else {
+    deps.out(formatRunReport(manifest, readStageRecords(workspaceDir, runId)));
+  }
   return 0;
 }

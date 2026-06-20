@@ -17,6 +17,7 @@ function signals(overrides: Partial<EvalSignals> = {}): EvalSignals {
     safetyEventCount: 0,
     skillUsageCount: 0,
     planQualityRatio: null,
+    reportLegibilityRatio: null,
     ...overrides,
   };
 }
@@ -195,6 +196,25 @@ describe("scoreTrajectory", () => {
   it("leaves plan-quality null when no plan score is supplied", () => {
     expect(scoreTrajectory(manifest(), [stage()]).planQualityRatio).toBeNull();
   });
+
+  it("captures the report-legibility ratio when a report score is supplied (#64)", () => {
+    const reportScore = {
+      results: [],
+      metCount: 5,
+      maxScore: 7,
+      ratio: 5 / 7,
+      missing: [],
+    };
+    expect(
+      scoreTrajectory(manifest(), [stage()], { reportScore }).reportLegibilityRatio
+    ).toBeCloseTo(5 / 7);
+  });
+
+  it("leaves report-legibility null when no report score is supplied", () => {
+    expect(
+      scoreTrajectory(manifest(), [stage()]).reportLegibilityRatio
+    ).toBeNull();
+  });
 });
 
 describe("compareTrajectories", () => {
@@ -209,10 +229,10 @@ describe("compareTrajectories", () => {
     ]);
     const lines = out.split("\n");
     expect(lines[0]).toBe(
-      "| Run | Succeeded | Exit | Iterations | Stages | Errors | Cost (USD) | Tokens | Elapsed (ms) | Safety events | Skills used | Plan quality |"
+      "| Run | Succeeded | Exit | Iterations | Stages | Errors | Cost (USD) | Tokens | Elapsed (ms) | Safety events | Skills used | Plan quality | Report legibility |"
     );
     expect(lines[1]).toBe(
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     );
     expect(lines).toHaveLength(4);
     expect(lines[2]).toContain("| baseline |");
@@ -295,5 +315,26 @@ describe("compareTrajectories", () => {
     ]);
     expect(out).toContain("80%");
     expect(out).not.toContain("80% (best)");
+  });
+
+  it("ranks report legibility as higher-is-better and renders a percent (#64)", () => {
+    const out = compareTrajectories([
+      { label: "rich", signals: signals({ reportLegibilityRatio: 1 }) },
+      { label: "thin", signals: signals({ reportLegibilityRatio: 3 / 7 }) },
+    ]);
+    expect(out).toContain("Report legibility");
+    expect(out).toContain("100% (best)");
+    expect(out).toContain("43% (worst)");
+  });
+
+  it("renders an unscored report legibility as a dash, excluded from ranking", () => {
+    const out = compareTrajectories([
+      { label: "scored", signals: signals({ reportLegibilityRatio: 0.6 }) },
+      { label: "unscored", signals: signals({ reportLegibilityRatio: null }) },
+    ]);
+    expect(out).toContain("60%");
+    expect(out).not.toContain("60% (best)");
+    expect(out).toContain("Report legibility");
+    expect(out).toContain("| — |");
   });
 });

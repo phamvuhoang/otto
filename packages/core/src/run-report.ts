@@ -207,6 +207,57 @@ export function readManifest(
   }
 }
 
+function reportPath(workspaceDir: string, runId: string): string {
+  return join(runReportDir(workspaceDir, runId), "report.md");
+}
+
+/**
+ * The H1 a quality report leads with — the content marker persistence keys on.
+ */
+export const REPORT_MARKER = "# Otto quality report";
+
+/**
+ * Does this stage result carry an emitted Otto quality report (P9 #64)?
+ * Persistence keys on the report's H1 (content), not the stage name, because
+ * which stage emits the report differs per run mode (the implementer in
+ * ghafk/verify/apply-review; afk/plan-mode emits none).
+ */
+export function hasRunReport(stageResult: string): boolean {
+  return stageResult.includes(REPORT_MARKER);
+}
+
+/**
+ * Persist the layperson quality report a run emitted (P9 #64) to
+ * `.otto/runs/<run-id>/report.md`, so `otto-explain` can re-render it later.
+ * Best-effort — a bundle write must never break a run — so any failure is
+ * swallowed (mirrors {@link removeStageRecords}).
+ */
+export function writeRunReport(
+  workspaceDir: string,
+  runId: string,
+  text: string
+): void {
+  try {
+    const p = reportPath(workspaceDir, runId);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, text.endsWith("\n") ? text : text + "\n");
+  } catch {
+    // Best-effort: never fail a run because the report could not be persisted.
+  }
+}
+
+/** Read a run's persisted report. Absent/unreadable → null (never throws). */
+export function readRunReport(
+  workspaceDir: string,
+  runId: string
+): string | null {
+  try {
+    return readFileSync(reportPath(workspaceDir, runId), "utf8");
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Write one normalized stage record under the run's `stages/` dir. `seq` is a
  * monotonic per-run counter that zero-pads into the filename so records sort in

@@ -83,12 +83,15 @@ export {
 } from "./read-dedup.js";
 export {
   allocateRunId,
+  hasRunReport,
   listRunIds,
   readManifest,
+  readRunReport,
   readStageRecords,
   runReportDir,
   runsDir,
   writeManifest,
+  writeRunReport,
   writeStageRecord,
   type RunArtifact,
   type RunManifest,
@@ -101,6 +104,11 @@ export {
   runInspect,
   type InspectDeps,
 } from "./inspect.js";
+export {
+  formatPlainReport,
+  runExplain,
+  type ExplainDeps,
+} from "./report-explain.js";
 export {
   formatRunsList,
   runRuns,
@@ -251,6 +259,14 @@ export {
   type PlanCriterionResult,
   type PlanRubricScore,
 } from "./plan-rubric.js";
+export {
+  REPORT_CRITERIA,
+  formatReportRubric,
+  scoreReportLegibility,
+  type ReportCriterion,
+  type ReportCriterionResult,
+  type ReportRubricScore,
+} from "./report-rubric.js";
 export {
   formatCheckpointPrompt,
   parseCheckpointResponse,

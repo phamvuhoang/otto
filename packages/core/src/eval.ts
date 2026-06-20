@@ -1,4 +1,5 @@
 import type { PlanRubricScore } from "./plan-rubric.js";
+import type { ReportRubricScore } from "./report-rubric.js";
 import type { RunManifest, StageRecord } from "./run-report.js";
 import { tokenUsageTotal } from "./tokens.js";
 
@@ -41,6 +42,13 @@ export type EvalSignals = {
    * function stays pure.
    */
   planQualityRatio: number | null;
+  /**
+   * Report-legibility rubric ratio (0..1) for the run's quality report (issue
+   * #64 P9), or `null` when no report was scored. Supplied to
+   * {@link scoreTrajectory} by the caller (the rubric reads a document, not the
+   * trajectory), so this function stays pure.
+   */
+  reportLegibilityRatio: number | null;
 };
 
 const SUCCESS_REASONS = new Set(["complete", "done"]);
@@ -54,7 +62,7 @@ const SUCCESS_REASONS = new Set(["complete", "done"]);
 export function scoreTrajectory(
   manifest: RunManifest,
   stages: StageRecord[],
-  opts: { planScore?: PlanRubricScore } = {}
+  opts: { planScore?: PlanRubricScore; reportScore?: ReportRubricScore } = {}
 ): EvalSignals {
   const exitReason = manifest.exitReason ?? null;
   return {
@@ -73,6 +81,7 @@ export function scoreTrajectory(
       (manifest.skillsUsed?.length ?? 0) +
       stages.reduce((n, s) => n + (s.skillsUsed?.length ?? 0), 0),
     planQualityRatio: opts.planScore ? opts.planScore.ratio : null,
+    reportLegibilityRatio: opts.reportScore ? opts.reportScore.ratio : null,
   };
 }
 
@@ -147,6 +156,14 @@ const COMPARE_COLUMNS: CompareColumn[] = [
         ? "—"
         : `${Math.round(s.planQualityRatio * 100)}%`,
     rank: { value: (s) => s.planQualityRatio, better: "higher" },
+  },
+  {
+    header: "Report legibility",
+    cell: (s) =>
+      s.reportLegibilityRatio == null
+        ? "—"
+        : `${Math.round(s.reportLegibilityRatio * 100)}%`,
+    rank: { value: (s) => s.reportLegibilityRatio, better: "higher" },
   },
 ];
 

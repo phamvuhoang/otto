@@ -4,6 +4,15 @@ export { runLinearAfk, type RunLinearAfkOptions } from "./linear-main.js";
 export { runLoop, type LoopOptions, type LoopOutcome } from "./loop.js";
 export { STAGES, type Stage } from "./stages.js";
 export {
+  DEFAULT_LADDER,
+  resolveStageModel,
+  resolveTierLadder,
+  routeModel,
+  type ModelTier,
+  type StageModel,
+  type TierLadder,
+} from "./model-tier.js";
+export {
   deriveTaskKey,
   describeScope,
   parseGithubRepo,
@@ -345,6 +354,20 @@ export {
   type PlanProgress,
   type PlanProgressItem,
 } from "./plan-progress.js";
+export {
+  parsePlanTasks,
+  planParallelGroups,
+  readPlanTasks,
+  type PlanTask,
+} from "./plan-tasks.js";
+export { createWorktree, reapWorktrees } from "./worktree.js";
+export {
+  runFanout,
+  type FanoutResult,
+  type FanoutTaskOutcome,
+  type FanoutTaskStatus,
+  type RunFanoutOptions,
+} from "./fanout.js";
 export {
   buildRunView,
   formatDoneCard,

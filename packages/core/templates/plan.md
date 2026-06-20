@@ -87,9 +87,31 @@ Use the `Write` tool. An ordered checklist of **bite-sized, testable tasks**, on
 Keep tasks ordered so each is gated on the prior; name the test file that pins
 each task.
 
+## 4b. WRITE THE TASK GRAPH (optional) — `.otto/tasks/<task-key>/tasks.json`
+
+Use the `Write` tool to also emit a machine-readable task graph so Otto can fan
+independent tasks out to isolated sub-agents (issue #66 P11). Shape:
+
+```json
+{
+  "version": 1,
+  "tasks": [
+    { "id": "t1", "title": "<short>", "fileScope": ["path/you/expect/to/touch"], "dependsOn": [], "parallelSafe": true },
+    { "id": "t2", "title": "<short>", "fileScope": ["other/path"], "dependsOn": ["t1"], "parallelSafe": false }
+  ]
+}
+```
+
+Rules: `id` unique; `dependsOn` lists earlier task ids that must land first;
+`fileScope` lists the files the task is expected to edit; set `parallelSafe`
+**true only when** the task shares no files and no ordering with its siblings —
+**be conservative and default to `false` when unsure**. This file is OPTIONAL:
+if the work does not decompose into cleanly independent tasks, omit it and the
+run proceeds sequentially. A malformed file is ignored (fan-out simply disabled).
+
 ## 5. COMMIT
 
-Commit ONLY the spec + plan (and this is the whole run — no code). Use a
-`docs(plan):` or `chore(plan):` commit. Then print a one-line summary of the
-task-key and the number of plan tasks authored. Do not implement; the human
-reviews the plan next.
+Commit ONLY the spec + plan + (if written) the task graph — this is the whole
+run, no code. Use a `docs(plan):` or `chore(plan):` commit. Then print a one-line
+summary of the task-key and the number of plan tasks authored. Do not implement;
+the human reviews the plan next.

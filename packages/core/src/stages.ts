@@ -1,7 +1,11 @@
+import type { ModelTier } from "./model-tier.js";
+
 export type Stage = {
   name: string;
   template: string;
   permissionMode?: string;
+  /** Difficulty tier for model routing (issue #66 P11). Absent ⇒ runtime default model. */
+  tier?: ModelTier;
 };
 
 // Every stage runs `claude --permission-mode bypassPermissions` so bash + edits
@@ -16,46 +20,63 @@ export const STAGES = {
     name: "plan",
     template: "plan.md",
     permissionMode: "bypassPermissions",
+    tier: "strong",
   } satisfies Stage,
   implementer: {
     name: "implementer",
     template: "afk.md",
     permissionMode: "bypassPermissions",
+    tier: "mid",
   } satisfies Stage,
   ghafkImplementer: {
     name: "ghafk-implementer",
     template: "ghafk.md",
     permissionMode: "bypassPermissions",
+    tier: "mid",
   } satisfies Stage,
   ghafkIssueImplementer: {
     name: "ghafk-issue-implementer",
     template: "ghafk-issue.md",
     permissionMode: "bypassPermissions",
+    tier: "mid",
   } satisfies Stage,
   linearImplementer: {
     name: "linear-implementer",
     template: "linearafk.md",
     permissionMode: "bypassPermissions",
+    tier: "mid",
   } satisfies Stage,
   linearIssueImplementer: {
     name: "linear-issue-implementer",
     template: "linearafk-issue.md",
     permissionMode: "bypassPermissions",
+    tier: "mid",
   } satisfies Stage,
   verifier: {
     name: "verifier",
     template: "verify.md",
     permissionMode: "bypassPermissions",
+    tier: "strong",
   } satisfies Stage,
   applyReviewImplementer: {
     name: "apply-review-implementer",
     template: "apply-review.md",
     permissionMode: "bypassPermissions",
+    tier: "strong",
   } satisfies Stage,
   reviewer: {
     name: "reviewer",
     template: "review.md",
     permissionMode: "bypassPermissions",
+    tier: "strong",
+  } satisfies Stage,
+  // One fanned-out plan task, run in an isolated worktree with bounded context
+  // (issue #66 P11). Mechanical-to-moderate per-task work → mid tier.
+  subImplementer: {
+    name: "sub-implementer",
+    template: "subtask.md",
+    permissionMode: "bypassPermissions",
+    tier: "mid",
   } satisfies Stage,
   // P12 public journal (issue #67): generate a generic field note from a memory
   // learning, and adversarially screen a candidate note for leaks. Both produce

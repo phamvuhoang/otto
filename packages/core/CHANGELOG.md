@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.15.0...otto-core-v0.16.0) (2026-06-20)
+
+
+### Features
+
+* **core:** spec & plan authoring ([#63](https://github.com/phamvuhoang/otto/issues/63) P8 slices 1–7) ([#71](https://github.com/phamvuhoang/otto/issues/71)) ([678d49c](https://github.com/phamvuhoang/otto/commit/678d49c1f18e59ada82f8639e085ed41d4312183))
+
 ## [0.15.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.14.0...otto-core-v0.15.0) (2026-06-20)
 
 

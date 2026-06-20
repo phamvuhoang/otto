@@ -78,4 +78,17 @@ export const STAGES = {
     permissionMode: "bypassPermissions",
     tier: "mid",
   } satisfies Stage,
+  // P12 public journal (issue #67): generate a generic field note from a memory
+  // learning, and adversarially screen a candidate note for leaks. Both produce
+  // only text — the harness owns the secrecy gate and the actual posting.
+  journalWrite: {
+    name: "journal-write",
+    template: "journal-write.md",
+    permissionMode: "bypassPermissions",
+  } satisfies Stage,
+  journalScreen: {
+    name: "journal-screen",
+    template: "journal-screen.md",
+    permissionMode: "bypassPermissions",
+  } satisfies Stage,
 };

@@ -101,7 +101,7 @@ function ensureStateGitignored(workspaceDir: string): void {
   let existing = existsSync(gitignorePath)
     ? readFileSync(gitignorePath, "utf8")
     : "";
-  for (const entry of [".otto/state.json", ".otto/runs/"]) {
+  for (const entry of [".otto/state.json", ".otto/runs/", ".otto/journal/"]) {
     const alreadyPresent = existing
       .split("\n")
       .some((line) => line.trim() === entry);

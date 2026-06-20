@@ -376,3 +376,40 @@ export {
   type RunViewStage,
 } from "./run-view.js";
 export { runTail, type TailDeps } from "./tail.js";
+export {
+  appendAudit,
+  screenEntry,
+  screenGate1,
+  screenGate2,
+  MAX_ENTRY_CHARS,
+  MIN_ENTRY_CHARS,
+  type Gate3Judge,
+  type GateContext,
+  type GateResult,
+} from "./journal-gate.js";
+export {
+  createThreadsClient,
+  resolveThreadsAuth,
+  threadsConfigPath,
+  ThreadsApiError,
+  type ThreadsAuth,
+  type ThreadsClient,
+  type ThreadsErrorKind,
+} from "./threads-api.js";
+export { forbiddenTermsFor, selectCandidate } from "./journal-source.js";
+export {
+  maybeJournal,
+  runJournal,
+  type JournalAction,
+  type JournalConfig,
+  type JournalDeps,
+  type JournalOutcome,
+} from "./journal.js";
+export { readJournalConfig } from "./journal-config.js";
+export {
+  appendLedger,
+  hashContent,
+  readLedger,
+  recentlyPosted,
+  type PostedEntry,
+} from "./journal-ledger.js";

@@ -137,6 +137,12 @@ On a hit the loop prints `Otto complete` and returns immediately — subsequent 
 | [`fanout.ts`](../packages/core/src/fanout.ts)                     | Sub-agent fan-out executor (issue #66 P11): `runFanout` runs plan tasks wave-by-wave — concurrent sub-agents in isolated worktrees, then serial cherry-pick onto HEAD with conflict/error → defer-to-sequential fallback.                                                                  |
 | [`safety-policy.ts`](../packages/core/src/safety-policy.ts)       | Safety policy substrate (issue #43 P4): `SafetyPolicy` (six rule lists) + permissive `DEFAULT_POLICY`, pure `parseSafetyPolicy` / `readSafetyPolicy` (`.otto/policy.json`, absent/malformed → defaults, never throws), and the evaluation predicates `checkCommand` / `checkWritePath` / `checkNetworkDomain` / `checkApprovalRequired` → `PolicyViolation[]`. Wired into `stage-exec.ts` + `render.ts` at the shell/`@spill` boundary; default-permissive so trusted workflows are unchanged.                                                                  |
 | [`taint.ts`](../packages/core/src/taint.ts)                       | Taint substrate (issue #43 P4): `TaintSource` taxonomy + `wrapUntrusted(content, source)` fencing untrusted text in a labelled `<untrusted>` block carrying `UNTRUSTED_WARNING` (defangs an embedded closing fence). Surfaced in the untrusted-input templates via the shared `untrusted-content.md` fragment. Pure.                                                                  |
+| [`journal-gate.ts`](../packages/core/src/journal-gate.ts)         | P12 outbound secrecy gate (issue #67): `screenGate1` (deny-list + repo identifiers + policy `secretPatterns`, fail-closed), `screenGate2` (generalization + length), `screenEntry` (default-deny orchestrator), `appendAudit`. Pure + an audit append.                                                                  |
+| [`journal-source.ts`](../packages/core/src/journal-source.ts)     | P12 candidate selection: `selectCandidate` (active, journal-worthy, unposted, by confidence) + `forbiddenTermsFor` (scope/taskKey/run → gate terms). Pure.                                                                  |
+| [`journal-ledger.ts`](../packages/core/src/journal-ledger.ts)     | P12 posted ledger + cadence/dedup: `hashContent`, `readLedger`/`appendLedger` (`.otto/journal/posted.json`), `recentlyPosted`.                                                                  |
+| [`threads-api.ts`](../packages/core/src/threads-api.ts)           | P12 Threads client: `resolveThreadsAuth` (env / `~/.config/otto/threads.json`) + `createThreadsClient` (Graph API two-step create→publish), injectable `fetch`, `ThreadsApiError`. Mirrors `linear-api.ts`.                                                                  |
+| [`journal-config.ts`](../packages/core/src/journal-config.ts)     | P12 opt-in reader: `readJournalConfig` (`.otto/config.json` `journal` block; `null` unless `enabled`; autonomous requires config + `OTTO_JOURNAL_AUTONOMOUS`).                                                                  |
+| [`journal.ts`](../packages/core/src/journal.ts)                   | P12 orchestrator: `runJournal` (select→generate→gate→draft/post, never throws) + `maybeJournal` (the harness run-end hook wiring real generate/judge/publish deps).                                                                  |
 | `__tests__/`                                                      | Vitest suites covering CLI parsing, loop/runtime behavior, templates, providers, runner parsing, and helpers.                                                                                                                                             |
 
 `index.ts` re-exports the public runtime surface, including:
@@ -608,6 +614,26 @@ A **skill** is a repo-local, versioned, validated procedure promoted from repeat
 
 ---
 
+## Public journal (issue #67 P12)
+
+An opt-in build-in-public stream: at run end Otto turns a generic memory learning into a short "field note" and, through an **airtight default-deny secrecy gate**, drafts it to disk (default) or publishes it to Threads (autonomous opt-in). **Off by default** — a no-op unless `.otto/config.json` carries a `journal.enabled: true` block. The single invariant is **zero leak: a post that cannot be proven safe is never sent.**
+
+**Privilege separation.** A run-end hook (`maybeJournal`, called from `runLoop`'s `finally`, skipped on abort) runs in the **harness** process. The sandboxed agent only ever *produces text* — the field note (`journal-write.md`) and the secrecy verdict (`journal-screen.md`). The harness owns the deterministic gates, the audit trail, the dedup/cadence ledger, and the network egress. A compromised agent cannot post; it never reaches the gate decision or the HTTP client.
+
+**The secrecy gate** ([`journal-gate.ts`](../packages/core/src/journal-gate.ts)) — `screenEntry` runs three independent gates and **denies on the first failure, an empty/over-long entry, or any thrown check** (default-deny):
+
+- **Gate 1, deterministic deny-list** (pure): built-in secret/token/key/path/URL/code/identifier patterns, the repo's own self-identifiers (name, remote, dir basename), and every pattern in `SafetyPolicy.secretPatterns` (`.otto/policy.json`) — a malformed policy pattern *fails closed*. This finally wires the previously-inert `secretPatterns` field.
+- **Gate 2, generalization** (pure): denies task-key shapes (`issue-N` / `ENG-N`), any term carried from the source record (`scope` globs / `taskKey` / `sourceRun`, via `forbiddenTermsFor`), and notes outside the length bounds (≤ 500 chars).
+- **Gate 3, adversarial judge** (agent stage, biased to refuse): must emit exactly `<journal-verdict>SAFE</journal-verdict>` — anything else, malformed, or a stage error denies.
+
+Every decision appends one JSON line to `.otto/journal/audit.log` (a Gate-1 denial logs the matched pattern *name*, never the raw secret), so any near-miss is forensically reviewable.
+
+**Source & cadence.** [`journal-source.ts`](../packages/core/src/journal-source.ts) `selectCandidate` picks one active, journal-worthy ([config `categories`], default `gotcha`+`dead-end`) memory record not already posted, ranked by confidence. [`journal-ledger.ts`](../packages/core/src/journal-ledger.ts) tracks posted entries (`.otto/journal/posted.json`) and enforces dedup + a `minDaysBetweenPosts` cadence floor; at most one post per run.
+
+**Modes.** Default mode writes a screened draft to `.otto/journal/drafts/<id>.md` and **never posts**. Autonomous posting needs a **double opt-in** — `journal.autonomous: true` in config **and** `OTTO_JOURNAL_AUTONOMOUS=1` — and then [`threads-api.ts`](../packages/core/src/threads-api.ts) (`resolveThreadsAuth` from `OTTO_THREADS_TOKEN`+`OTTO_THREADS_USER_ID` or `~/.config/otto/threads.json`; the Graph API two-step create→publish) sends a gate-passing note. The orchestrator ([`journal.ts`](../packages/core/src/journal.ts) `runJournal`) is injectable (generate/judge/publish/clock) and **never throws** — the journal must never affect a run's outcome. See [`docs/eval`](./eval) and the spec under [`docs/superpowers/specs`](./superpowers/specs).
+
+---
+
 ## Conventions to preserve
 
 - **ESM only.** Both packages are `"type": "module"`; relative imports in `packages/core/src` end in `.js` (NodeNext).
@@ -663,4 +689,6 @@ Release/publishing (release-please → tag-driven npm workflows) is the single-s
 | `OTTO_MAX_WAIT`          | `6h`             | Maximum time to wait for a Claude rate-limit to clear before halting and saving resume state. Accepts bare seconds or duration strings (`90m`, `6h`). Equivalent to `--max-wait`. |
 | `OTTO_BRANCH`            | — (`current`)    | Branch isolation strategy: `current`, `branch`, or `worktree`. Overrides `.otto/config.json`; overridden by `--branch`.                                                           |
 | `OTTO_BRANCH_PREFIX`     | `otto/`          | Prefix for the generated branch/worktree name. Overrides `.otto/config.json`; overridden by `--branch-prefix`.                                                                    |
+| `OTTO_JOURNAL_AUTONOMOUS` | — (off)         | Second half of the P12 journal autonomous double opt-in (with `journal.autonomous: true` in `.otto/config.json`). Truthy + config ⇒ Otto may post; otherwise draft-only.          |
+| `OTTO_THREADS_TOKEN` / `OTTO_THREADS_USER_ID` | — | Threads publishing credentials (else `~/.config/otto/threads.json`). Used only by an autonomous, opted-in journal run.                                                         |
 | `NO_COLOR` / `TERM=dumb` | —                | Disable ANSI on both streams.                                                                                                                                                     |

@@ -362,6 +362,14 @@ export {
 } from "./plan-tasks.js";
 export { createWorktree, reapWorktrees } from "./worktree.js";
 export {
+  runFanout,
+  type FanoutResult,
+  type FanoutTaskOutcome,
+  type FanoutTaskStatus,
+  type RunFanoutOptions,
+  type RunTask,
+} from "./fanout.js";
+export {
   buildRunView,
   formatDoneCard,
   formatLiveTree,

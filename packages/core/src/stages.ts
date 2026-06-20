@@ -70,4 +70,12 @@ export const STAGES = {
     permissionMode: "bypassPermissions",
     tier: "strong",
   } satisfies Stage,
+  // One fanned-out plan task, run in an isolated worktree with bounded context
+  // (issue #66 P11). Mechanical-to-moderate per-task work → mid tier.
+  subImplementer: {
+    name: "sub-implementer",
+    template: "subtask.md",
+    permissionMode: "bypassPermissions",
+    tier: "mid",
+  } satisfies Stage,
 };

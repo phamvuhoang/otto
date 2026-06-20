@@ -1,0 +1,18 @@
+{
+  "id": "2026-06-20T09-15-00-000Z-62-3",
+  "content": "Context-report surface (issue #62 P7, slice 3) — the --context-report read-only flag + context-report-cli.ts. It is a DIAGNOSTIC FLAG, not a separate bin: parseFlags sets flags.contextReport (default false); run-bin early-returns right after resolving workspaceDir (before any agent/token/scope resolution — it needs none), dynamically imports ./context-report-cli.js, awaits runContextReport(), and returns — exactly the --print-config shape. Crucially the early-return is BEFORE the positional-arg validation so it needs no <iterations> positional. context-report-cli.ts mirrors runs-cli.ts/inspect.ts: a PURE formatContextReportRun(runId, stages) plus a thin runContextReport(deps=defaultDeps) that reads ONLY the latest run (listRunIds().at(-1) + readStageRecords — no run-id positional, because a flag has none; no manifest needed, stage records suffice). The formatter reads StageRecord.contextBreakdown (captured in slice 2) and renders per-stage category shares + a first-third-vs-last-third estimated-token SLOPE labelled growing/flat/shrinking on a ±10% band — the 'is per-iteration cost bounded?' signal P7's success metric tracks; slope is n/a until >=2 measured stages, and the whole report is a friendly 'no context breakdown' line when no stage carries one (older runs). NOT gated per-bin (mirrors --print-config; reading .otto/runs/ works for any AFK bin). Exported from index.ts. Pinned by cli-help.test.ts (flag parse/default) + context-report-cli.test.ts (composition shares, growing/flat slope, no-runs exit 1, latest-run selection). Remaining P7 slices: 4 prefix caching, 5 bounded learnings, 6 inter-iteration compaction, 7 read-dedup, 8 per-stage budget.",
+  "category": "convention",
+  "sourceRun": "2026-06-20T09-15-00-000Z-3618",
+  "taskKey": "issue-62",
+  "scope": [
+    "packages/core/src/context-report-cli.ts",
+    "packages/core/src/cli-help.ts",
+    "packages/core/src/run-bin.ts",
+    "packages/core/src/index.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T09:15:00.000Z",
+  "useCount": 0
+}

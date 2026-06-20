@@ -533,6 +533,23 @@
   extra field on the bundle. The `otto-afk --context-report` SURFACE over these
   records is still slice 3. Pinned by `stage-exec.test.ts` (breakdown reflects the
   sent prompt incl. reduce mode) / `run-report.test.ts` (round-trip).
+- **Context-report surface (#62 P7, slice 3) — `--context-report` read-only flag +
+  `context-report-cli.ts`.** A diagnostic flag (NOT a separate bin) on every AFK bin:
+  `parseFlags` → `flags.contextReport`; run-bin early-returns right after resolving
+  `workspaceDir` (before any agent/scope/token resolution — it needs none), `await`s
+  `runContextReport()` and returns, exactly like `--print-config`. Place the
+  early-return BEFORE the positional-arg validation so it needs no `<iterations>`.
+  The module mirrors `runs-cli.ts`/`inspect.ts`: pure `formatContextReportRun(runId,
+  stages)` + a thin `runContextReport(deps)` that reads ONLY the latest run
+  (`listRunIds().at(-1)`, no run-id positional — a flag has none). It reads
+  `StageRecord.contextBreakdown` (slice 2) and renders per-stage category shares +
+  a first-third-vs-last-third token **slope** (±10% band → growing/flat/shrinking)
+  — the "is per-iteration cost bounded?" signal P7's success metric tracks; `n/a`
+  until ≥2 measured stages. NOT gated per-bin (mirrors `--print-config`; reading
+  `.otto/runs/` works for any bin). It does NOT import a manifest — stage records
+  suffice. Pinned by `cli-help.test.ts` (flag parse) + `context-report-cli.test.ts`
+  (composition/slope/no-runs). Remaining P7 slices: (4) prefix caching, (5) bounded
+  learnings, (6) compaction, (7) read-dedup, (8) per-stage budget.
 
 
 ## Gotchas

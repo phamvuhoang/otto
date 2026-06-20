@@ -14,7 +14,7 @@ this burns it down telemetry-first, each optimization gated on the prior slice.
   `StageRecord.contextBreakdown?` (optional, absent = none, like `safetyEvents`),
   so each stage record carries its composition. Pinned by `stage-exec.test.ts` /
   `run-report.test.ts`.
-- [ ] **3. `otto-afk --context-report` read-only surface.** A pure formatter over
+- [x] **3. `otto-afk --context-report` read-only surface.** A pure formatter over
   the bundle's stage records (mirrors `otto-runs` / `--explain-routing`); shows
   per-iteration composition + slope. Pinned by `cli-help.test.ts` + a cli test.
 - [ ] **4. Prompt-prefix caching.** Mark the static playbook + learnings head as a
@@ -30,4 +30,4 @@ this burns it down telemetry-first, each optimization gated on the prior slice.
 - [ ] **8. Per-stage context budget.** A soft, model-aware ceiling that warns and
   triggers compaction when a stage's estimated context exceeds it.
 
-This run implements **task 2**.
+This run implements **task 3**.

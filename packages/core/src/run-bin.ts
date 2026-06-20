@@ -132,6 +132,15 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   const packageDir = resolve(here, "..");
   const workspaceDir = resolve(process.env.OTTO_WORKSPACE ?? process.cwd());
 
+  // --context-report (issue #62 P7): a read-only surface over the latest run
+  // bundle's per-stage context breakdowns. Like --print-config it prints and
+  // exits without running a stage, so it needs none of the resolution below.
+  if (flags.contextReport) {
+    const { runContextReport } = await import("./context-report-cli.js");
+    await runContextReport();
+    return;
+  }
+
   const envMaxWait = process.env.OTTO_MAX_WAIT?.trim();
   const maxWaitMs =
     flags.maxWaitMs ?? (envMaxWait ? parseDurationMs(envMaxWait) : undefined);

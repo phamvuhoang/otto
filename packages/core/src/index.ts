@@ -75,6 +75,11 @@ export {
   type RunSummary,
 } from "./runs-cli.js";
 export {
+  formatContextReportRun,
+  runContextReport,
+  type ContextReportDeps,
+} from "./context-report-cli.js";
+export {
   formatAuditReport,
   runMemory,
   type MemoryDeps,

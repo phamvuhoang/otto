@@ -1,0 +1,18 @@
+{
+  "id": "2026-06-20T08-55-00-000Z-62-2",
+  "content": "Context telemetry capture (issue #62 P7, slice 2) — analyzeContext wired into the evidence bundle. StageResult.contextBreakdown? (runner.ts) and StageRecord.contextBreakdown? (run-report.ts) are OPTIONAL fields, mirroring safetyEvents/skillsUsed (absent = not measured, no loop-behavior change). stage-exec.ts calls analyzeContext(prompt) on the POST-reduction prompt — the exact string handed to runStage, so the breakdown reflects the billed footprint not the pre-reduce render — and merges it into the returned result alongside the existing safetyEvents spread. loop.ts recordStage threads sr.contextBreakdown into writeStageRecord. Import direction: runner.ts and run-report.ts both `import type { ContextBreakdown } from ./context-report.js`, safe because context-report.ts imports nothing (no cycle). Unlike slice 1 this is no longer fully INERT (every recorded stage now carries a breakdown) but it is still loop-neutral — only an extra field on the bundle, never affecting stage execution. The otto-afk --context-report read-only SURFACE over these records is slice 3 (still unbuilt). Pinned by stage-exec.test.ts (breakdown reflects the sent prompt incl. reduce mode) and run-report.test.ts (round-trips contextBreakdown on a stage record).",
+  "category": "convention",
+  "sourceRun": "2026-06-20T08-55-00-000Z-3618",
+  "taskKey": "issue-62",
+  "scope": [
+    "packages/core/src/stage-exec.ts",
+    "packages/core/src/runner.ts",
+    "packages/core/src/run-report.ts",
+    "packages/core/src/loop.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T08:55:00.000Z",
+  "useCount": 0
+}

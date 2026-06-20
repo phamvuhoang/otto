@@ -8,6 +8,7 @@ import {
 import { dirname, join } from "node:path";
 
 import type { AgentRuntimeId } from "./agent-runtime.js";
+import type { ContextBreakdown } from "./context-report.js";
 import type { PolicyViolationKind } from "./safety-policy.js";
 import type { TaintSource } from "./taint.js";
 import type { TokenUsage } from "./tokens.js";
@@ -91,6 +92,8 @@ export type StageRecord = {
   safetyEvents?: SafetyEvent[];
   /** Skills applied while this stage ran (issue #44, INERT); absent = none. */
   skillsUsed?: SkillUsage[];
+  /** Composition of this stage's rendered prompt (issue #62 P7); absent = not measured. */
+  contextBreakdown?: ContextBreakdown;
   startedAt: string;
   finishedAt: string;
 };

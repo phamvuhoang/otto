@@ -402,6 +402,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         isError: sr.isError,
         apiErrorStatus: sr.apiErrorStatus,
         safetyEvents: sr.safetyEvents,
+        contextBreakdown: sr.contextBreakdown,
         startedAt,
         finishedAt: nowIso(),
       });

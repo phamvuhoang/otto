@@ -518,6 +518,21 @@
   compaction slices). Pure like `tokens.ts`/`eval.ts`; wiring into
   `StageResult`/the bundle + an `otto-afk --context-report` surface are later plan
   tasks (`.otto/tasks/issue-62/plan.md`). Pinned by `context-report.test.ts`.
+- **Context telemetry capture (#62 P7, slice 2) — `analyzeContext` wired into the
+  evidence bundle.** `StageResult.contextBreakdown?` + `StageRecord.contextBreakdown?`
+  are OPTIONAL, mirroring `safetyEvents`/`skillsUsed` (absent = not measured, no
+  loop-behavior change). `stage-exec.ts` calls `analyzeContext(prompt)` on the
+  **post-reduction** `prompt` (the string actually sent to `runStage`, so the
+  breakdown reflects the billed footprint, not the pre-reduce render), and merges
+  it into the returned result alongside the existing `safetyEvents` spread; the
+  loop's `recordStage` threads `sr.contextBreakdown` into the written record.
+  **Import direction:** `runner.ts` and `run-report.ts` both `import type
+  { ContextBreakdown } from "./context-report.js"` — safe because `context-report.ts`
+  imports NOTHING (no cycle). Unlike slice 1 this is no longer fully INERT (every
+  recorded stage now carries a breakdown), but it is still loop-neutral — only an
+  extra field on the bundle. The `otto-afk --context-report` SURFACE over these
+  records is still slice 3. Pinned by `stage-exec.test.ts` (breakdown reflects the
+  sent prompt incl. reduce mode) / `run-report.test.ts` (round-trip).
 
 
 ## Gotchas

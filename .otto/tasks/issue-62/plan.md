@@ -9,7 +9,7 @@ this burns it down telemetry-first, each optimization gated on the prior slice.
   token estimate per category and totals; `formatContextReport` renders a
   human-readable share breakdown. Pure, INERT, exported from `index.ts`. Pinned by
   `context-report.test.ts`.
-- [ ] **2. Capture the breakdown into the evidence bundle.** Thread the breakdown
+- [x] **2. Capture the breakdown into the evidence bundle.** Thread the breakdown
   from the rendered prompt in `stage-exec.ts` onto `StageResult` →
   `StageRecord.contextBreakdown?` (optional, absent = none, like `safetyEvents`),
   so each stage record carries its composition. Pinned by `stage-exec.test.ts` /
@@ -30,4 +30,4 @@ this burns it down telemetry-first, each optimization gated on the prior slice.
 - [ ] **8. Per-stage context budget.** A soft, model-aware ceiling that warns and
   triggers compaction when a stage's estimated context exceeds it.
 
-This run implements **task 1**.
+This run implements **task 2**.

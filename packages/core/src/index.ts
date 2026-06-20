@@ -95,6 +95,8 @@ export {
 export {
   parseEvalConfigs,
   runEval,
+  runEvalCompare,
+  type CompareDeps,
   type EvalConfig,
   type EvalDeps,
   type EvalInvocation,

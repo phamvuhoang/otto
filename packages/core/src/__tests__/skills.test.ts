@@ -9,11 +9,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  globMatch,
   listSkillIds,
   parseSkill,
   readSkill,
   readSkills,
   recordValidation,
+  selectSkills,
   skillDir,
   skillExists,
   skillStatus,
@@ -199,5 +201,63 @@ describe("skillStatus / recordValidation", () => {
     expect(v.validation).toEqual({ lastValidatedRun: "run-9", lastValidatedAt: "2026-06-19T00:00:00.000Z" });
     expect(s.validation).toEqual({}); // input untouched
     expect(skillStatus(v)).toBe("validated");
+  });
+});
+
+describe("globMatch", () => {
+  it("matches ** across separators and * within a segment", () => {
+    expect(globMatch("packages/core/**", "packages/core/src/eval.ts")).toBe(true);
+    expect(globMatch("packages/*/src/*.ts", "packages/core/src/eval.ts")).toBe(true);
+    expect(globMatch("packages/core/src/*.ts", "packages/core/src/eval.ts")).toBe(true);
+    // single * does not span separators, and an unrelated prefix does not match.
+    expect(globMatch("packages/*.ts", "packages/core/src/eval.ts")).toBe(false);
+    expect(globMatch("docs/**", "packages/core/src/eval.ts")).toBe(false);
+  });
+});
+
+describe("selectSkills", () => {
+  const validated = (over: Partial<Skill> = {}) =>
+    skill({ validation: { lastValidatedRun: "run-1" }, ...over });
+
+  it("only marks validated skills eligible, with a reason for the rest", () => {
+    const matches = selectSkills([
+      validated({ name: "ready" }),
+      skill({ name: "never-validated", validation: {} }),
+    ]);
+    const byName = Object.fromEntries(matches.map((m) => [m.name, m]));
+    expect(byName["ready"].eligible).toBe(true);
+    expect(byName["never-validated"].eligible).toBe(false);
+    expect(byName["never-validated"].reasons.join(" ")).toMatch(/validation required/);
+  });
+
+  it("scores capability and scope matches, explaining each", () => {
+    const m = selectSkills(
+      [validated({ name: "s", capabilities: ["release"], scope: ["packages/core/**"] })],
+      { capability: "release", changedPaths: ["packages/core/src/eval.ts"] }
+    )[0];
+    expect(m.score).toBe(4); // +2 capability, +2 scope
+    expect(m.reasons.join(" ")).toMatch(/declares capability "release"/);
+    expect(m.reasons.join(" ")).toMatch(/scope matches changed file/);
+  });
+
+  it("excludes a skill whose constraint forbids the change's risk class", () => {
+    const m = selectSkills(
+      [validated({ name: "s", constraints: ["not for security-sensitive changes"] })],
+      { changedPaths: ["packages/core/src/auth.ts"] } // classifyRisk → security-sensitive
+    )[0];
+    expect(m.eligible).toBe(false);
+    expect(m.reasons.join(" ")).toMatch(/constraint for risk class "security-sensitive"/);
+  });
+
+  it("ranks eligible-first, then score, then name (deterministic)", () => {
+    const order = selectSkills(
+      [
+        skill({ name: "z-unvalidated", validation: {} }),
+        validated({ name: "low", capabilities: [] }),
+        validated({ name: "high", capabilities: ["release"] }),
+      ],
+      { capability: "release" }
+    ).map((m) => m.name);
+    expect(order).toEqual(["high", "low", "z-unvalidated"]);
   });
 });

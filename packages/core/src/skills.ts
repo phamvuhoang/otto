@@ -7,6 +7,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
+import { classifyRisk, type RiskAssessment } from "./risk.js";
+
 /**
  * Skill extraction and reuse (issue #44 P5). A **skill** is a repo-local,
  * versioned, validated procedure promoted from repeated successful trajectories
@@ -310,4 +312,121 @@ export function recordValidation(
     ...skill,
     validation: { lastValidatedRun: runId, lastValidatedAt: now.toISOString() },
   };
+}
+
+/** Escape regex metacharacters outside the glob wildcards we handle. */
+function escapeRe(s: string): string {
+  return s.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Minimal path-glob match: `**` spans path separators, `*` spans a single
+ * segment, `?` one char. Used for a skill's scope globs against changed paths.
+ */
+export function globMatch(glob: string, path: string): boolean {
+  const re = escapeRe(glob)
+    .replace(/\*\*/g, " ") // placeholder so the next step won't touch it
+    .replace(/\*/g, "[^/]*")
+    .replace(/ /g, ".*")
+    .replace(/\?/g, ".");
+  return new RegExp(`^${re}$`).test(path);
+}
+
+/** Context a retrieval is scored against (issue #44 slice 3). */
+export type SkillMatchContext = {
+  /** The iteration's changed paths — drives scope + risk-class matching. */
+  changedPaths?: string[];
+  /** A required capability tag the caller is looking for. */
+  capability?: string;
+  /** Injectable clock for deterministic validation-freshness scoring. */
+  now?: Date;
+};
+
+/**
+ * One skill's retrieval verdict: whether it is auto-eligible (validated AND not
+ * excluded by a constraint), a relevance `score`, and human `reasons[]` — so the
+ * operator can inspect *why* a skill was (or was not) selected (the issue's
+ * "users can inspect why a skill was selected" metric).
+ */
+export type SkillMatch = {
+  name: string;
+  eligible: boolean;
+  score: number;
+  reasons: string[];
+};
+
+/**
+ * Rank skills for the current task. Retrieval is by **declared capability**,
+ * **touched files** (scope globs vs. changed paths), and **task risk** (a skill
+ * whose constraints forbid the change's risk class is excluded) — the three keys
+ * the issue names. Only `validated` skills are auto-`eligible` (validation before
+ * use); unvalidated/stale skills are still returned, flagged not-eligible with a
+ * reason, so the bin can show the full picture. Sorted eligible-first, then score
+ * desc, then name. Pure — no I/O, deterministic.
+ */
+export function selectSkills(
+  skills: Skill[],
+  ctx: SkillMatchContext = {}
+): SkillMatch[] {
+  const assessment: RiskAssessment | null =
+    ctx.changedPaths && ctx.changedPaths.length > 0
+      ? classifyRisk(ctx.changedPaths)
+      : null;
+
+  const matches = skills.map((skill) => {
+    const reasons: string[] = [];
+    let score = 0;
+    let eligible = true;
+
+    const status = skillStatus(skill, ctx.now);
+    if (status !== "validated") {
+      eligible = false;
+      reasons.push(`not eligible: ${status} (validation required before auto-use)`);
+    }
+
+    if (assessment) {
+      const forbidden = skill.constraints.some((c) =>
+        c.toLowerCase().includes(assessment.class)
+      );
+      if (forbidden) {
+        eligible = false;
+        reasons.push(`excluded by constraint for risk class "${assessment.class}"`);
+      }
+    }
+
+    if (ctx.capability) {
+      if (skill.capabilities.includes(ctx.capability)) {
+        score += 2;
+        reasons.push(`declares capability "${ctx.capability}"`);
+      } else {
+        reasons.push(`does not declare capability "${ctx.capability}"`);
+      }
+    }
+
+    if (ctx.changedPaths && ctx.changedPaths.length > 0) {
+      if (skill.scope.length === 0) {
+        score += 1;
+        reasons.push("repo-wide (no scope restriction)");
+      } else {
+        const hit = ctx.changedPaths.filter((p) =>
+          skill.scope.some((g) => globMatch(g, p))
+        );
+        if (hit.length > 0) {
+          score += 2;
+          reasons.push(`scope matches changed file(s): ${hit.join(", ")}`);
+        } else {
+          reasons.push("scope does not match the changed files");
+        }
+      }
+    }
+
+    return { name: skill.name, eligible, score, reasons };
+  });
+
+  return matches.sort(
+    (a, b) =>
+      Number(b.eligible) - Number(a.eligible) ||
+      b.score - a.score ||
+      a.name.localeCompare(b.name)
+  );
 }

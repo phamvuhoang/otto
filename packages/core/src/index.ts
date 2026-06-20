@@ -59,6 +59,17 @@ export {
   type CompactedCommits,
 } from "./iteration-compaction.js";
 export {
+  DEFAULT_CONTEXT_BUDGET_FRACTION,
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  assessContextBudget,
+  formatContextBudget,
+  modelContextBudget,
+  modelContextWindow,
+  type BudgetRecommendation,
+  type ContextBudgetAssessment,
+  type ContextBudgetContext,
+} from "./context-budget.js";
+export {
   emptyReadLedger,
   fingerprintContent,
   formatReadReference,

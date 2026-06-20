@@ -634,6 +634,33 @@
   `@spill` path (emit the reference instead of re-spilling when `unchanged`) is a
   later slice — substrate only, cannot regress a run. Pinned by `read-dedup.test.ts`.
   Remaining P7 slice: (8) per-stage context budget.
+- **Per-stage context budget (#62 P7, slice 8 — final P7 substrate) — pure,
+  INERT-on-the-loop `context-budget.ts`.** The "soft, model-aware ceiling": Otto
+  passes the model spec opaquely to the CLI (`resolveModelArgs`, never validated),
+  so `modelContextWindow(spec)` LOOSE-matches a lowercased substring → window
+  (`[1m]`/`-1m` → 1,000,000 checked FIRST as most-specific, then opus/sonnet/haiku
+  → 200,000; conservative `DEFAULT_CONTEXT_WINDOW_TOKENS` = 200,000 on miss/unset).
+  `modelContextBudget(spec, fraction)` = `round(window × fraction)` with
+  `DEFAULT_CONTEXT_BUDGET_FRACTION` = 0.25 — the budget is for the INLINE rendered
+  prompt only, leaving headroom for the agent's tool reads + output.
+  `assessContextBudget(breakdown, {model, maxTokens, fraction})` compares the
+  slice-1 `ContextBreakdown.estimatedTokens` to the ceiling (`maxTokens` overrides
+  the model-derived one) and returns `{estimatedTokens, budgetTokens, windowTokens,
+  overBudget, overByTokens, headroomTokens, ratio, recommendation?}`. KEY design:
+  the recommendation only appears when over budget AND a **reducible** filler
+  exists — it scans the breakdown's chars-descending segments for the first
+  category in `{commits, learnings}` and names the lever (commits →
+  `compactCommits` slice 6, learnings → `boundLearnings` slice 5). `inputs` (task
+  source) and `playbook` (instructions) are NOT P7-reducible, so a prompt that
+  overflows on those alone reports over-budget with NO recommendation (honest:
+  P7 can't shrink it). `ratio` guards divide-by-zero (0 when budget is 0).
+  `formatContextBudget` renders a one-line `within budget` / `EXCEEDS by N
+  tokens — compact <category> via <lever>` warning (`~` marks the estimate; the
+  budget is exact). Soft, never a gate. Loop wiring (warn + actually trigger the
+  slice-5/6 levers on overflow) is a later slice — substrate only. Exported from
+  index.ts. Pinned by `context-budget.test.ts`. All six issue-#62 scope items now
+  have pure substrate; the remaining P7 work is loop-wiring slices 4–8 to turn the
+  substrate into measured savings.
 
 
 ## Gotchas

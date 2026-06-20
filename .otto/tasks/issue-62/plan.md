@@ -58,7 +58,19 @@ this burns it down telemetry-first, each optimization gated on the prior slice.
   renders the short "already read, unchanged" line that later replaces a full
   re-spill. Wiring it into the `@spill` path is a later slice. Pinned by
   `read-dedup.test.ts`.
-- [ ] **8. Per-stage context budget.** A soft, model-aware ceiling that warns and
-  triggers compaction when a stage's estimated context exceeds it.
+- [x] **8. Per-stage context budget.** A soft, model-aware ceiling that warns and
+  triggers compaction when a stage's estimated context exceeds it. Shipped as
+  pure, INERT-on-the-loop functions in `context-budget.ts`: `modelContextWindow`
+  loosely matches the opaque `OTTO_MODEL` spec to a context window (1M-marker
+  aware, conservative default), `modelContextBudget` takes a soft fraction
+  (`DEFAULT_CONTEXT_BUDGET_FRACTION`) of it for the inline prompt,
+  `assessContextBudget` compares a stage's `ContextBreakdown` (slice 1) estimate
+  to the ceiling and — when over — recommends compacting the largest *reducible*
+  filler (commits→`compactCommits` slice 6, learnings→`boundLearnings` slice 5;
+  inputs/playbook are not P7-reducible), and `formatContextBudget` renders the
+  warning. Loop wiring (warn + trigger the levers on overflow) is a later slice.
+  Pinned by `context-budget.test.ts`.
 
-This run implements **task 7**.
+This run implements **task 8** (the final P7 substrate task; all six issue scope
+items now have pure substrate, and a `fix(review):` propagates the
+`--context-report` exit code surfaced in PR #69 review).

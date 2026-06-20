@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   addTokenUsage,
   emptyTokenUsage,
+  formatCacheEfficiency,
   formatTokenUsage,
   parseTokenMode,
   parseTokenUsage,
+  summarizeCacheEfficiency,
   tokenUsageTotal,
 } from "../tokens.js";
 
@@ -78,6 +80,61 @@ describe("formatTokenUsage", () => {
     ).toBe(
       "in 7,739 | out 569 | cache create 0 | cache read 103,036 | total 111,344"
     );
+  });
+});
+
+describe("summarizeCacheEfficiency", () => {
+  it("aggregates usages and computes the input cache-hit rate", () => {
+    const eff = summarizeCacheEfficiency([
+      {
+        inputTokens: 1000,
+        outputTokens: 50,
+        cacheCreationInputTokens: 4000,
+        cacheReadInputTokens: 0,
+      },
+      {
+        inputTokens: 1000,
+        outputTokens: 50,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 4000,
+      },
+    ]);
+    expect(eff).toEqual({
+      inputTokens: 2000,
+      cacheCreationInputTokens: 4000,
+      cacheReadInputTokens: 4000,
+      totalInputTokens: 10000,
+      // 4000 read / (2000 + 4000 + 4000) input = 0.4
+      hitRate: 0.4,
+    });
+  });
+
+  it("reports a zero hit rate (no divide-by-zero) when there is no input", () => {
+    const eff = summarizeCacheEfficiency([emptyTokenUsage()]);
+    expect(eff.totalInputTokens).toBe(0);
+    expect(eff.hitRate).toBe(0);
+  });
+
+  it("treats an empty list as zero usage", () => {
+    const eff = summarizeCacheEfficiency([]);
+    expect(eff.totalInputTokens).toBe(0);
+    expect(eff.hitRate).toBe(0);
+  });
+});
+
+describe("formatCacheEfficiency", () => {
+  it("renders the hit rate and the read/created/uncached split", () => {
+    const line = formatCacheEfficiency({
+      inputTokens: 2000,
+      cacheCreationInputTokens: 4000,
+      cacheReadInputTokens: 4000,
+      totalInputTokens: 10000,
+      hitRate: 0.4,
+    });
+    expect(line).toContain("40%");
+    expect(line).toContain("cache read 4,000");
+    expect(line).toContain("cache create 4,000");
+    expect(line).toContain("uncached 2,000");
   });
 });
 

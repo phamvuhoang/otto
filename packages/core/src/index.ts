@@ -34,11 +34,53 @@ export {
 } from "./agent-runtime.js";
 export {
   emptyTokenUsage,
+  formatCacheEfficiency,
   parseTokenMode,
   parseTokenUsage,
+  summarizeCacheEfficiency,
+  type CacheEfficiency,
   type TokenMode,
   type TokenUsage,
 } from "./tokens.js";
+export {
+  analyzeContext,
+  estimateTokens,
+  formatContextReport,
+  type ContextBreakdown,
+  type ContextCategory,
+  type ContextSegment,
+} from "./context-report.js";
+export {
+  DEFAULT_COMMITS_BUDGET_CHARS,
+  compactCommits,
+  formatCompactedCommits,
+  parseCommitLog,
+  type CommitEntry,
+  type CompactedCommits,
+} from "./iteration-compaction.js";
+export {
+  DEFAULT_CONTEXT_BUDGET_FRACTION,
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  assessContextBudget,
+  formatContextBudget,
+  modelContextBudget,
+  modelContextWindow,
+  type BudgetRecommendation,
+  type ContextBudgetAssessment,
+  type ContextBudgetContext,
+} from "./context-budget.js";
+export {
+  emptyReadLedger,
+  fingerprintContent,
+  formatReadReference,
+  recordRead,
+  summarizeReads,
+  type DedupResult,
+  type DedupSummary,
+  type ReadFingerprint,
+  type ReadLedger,
+  type ReadStatus,
+} from "./read-dedup.js";
 export {
   allocateRunId,
   listRunIds,
@@ -67,6 +109,11 @@ export {
   type RunSummary,
 } from "./runs-cli.js";
 export {
+  formatContextReportRun,
+  runContextReport,
+  type ContextReportDeps,
+} from "./context-report-cli.js";
+export {
   formatAuditReport,
   runMemory,
   type MemoryDeps,
@@ -74,8 +121,11 @@ export {
 export {
   allocateMemoryId,
   auditMemory,
+  boundLearnings,
   detectConflicts,
   DEFAULT_FREQUENT_USE,
+  DEFAULT_LEARNINGS_BUDGET_CHARS,
+  formatBoundedLearnings,
   listMemoryIds,
   memoryDir,
   memoryRecordPath,
@@ -84,11 +134,14 @@ export {
   projectLearnings,
   readMemoryRecord,
   readMemoryRecords,
+  selectRelevantMemory,
   supersede,
   touchMemory,
   writeMemoryRecord,
   type AuditReport,
+  type BoundedMemory,
   type MemoryRecord,
+  type MemorySelectionContext,
   type MemoryStatus,
   type MemoryTrust,
   type Supersession,

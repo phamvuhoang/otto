@@ -1,0 +1,17 @@
+{
+  "id": "2026-06-20T08-45-00-000Z-62-1",
+  "content": "Context telemetry (issue #62 P7, slice 1) — context-report.ts, pure + INERT on the loop, the 'measure before optimizing' foundation. analyzeContext(renderedPrompt): ContextBreakdown attributes the inline window footprint by category (commits/learnings/inputs/playbook) so a later P7 slice can prove it shrank the right thing. It segments on the RENDERED prompt's stable top-level XML-ish block tags (<commits>, <learnings>, and inputs = <inputs>/<issue>/<issues-summary>/<issues-full-file>, all folded to one 'inputs' category), and all category char counts SUM TO THE WHOLE prompt: recognized <tag>..</tag> spans go to their category, the remainder (total - recognized) goes to 'playbook' so nothing is double-counted or dropped. Token figures are an ESTIMATE — estimateTokens(chars) = ceil(chars/4), labelled with '~' in formatContextReport; the authoritative per-stage usage stays tokens.ts/provider, this answers the orthogonal COMPOSITION question a single usage total can't. Segments sorted chars-descending, empty categories omitted, empty prompt -> zero totals + []. 'file reads' and 'prior-iteration transcript' (named in the issue) are deliberately NOT categories here — they are agent-runtime/cross-iteration, not present in one rendered prompt, and belong to the read-dedup and inter-iteration-compaction slices. Pure module like tokens.ts/eval.ts, exported from index.ts; wiring into StageResult/the evidence bundle and an otto-afk --context-report surface are later plan tasks (.otto/tasks/issue-62/plan.md). Pinned by context-report.test.ts.",
+  "category": "convention",
+  "sourceRun": "2026-06-20T08-45-00-000Z-3618",
+  "taskKey": "issue-62",
+  "scope": [
+    "packages/core/src/context-report.ts",
+    "packages/core/src/index.ts",
+    "packages/core/src/__tests__/context-report.test.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T08:45:00.000Z",
+  "useCount": 0
+}

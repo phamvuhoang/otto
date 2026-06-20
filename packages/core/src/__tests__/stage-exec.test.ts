@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { analyzeContext } from "../context-report.js";
 import type { Stage } from "../stages.js";
 import { emptyTokenUsage } from "../tokens.js";
 
@@ -104,6 +105,43 @@ describe("executeStage token mode", () => {
     expect(mocks.runStage.mock.calls[0][1]).toBe(
       "hello plan\n\n\nread ./full.txt\n"
     );
+  });
+
+  it("attaches a context breakdown of the final rendered prompt", async () => {
+    writeFileSync(
+      join(packageDir, "templates", stage.template),
+      "playbook prose\n<learnings>durable notes</learnings>\n{{ INPUTS }}\n",
+      "utf8"
+    );
+    const sr = await executeStage({
+      stage,
+      vars: { INPUTS: "<inputs>the task</inputs>" },
+      workspaceDir,
+      packageDir,
+      iteration: 1,
+      maxRetries: 0,
+    });
+    const prompt = mocks.runStage.mock.calls[0][1] as string;
+    // Reflects exactly what was sent to runStage, attributed by category.
+    expect(sr.contextBreakdown).toEqual(analyzeContext(prompt));
+    const cats = sr.contextBreakdown!.segments.map((s) => s.category);
+    expect(cats).toContain("learnings");
+    expect(cats).toContain("inputs");
+    expect(cats).toContain("playbook");
+  });
+
+  it("breaks down the post-reduction prompt in reduce mode", async () => {
+    const sr = await executeStage({
+      stage,
+      vars: { INPUTS: "plan" },
+      workspaceDir,
+      packageDir,
+      iteration: 1,
+      maxRetries: 0,
+      tokenMode: "reduce",
+    });
+    const sentPrompt = mocks.runStage.mock.calls[0][1] as string;
+    expect(sr.contextBreakdown!.totalChars).toBe(sentPrompt.length);
   });
 
   it("threads agentId into the stage log filename", async () => {

@@ -1,0 +1,18 @@
+{
+  "id": "2026-06-20T09-25-00-000Z-62-4",
+  "content": "Prompt-prefix caching is REPORT-ONLY in Otto (issue #62 P7, slice 4) — Otto cannot set cache_control breakpoints. Otto spawns the claude CLI (claude --print), it does NOT call the Anthropic API, so it has no lever to literally 'mark a cached prefix': there is no claude flag for it (see buildClaudeArgs in runner.ts), and the rendered prompt is delivered as a single Read tool-result rather than an API content block, so reordering stable-vs-volatile text inside that file creates NO cacheable sub-prefix. The claude CLI already auto-caches its stable system-prompt/tools, and Otto invokes it with identical flags every iteration, so cache hits already happen. The feasible + honest half (and the issue's explicit success metric, 'cache-hit rate on the static prefix reported and non-trivial') is to REPORT it from the already-captured per-stage TokenUsage: pure summarizeCacheEfficiency(usages: TokenUsage[]) -> { inputTokens, cacheCreationInputTokens, cacheReadInputTokens, totalInputTokens, hitRate } plus formatCacheEfficiency in tokens.ts (mirrors formatTokenUsage). hitRate = cacheRead / (input + cacheCreation + cacheRead) — INPUT ONLY, output excluded (generated, never cacheable input); zero (no divide-by-zero) when totalInputTokens === 0. Surfaced as one extra cache-efficiency line appended to the EXISTING --context-report (no new flag — it already reads the same stage records), drawn from EVERY StageRecord.usage (not just contextBreakdown-measured stages, since cache usage is authoritative and independent of the estimated composition) and OMITTED when totalInputTokens === 0. Exported from index.ts. Pinned by tokens.test.ts (summarize aggregation/hit-rate + format) and context-report-cli.test.ts (cache line present with usage, omitted without). Remaining P7 slices: 5 bounded learnings, 6 inter-iteration compaction, 7 read-dedup, 8 per-stage budget.",
+  "category": "convention",
+  "sourceRun": "2026-06-20T09-25-00-000Z-3618",
+  "taskKey": "issue-62",
+  "scope": [
+    "packages/core/src/tokens.ts",
+    "packages/core/src/context-report-cli.ts",
+    "packages/core/src/runner.ts",
+    "packages/core/src/index.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T09:25:00.000Z",
+  "useCount": 0
+}

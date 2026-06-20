@@ -365,6 +365,123 @@ export function projectLearnings(
   return ["# Otto learnings", ...blocks].join("\n\n") + "\n";
 }
 
+/**
+ * Default char budget for the bounded LEARNINGS injection (issue #62 P7 slice 5).
+ * The block of selected records is capped at this many content chars so a long
+ * run's per-iteration memory footprint stays bounded instead of growing with the
+ * whole accumulated `LEARNINGS.md`.
+ */
+export const DEFAULT_LEARNINGS_BUDGET_CHARS = 6000;
+
+/** Inputs that drive bounded-learnings retrieval (issue #62 P7 slice 5). */
+export type MemorySelectionContext = {
+  /** The current run's task key; records sharing it are the most relevant. */
+  taskKey?: string;
+  /** Char budget for the selected set's content; default {@link DEFAULT_LEARNINGS_BUDGET_CHARS}. */
+  maxChars?: number;
+  /** Injectable clock for deterministic freshness filtering (mirrors {@link memoryStatus}). */
+  now?: Date;
+};
+
+/** Relevance score of one record against the task scope (higher = more relevant). */
+function relevanceScore(record: MemoryRecord, taskKey: string | undefined): number {
+  let score = 0;
+  if (taskKey && record.taskKey === taskKey) score += 3; // same task
+  if (record.scope.length === 0) score += 1; // repo-wide, broadly applicable
+  return score;
+}
+
+/**
+ * Rank the ACTIVE memory records by relevance to the current task scope, most
+ * relevant first. Records matching the run's `taskKey` rank highest, then
+ * repo-wide (unscoped) records, then everything else; ties break by confidence,
+ * then `useCount`, then recency (newer id first). Derived-stale and superseded
+ * records are excluded (mirrors {@link projectLearnings}). Pure — no I/O,
+ * deterministic. The retrieval half of "bounded learnings injection": pick what
+ * is relevant before {@link boundLearnings} caps it.
+ */
+export function selectRelevantMemory(
+  records: MemoryRecord[],
+  ctx: MemorySelectionContext = {}
+): MemoryRecord[] {
+  return records
+    .filter((r) => memoryStatus(r, ctx.now) === "active")
+    .map((r) => ({ r, score: relevanceScore(r, ctx.taskKey) }))
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        b.r.confidence - a.r.confidence ||
+        b.r.useCount - a.r.useCount ||
+        (a.r.id < b.r.id ? 1 : a.r.id > b.r.id ? -1 : 0)
+    )
+    .map((x) => x.r);
+}
+
+/** The bounded set produced by {@link boundLearnings}. */
+export type BoundedMemory = {
+  /** Records that fit under the budget, in relevance order. */
+  selected: MemoryRecord[];
+  /** Relevant records that did not fit (the budget removed them). */
+  dropped: MemoryRecord[];
+  /** Total content chars of {@link BoundedMemory.selected}. */
+  selectedChars: number;
+  /** Total content chars of {@link BoundedMemory.dropped}. */
+  droppedChars: number;
+  /** The char budget applied. */
+  budgetChars: number;
+};
+
+/**
+ * Select task-relevant memory and cap it at a char budget, reporting what the cap
+ * removed (issue #62 P7 slice 5). Records are taken in {@link selectRelevantMemory}
+ * rank order while their cumulative content chars stay within the budget; the
+ * first record that would overflow — and every lower-ranked record after it — is
+ * dropped, giving a clean "kept the most relevant that fit" boundary. Pure. The
+ * loop wiring (swapping the whole-`LEARNINGS.md` injection for this) is a later
+ * slice — this is the substrate, inert on its own.
+ */
+export function boundLearnings(
+  records: MemoryRecord[],
+  ctx: MemorySelectionContext = {}
+): BoundedMemory {
+  const budgetChars = ctx.maxChars ?? DEFAULT_LEARNINGS_BUDGET_CHARS;
+  const selected: MemoryRecord[] = [];
+  const dropped: MemoryRecord[] = [];
+  let selectedChars = 0;
+  let full = false;
+  for (const r of selectRelevantMemory(records, ctx)) {
+    if (!full && selectedChars + r.content.length <= budgetChars) {
+      selected.push(r);
+      selectedChars += r.content.length;
+    } else {
+      full = true;
+      dropped.push(r);
+    }
+  }
+  const droppedChars = dropped.reduce((sum, r) => sum + r.content.length, 0);
+  return { selected, dropped, selectedChars, droppedChars, budgetChars };
+}
+
+/**
+ * Render a bounded set as the `LEARNINGS.md` projection of its selected records,
+ * with a one-line note when the budget dropped relevant records (so the prompt is
+ * honest about what was omitted — the issue's "report what was dropped"). When
+ * nothing was dropped this is exactly {@link projectLearnings} of the selection.
+ */
+export function formatBoundedLearnings(
+  bounded: BoundedMemory,
+  now: Date = new Date()
+): string {
+  const body = projectLearnings(bounded.selected, now);
+  if (bounded.dropped.length === 0) return body;
+  return (
+    body +
+    `\n_Bounded: ${bounded.dropped.length} lower-relevance learning(s) ` +
+    `(${bounded.droppedChars} chars) omitted to fit the ${bounded.budgetChars}-char ` +
+    "context budget; see `otto-memory audit` for the full set._\n"
+  );
+}
+
 /** Write one memory record (creates `.otto/memory/`). */
 export function writeMemoryRecord(
   workspaceDir: string,

@@ -6,7 +6,10 @@ import { describe, expect, it } from "vitest";
 import {
   allocateMemoryId,
   auditMemory,
+  boundLearnings,
+  DEFAULT_LEARNINGS_BUDGET_CHARS,
   detectConflicts,
+  formatBoundedLearnings,
   listMemoryIds,
   memoryDir,
   memoryRecordPath,
@@ -15,6 +18,7 @@ import {
   projectLearnings,
   readMemoryRecord,
   readMemoryRecords,
+  selectRelevantMemory,
   supersede,
   touchMemory,
   writeMemoryRecord,
@@ -444,6 +448,102 @@ describe("projectLearnings", () => {
     expect(out).toContain("- keep me");
     expect(out).not.toContain("drop stale");
     expect(out).not.toContain("drop superseded");
+  });
+});
+
+describe("bounded learnings injection (#62 P7 slice 5)", () => {
+  // Always-active fixtures: no freshness fields, so `now` never stales them.
+  const active = (over: Partial<MemoryRecord>): MemoryRecord => ({
+    ...record,
+    status: "active",
+    expiresAt: undefined,
+    revalidateAfterDays: undefined,
+    ...over,
+  });
+
+  describe("selectRelevantMemory", () => {
+    it("ranks task-key match > repo-wide > other-scope", () => {
+      const recs = [
+        active({ id: "a", taskKey: "other", scope: ["x/**"], content: "A" }),
+        active({ id: "b", taskKey: "issue-62", scope: ["y/**"], content: "B" }),
+        active({ id: "c", taskKey: "other", scope: [], content: "C" }),
+      ];
+      const ranked = selectRelevantMemory(recs, { taskKey: "issue-62" });
+      expect(ranked.map((r) => r.id)).toEqual(["b", "c", "a"]);
+    });
+
+    it("excludes derived-stale / superseded records", () => {
+      const recs = [
+        active({ id: "keep", content: "K" }),
+        active({ id: "sup", content: "S", status: "superseded" }),
+      ];
+      expect(selectRelevantMemory(recs).map((r) => r.id)).toEqual(["keep"]);
+    });
+
+    it("breaks ties by confidence, then useCount, then recency (newest first)", () => {
+      const recs = [
+        active({ id: "2026-01", confidence: 0.5, useCount: 0, content: "X" }),
+        active({ id: "2026-02", confidence: 0.5, useCount: 0, content: "Y" }),
+        active({ id: "2026-00", confidence: 0.9, useCount: 0, content: "Z" }),
+      ];
+      // 2026-00 (highest confidence) first; then the two equal ones newest-first.
+      expect(selectRelevantMemory(recs).map((r) => r.id)).toEqual([
+        "2026-00",
+        "2026-02",
+        "2026-01",
+      ]);
+    });
+  });
+
+  describe("boundLearnings", () => {
+    const r1 = active({ id: "r1", confidence: 0.9, content: "A".repeat(50) });
+    const r2 = active({ id: "r2", confidence: 0.8, content: "B".repeat(50) });
+    const r3 = active({ id: "r3", confidence: 0.7, content: "C".repeat(50) });
+
+    it("caps the selected set at the char budget and drops the rest by rank", () => {
+      const bounded = boundLearnings([r3, r1, r2], { maxChars: 120 });
+      expect(bounded.selected.map((r) => r.id)).toEqual(["r1", "r2"]);
+      expect(bounded.dropped.map((r) => r.id)).toEqual(["r3"]);
+      expect(bounded.selectedChars).toBe(100);
+      expect(bounded.droppedChars).toBe(50);
+      expect(bounded.budgetChars).toBe(120);
+    });
+
+    it("selects everything when it fits, dropping nothing", () => {
+      const bounded = boundLearnings([r1, r2, r3], { maxChars: 1000 });
+      expect(bounded.selected).toHaveLength(3);
+      expect(bounded.dropped).toEqual([]);
+      expect(bounded.droppedChars).toBe(0);
+    });
+
+    it("uses the default budget when maxChars is omitted", () => {
+      expect(boundLearnings([r1]).budgetChars).toBe(
+        DEFAULT_LEARNINGS_BUDGET_CHARS
+      );
+    });
+  });
+
+  describe("formatBoundedLearnings", () => {
+    const now = new Date("2026-06-19T02:00:00.000Z");
+    const r1 = active({ id: "r1", confidence: 0.9, content: "A".repeat(50) });
+    const r2 = active({ id: "r2", confidence: 0.8, content: "B".repeat(50) });
+    const r3 = active({ id: "r3", confidence: 0.7, content: "C".repeat(50) });
+
+    it("projects the selected set and notes what was dropped", () => {
+      const bounded = boundLearnings([r1, r2, r3], { maxChars: 120 });
+      const out = formatBoundedLearnings(bounded, now);
+      expect(out).toContain("# Otto learnings");
+      expect(out).toContain(projectLearnings(bounded.selected, now).trimEnd());
+      expect(out).toContain("1 lower-relevance learning");
+      expect(out).toContain("120-char");
+    });
+
+    it("renders just the projection when nothing was dropped", () => {
+      const bounded = boundLearnings([r1], { maxChars: 1000 });
+      expect(formatBoundedLearnings(bounded, now)).toBe(
+        projectLearnings(bounded.selected, now)
+      );
+    });
   });
 });
 

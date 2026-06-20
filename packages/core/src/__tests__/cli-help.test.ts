@@ -456,6 +456,15 @@ describe("parseFlags --explain-routing", () => {
   });
 });
 
+describe("parseFlags --context-report", () => {
+  it("defaults contextReport to false", () => {
+    expect(parseFlags(["5"]).contextReport).toBe(false);
+  });
+  it("sets contextReport when the flag is present", () => {
+    expect(parseFlags(["--context-report"]).contextReport).toBe(true);
+  });
+});
+
 describe("printConfig routing", () => {
   it("shows the router off by default", () => {
     expect(configOutput({})).toMatch(/routing\s+off/);

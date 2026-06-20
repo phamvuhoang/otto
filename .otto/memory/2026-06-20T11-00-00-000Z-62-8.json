@@ -1,0 +1,17 @@
+{
+  "id": "2026-06-20T11-00-00-000Z-62-8",
+  "content": "Per-stage context budget (issue #62 P7, slice 8 — the final P7 substrate task) shipped as pure, INERT-on-the-loop functions in a NEW module context-budget.ts. The issue's 'soft, model-aware ceiling that warns and triggers compaction'. Model-aware: Otto passes the model spec opaquely to the claude CLI (resolveModelArgs in runner.ts, never validated), so modelContextWindow(spec) does a LOOSE lowercased-substring match against MODEL_CONTEXT_WINDOWS — '[1m]'/'-1m' → 1,000,000 (checked FIRST, most-specific), then 'opus'/'sonnet'/'haiku' → 200,000; conservative DEFAULT_CONTEXT_WINDOW_TOKENS = 200,000 for an unknown/empty/unset spec. modelContextBudget(spec, fraction=DEFAULT_CONTEXT_BUDGET_FRACTION=0.25) = round(window * fraction); the budget is the soft ceiling for the INLINE rendered prompt only, leaving ~75% headroom for the agent's own tool reads + generated output. assessContextBudget(breakdown, {model, maxTokens, fraction}) compares the slice-1 ContextBreakdown.estimatedTokens to the budget (explicit maxTokens OVERRIDES the model-derived one) and returns { estimatedTokens, budgetTokens, windowTokens, overBudget, overByTokens (0 when under), headroomTokens (0 when over), ratio (estimatedTokens/budgetTokens, 0 when budget is 0 — no divide-by-zero), recommendation? }. KEY design: 'triggers compaction' is realized as a RECOMMENDATION that points at the largest *reducible* filler — it scans breakdown.segments (already sorted chars-descending by analyzeContext) for the first category in {commits, learnings} and names the P7 lever (commits → compactCommits slice 6, learnings → boundLearnings slice 5). inputs (the task source) and playbook (the workflow instructions) are NOT P7-reducible, so a prompt that overflows on those ALONE is reported overBudget with NO recommendation (honest: P7 has no lever to shrink it). Soft, never a gate — it warns/recommends, never blocks. formatContextBudget(a) renders a one-line 'context budget: ~X tokens / Y budget (Z% of budget, W-token window) — within budget' OR '… — EXCEEDS by N tokens — compact <category> via <lever>' ('~' marks the token ESTIMATE; the budget itself is exact). Exported from index.ts (DEFAULT_CONTEXT_BUDGET_FRACTION, DEFAULT_CONTEXT_WINDOW_TOKENS, assessContextBudget, formatContextBudget, modelContextBudget, modelContextWindow + types BudgetRecommendation/ContextBudgetAssessment/ContextBudgetContext). Loop wiring (warn + actually pull the slice-5/6 levers when a stage is over budget) is deferred to a later slice — substrate only, cannot regress a run. Pinned by context-budget.test.ts (13 tests). Also this run: a fix(review) on PR #69 propagating the --context-report exit code (run-bin.ts discarded runContextReport()'s return value, so 'no runs' wrongly exited 0; now `if (code !== 0) process.exit(code)`, matching every other run-bin error path; pinned by 2 new run-bin.test.ts cases). All six issue-#62 scope items now have pure substrate; remaining P7 work = loop-wiring slices 4-8 into the live prompt to turn substrate into measured savings.",
+  "category": "convention",
+  "sourceRun": "2026-06-20T11-00-00-000Z-manual",
+  "taskKey": "issue-62",
+  "scope": [
+    "packages/core/src/context-budget.ts",
+    "packages/core/src/index.ts",
+    "packages/core/src/run-bin.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T11:00:00.000Z",
+  "useCount": 0
+}

@@ -159,6 +159,21 @@ describe("stage record I/O", () => {
     writeStageRecord(d, "rid", 0, { ...stageRecord, safetyEvents });
     expect(readStageRecords(d, "rid")[0].safetyEvents).toEqual(safetyEvents);
   });
+  it("round-trips a context breakdown recorded on a stage record", () => {
+    const d = tmp();
+    const contextBreakdown = {
+      totalChars: 100,
+      estimatedTokens: 25,
+      segments: [
+        { category: "playbook" as const, chars: 60, estimatedTokens: 15 },
+        { category: "learnings" as const, chars: 40, estimatedTokens: 10 },
+      ],
+    };
+    writeStageRecord(d, "rid", 0, { ...stageRecord, contextBreakdown });
+    expect(readStageRecords(d, "rid")[0].contextBreakdown).toEqual(
+      contextBreakdown
+    );
+  });
   it("round-trips skills used recorded on a stage record", () => {
     const d = tmp();
     const skillsUsed = [{ name: "release-flow", version: "1.0.0", reasons: ["scope match"] }];

@@ -70,6 +70,51 @@ export function formatTokenUsage(u: TokenUsage): string {
   ].join(" | ");
 }
 
+/**
+ * Cache efficiency over a run's stage token usage (issue #62 P7, slice 4).
+ *
+ * `hitRate` is the fraction of *input* tokens served from the prompt cache —
+ * `cacheRead / (input + cacheCreation + cacheRead)` — so it answers the issue's
+ * success metric "cache-hit rate on the static prefix reported and non-trivial".
+ * Output tokens are excluded: they are generated, never cacheable input.
+ */
+export type CacheEfficiency = {
+  inputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+  /** input + cacheCreation + cacheRead — the denominator of `hitRate`. */
+  totalInputTokens: number;
+  /** cacheRead / totalInputTokens, in 0..1; 0 when there is no input. */
+  hitRate: number;
+};
+
+/** Aggregate per-stage usages into one cache-efficiency summary. Pure. */
+export function summarizeCacheEfficiency(usages: TokenUsage[]): CacheEfficiency {
+  const agg = usages.reduce(addTokenUsage, emptyTokenUsage());
+  const totalInputTokens =
+    agg.inputTokens + agg.cacheCreationInputTokens + agg.cacheReadInputTokens;
+  return {
+    inputTokens: agg.inputTokens,
+    cacheCreationInputTokens: agg.cacheCreationInputTokens,
+    cacheReadInputTokens: agg.cacheReadInputTokens,
+    totalInputTokens,
+    hitRate:
+      totalInputTokens > 0 ? agg.cacheReadInputTokens / totalInputTokens : 0,
+  };
+}
+
+const cachePct = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+
+/** Render a cache-efficiency summary as a one-line console string. */
+export function formatCacheEfficiency(e: CacheEfficiency): string {
+  return (
+    `cache efficiency: ${cachePct.format(e.hitRate * 100)}% of input tokens ` +
+    `served from cache (cache read ${fmt.format(e.cacheReadInputTokens)} · ` +
+    `cache create ${fmt.format(e.cacheCreationInputTokens)} · ` +
+    `uncached ${fmt.format(e.inputTokens)})`
+  );
+}
+
 export function parseTokenMode(
   raw: string | undefined,
   source = "--token-mode"

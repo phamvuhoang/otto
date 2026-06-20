@@ -500,6 +500,167 @@
   `skillUsageCount` (unranked eval column) surface usage — INERT until auto-use.
   Read-only `otto-skills` bin (`list`/`audit`/`why`/`candidates`) never runs tests
   or mutates a package. Pinned by `skills.test.ts` / `skills-cli.test.ts`.
+- **Context telemetry (#62 P7, slice 1) — `context-report.ts`, pure + INERT on the
+  loop.** "Measure before optimizing": `analyzeContext(renderedPrompt)` attributes
+  the inline window footprint by category — `commits`/`learnings`/`inputs`/
+  `playbook` — so a later P7 slice can prove it shrank the right thing. It segments
+  on the **rendered** prompt's stable top-level XML-ish block tags
+  (`<commits>`,`<learnings>`,`<inputs>`/`<issue>`/`<issues-summary>`/
+  `<issues-full-file>`), and **all four category char counts sum to the whole
+  prompt** (recognized blocks → their category, everything else → `playbook` as the
+  remainder, never double-counted). Token figures are an ESTIMATE
+  (`estimateTokens = ceil(chars/4)`, labelled with `~` in `formatContextReport`) —
+  the AUTHORITATIVE per-stage usage stays `tokens.ts`/provider; this answers the
+  orthogonal COMPOSITION question a single usage total can't. Segments are sorted
+  chars-descending and empty categories are omitted. `file reads` /
+  `prior-iteration transcript` are deliberately NOT categories here (agent-runtime/
+  cross-iteration, not in one rendered prompt — they belong to the read-dedup /
+  compaction slices). Pure like `tokens.ts`/`eval.ts`; wiring into
+  `StageResult`/the bundle + an `otto-afk --context-report` surface are later plan
+  tasks (`.otto/tasks/issue-62/plan.md`). Pinned by `context-report.test.ts`.
+- **Context telemetry capture (#62 P7, slice 2) — `analyzeContext` wired into the
+  evidence bundle.** `StageResult.contextBreakdown?` + `StageRecord.contextBreakdown?`
+  are OPTIONAL, mirroring `safetyEvents`/`skillsUsed` (absent = not measured, no
+  loop-behavior change). `stage-exec.ts` calls `analyzeContext(prompt)` on the
+  **post-reduction** `prompt` (the string actually sent to `runStage`, so the
+  breakdown reflects the billed footprint, not the pre-reduce render), and merges
+  it into the returned result alongside the existing `safetyEvents` spread; the
+  loop's `recordStage` threads `sr.contextBreakdown` into the written record.
+  **Import direction:** `runner.ts` and `run-report.ts` both `import type
+  { ContextBreakdown } from "./context-report.js"` — safe because `context-report.ts`
+  imports NOTHING (no cycle). Unlike slice 1 this is no longer fully INERT (every
+  recorded stage now carries a breakdown), but it is still loop-neutral — only an
+  extra field on the bundle. The `otto-afk --context-report` SURFACE over these
+  records is still slice 3. Pinned by `stage-exec.test.ts` (breakdown reflects the
+  sent prompt incl. reduce mode) / `run-report.test.ts` (round-trip).
+- **Context-report surface (#62 P7, slice 3) — `--context-report` read-only flag +
+  `context-report-cli.ts`.** A diagnostic flag (NOT a separate bin) on every AFK bin:
+  `parseFlags` → `flags.contextReport`; run-bin early-returns right after resolving
+  `workspaceDir` (before any agent/scope/token resolution — it needs none), `await`s
+  `runContextReport()` and returns, exactly like `--print-config`. Place the
+  early-return BEFORE the positional-arg validation so it needs no `<iterations>`.
+  The module mirrors `runs-cli.ts`/`inspect.ts`: pure `formatContextReportRun(runId,
+  stages)` + a thin `runContextReport(deps)` that reads ONLY the latest run
+  (`listRunIds().at(-1)`, no run-id positional — a flag has none). It reads
+  `StageRecord.contextBreakdown` (slice 2) and renders per-stage category shares +
+  a first-third-vs-last-third token **slope** (±10% band → growing/flat/shrinking)
+  — the "is per-iteration cost bounded?" signal P7's success metric tracks; `n/a`
+  until ≥2 measured stages. NOT gated per-bin (mirrors `--print-config`; reading
+  `.otto/runs/` works for any bin). It does NOT import a manifest — stage records
+  suffice. Pinned by `cli-help.test.ts` (flag parse) + `context-report-cli.test.ts`
+  (composition/slope/no-runs). Remaining P7 slices: (4) prefix caching, (5) bounded
+  learnings, (6) compaction, (7) read-dedup, (8) per-stage budget.
+- **Prompt-prefix caching is REPORT-ONLY in Otto (#62 P7, slice 4) — Otto cannot
+  set `cache_control` breakpoints.** Otto spawns the `claude` CLI (`claude --print`),
+  it does NOT call the Anthropic API, so it has no lever to "mark a cached prefix":
+  there is no `claude` flag for it (see `buildClaudeArgs`), and the rendered prompt
+  is delivered as a single `Read` tool-result, not an API content block — reordering
+  stable-vs-volatile text inside that file creates NO cacheable sub-prefix. The CLI
+  already auto-caches its stable system-prompt/tools, and Otto invokes it with
+  identical flags every iteration, so cache hits already occur. The feasible +
+  honest half (the issue's explicit success metric, "cache-hit rate reported and
+  non-trivial") is to REPORT it: pure `summarizeCacheEfficiency(usages)` →
+  `{inputTokens, cacheCreationInputTokens, cacheReadInputTokens, totalInputTokens,
+  hitRate}` + `formatCacheEfficiency` in `tokens.ts` (mirrors `formatTokenUsage`).
+  `hitRate = cacheRead / (input + cacheCreation + cacheRead)` — **input only, output
+  excluded** (generated, never cacheable). Surfaced as one extra line on the EXISTING
+  `--context-report` (it already reads the same stage records); drawn from **every**
+  stage's authoritative `StageRecord.usage` (NOT just `contextBreakdown`-measured
+  ones — cache usage is independent of the estimated composition), and **omitted when
+  `totalInputTokens === 0`**. Pinned by `tokens.test.ts` (summarize/format) +
+  `context-report-cli.test.ts` (line present w/ usage, omitted w/o).
+- **Bounded learnings injection (#62 P7, slice 5) — pure, INERT-on-the-loop
+  retrieval+cap in `memory.ts`, NOT a new module.** Three exports layer on the
+  existing `projectLearnings`: `selectRelevantMemory(records, ctx)` ranks ACTIVE
+  records (derived-stale/superseded excluded, like `projectLearnings`) by
+  task-scope relevance — `taskKey` match (+3) > repo-wide/empty-scope (+1) > other
+  — ties broken by confidence → useCount → recency (NEWER id first, the reverse of
+  `projectLearnings`'s chronological in-section order, because for a budget you
+  keep the freshest). `boundLearnings(records, ctx)` greedily takes ranked records
+  while cumulative `content.length` stays ≤ budget (`ctx.maxChars ??
+  DEFAULT_LEARNINGS_BUDGET_CHARS` = 6000); the FIRST overflow and everything after
+  it are `dropped` — a clean rank boundary ("kept the most relevant that fit"), not
+  a fill-the-gaps pack. `formatBoundedLearnings` = `projectLearnings(selected)` +
+  a one-line `_Bounded: N … omitted …_` note ONLY when something was dropped (no
+  drop → byte-identical to the projection). **Deliberately NO changedPaths/scope-glob
+  signal** (unlike `selectSkills`): learnings inject at RENDER time, before the
+  agent edits anything, so changed files aren't known yet — taskKey is the honest
+  injection-time relevance signal (avoids a memory→skills `globMatch` import too).
+  Cap is by record `content.length` (deterministic), not rendered-projection size.
+  Loop wiring (replacing the templates' `!?cat ./.otto/LEARNINGS.md`) is a later
+  slice — this is substrate. Pinned by `memory.test.ts`.
+- **Inter-iteration compaction (#62 P7, slice 6) — pure, INERT-on-the-loop
+  `iteration-compaction.ts`.** Key realization: Otto spawns a FRESH `claude
+  --print` each iteration, so there is NO live transcript carried forward — the
+  only prior-iteration state that fills the next prompt's window is the
+  `<commits>` block (`git log -n 5 --format="%H%n%ad%n%B---" --date=short`). It is
+  count-bounded (5) but each commit BODY is unbounded, so verbose/long histories
+  inflate it. So "summarize prior iterations into a bounded state" = bound that
+  commit block. `parseCommitLog(raw)` splits on `^---$` lines into
+  `{hash,date,subject,body}` entries (first line must be a `[0-9a-f]{7,40}` hash,
+  so the `No commits found` fallback → `[]`; never throws). `compactCommits(commits,
+  {maxChars})` mirrors slice-5 `boundLearnings` shape but DEGRADES instead of
+  DROPS: greedily keep newest-first commits FULL while cumulative
+  `renderFull` chars ≤ budget (`DEFAULT_COMMITS_BUDGET_CHARS` = 2400), then the
+  first overflow + everything after is summarized to **subject-only** (the commit
+  subject IS the iteration's one-line summary — dropping the body, not the commit,
+  is the honest "summarize not carry-full" realization that distinguishes it from
+  `boundLearnings`'s drop). Reports `savedChars` (body chars removed). `kept` is
+  always a contiguous newest prefix + `compacted` the suffix, so
+  `[...kept,...compacted]` preserves newest-first order. `formatCompactedCommits`
+  re-renders the `<commits>`-style body (full for kept, subject-only for compacted)
+  + a one-line `_Compacted: N … saved M chars …_` note ONLY when something was
+  compacted. Loop wiring (swapping the template's `!?git log` commit tag for this)
+  is a later slice — substrate only. Pinned by `iteration-compaction.test.ts`.
+- **Read deduplication (#62 P7, slice 7) — pure, INERT-on-the-loop
+  `read-dedup.ts`.** Otto's `@spill` tags re-run a command each iteration and write
+  the FULL output to a spill file the agent `Read`s; for file-content spills (issue
+  bodies, HEAD patch, big reference files) that content is usually UNCHANGED turn to
+  turn yet re-spilled + re-read in full — accumulated context, not work. A
+  `ReadLedger` (`{seen: path→ReadFingerprint}`) carried across iterations keys on
+  `fingerprintContent(content)` = `"<length>-<FNV-1a-32-base36>"` — a small inline
+  hash (module **imports nothing**, no `node:crypto`, no cycle); the length prefix
+  means different-length content can never collide and a hash collision only ever
+  causes a SAFE re-spill (conservative failure mode). `recordRead(ledger, path,
+  content)` is PURE (returns a fresh ledger, never mutates) and classifies the read
+  `first` / `unchanged` / `changed`; **`unchanged` reports `savedChars =
+  content.length`** (the full re-spill avoided), `first`/`changed` save 0 and must
+  spill fresh. Distinct paths track independently; a `changed` read updates the
+  ledger so a subsequent identical read dedups. `summarizeReads(results)` tallies
+  `{total, first, unchanged, changed, savedChars}` (the run-level "what was
+  deduped" surface); `formatReadReference(result, {refPath})` renders the short
+  `_Read deduplicated: … (saved N chars) — re-use the copy at <refPath>._` line that
+  later replaces the full content. Exported from index.ts. Wiring it into the
+  `@spill` path (emit the reference instead of re-spilling when `unchanged`) is a
+  later slice — substrate only, cannot regress a run. Pinned by `read-dedup.test.ts`.
+  Remaining P7 slice: (8) per-stage context budget.
+- **Per-stage context budget (#62 P7, slice 8 — final P7 substrate) — pure,
+  INERT-on-the-loop `context-budget.ts`.** The "soft, model-aware ceiling": Otto
+  passes the model spec opaquely to the CLI (`resolveModelArgs`, never validated),
+  so `modelContextWindow(spec)` LOOSE-matches a lowercased substring → window
+  (`[1m]`/`-1m` → 1,000,000 checked FIRST as most-specific, then opus/sonnet/haiku
+  → 200,000; conservative `DEFAULT_CONTEXT_WINDOW_TOKENS` = 200,000 on miss/unset).
+  `modelContextBudget(spec, fraction)` = `round(window × fraction)` with
+  `DEFAULT_CONTEXT_BUDGET_FRACTION` = 0.25 — the budget is for the INLINE rendered
+  prompt only, leaving headroom for the agent's tool reads + output.
+  `assessContextBudget(breakdown, {model, maxTokens, fraction})` compares the
+  slice-1 `ContextBreakdown.estimatedTokens` to the ceiling (`maxTokens` overrides
+  the model-derived one) and returns `{estimatedTokens, budgetTokens, windowTokens,
+  overBudget, overByTokens, headroomTokens, ratio, recommendation?}`. KEY design:
+  the recommendation only appears when over budget AND a **reducible** filler
+  exists — it scans the breakdown's chars-descending segments for the first
+  category in `{commits, learnings}` and names the lever (commits →
+  `compactCommits` slice 6, learnings → `boundLearnings` slice 5). `inputs` (task
+  source) and `playbook` (instructions) are NOT P7-reducible, so a prompt that
+  overflows on those alone reports over-budget with NO recommendation (honest:
+  P7 can't shrink it). `ratio` guards divide-by-zero (0 when budget is 0).
+  `formatContextBudget` renders a one-line `within budget` / `EXCEEDS by N
+  tokens — compact <category> via <lever>` warning (`~` marks the estimate; the
+  budget is exact). Soft, never a gate. Loop wiring (warn + actually trigger the
+  slice-5/6 levers on overflow) is a later slice — substrate only. Exported from
+  index.ts. Pinned by `context-budget.test.ts`. All six issue-#62 scope items now
+  have pure substrate; the remaining P7 work is loop-wiring slices 4–8 to turn the
+  substrate into measured savings.
 
 
 ## Gotchas

@@ -11,6 +11,7 @@ import { createInterface } from "node:readline";
 import { join, posix } from "node:path";
 
 import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
+import type { ContextBreakdown } from "./context-report.js";
 import type { SafetyEvent } from "./run-report.js";
 import type { Stage } from "./stages.js";
 import {
@@ -45,6 +46,9 @@ export type StageResult = {
   /** Safety events emitted while rendering/running this stage (issue #43 P4);
    *  absent when none — e.g. a policy violation blocked at a shell/@spill tag. */
   safetyEvents?: SafetyEvent[];
+  /** Composition of the rendered prompt that drove this stage (issue #62 P7);
+   *  attributed by `analyzeContext` in `stage-exec.ts`, absent when not measured. */
+  contextBreakdown?: ContextBreakdown;
 };
 
 /**

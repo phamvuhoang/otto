@@ -1,0 +1,16 @@
+{
+  "id": "2026-06-20T10-10-00-000Z-62-7",
+  "content": "Read deduplication (issue #62 P7, slice 7) shipped as pure, INERT-on-the-loop functions in a NEW module read-dedup.ts. Problem: Otto's @spill tags re-run a command each iteration and write the FULL output to a spill file the agent Reads; for file-content spills (issue bodies, the HEAD patch, large reference files) that content is frequently UNCHANGED turn to turn yet re-spilled and re-read in full every iteration — accumulated context, not necessary work. Substrate: a ReadLedger ({ seen: Record<path, ReadFingerprint> }) carried across iterations by the loop, keyed on fingerprintContent(content) = `${content.length}-${FNV-1a-32-bit base36}`. The hash is a small INLINE loop (Math.imul-based FNV-1a, h>>>0) so the module IMPORTS NOTHING (no node:crypto, no cycle risk — same purity discipline as iteration-compaction.ts / context-report.ts). Prefixing the hash with the exact length means two contents of different length can NEVER share a fingerprint; a hash collision (astronomically unlikely) would at worst treat changed content as unchanged, while the inverse mismatch only ever causes a SAFE re-spill — conservative failure mode. recordRead(ledger, path, content) is PURE (returns a FRESH ledger via {...seen, [path]: fp}, never mutates the input — verified by a 'does not mutate' test) and returns { ledger, result } where result.status is 'first' (path unseen this run), 'unchanged' (same fingerprint as last read — DEDUPABLE), or 'changed' (different fingerprint — must re-spill). result.savedChars = content.length ONLY for 'unchanged' (the full re-spill avoided), 0 for first/changed. Distinct paths track independently; a 'changed' read updates the ledger so a subsequent identical read on that path dedups. summarizeReads(results) tallies { total, first, unchanged, changed, savedChars } — the run-level 'what was deduplicated' reporting surface. formatReadReference(result, { refPath }) renders the short '_Read deduplicated: `<path>` is unchanged since it was read earlier this run (saved N chars) — re-use the copy at <refPath>._' line that later REPLACES the full content for an unchanged re-read (caller spills fresh for first/changed). emptyReadLedger() seeds a run. Exported from index.ts (emptyReadLedger, fingerprintContent, recordRead, summarizeReads, formatReadReference + types ReadStatus/ReadFingerprint/ReadLedger/DedupResult/DedupSummary). Wiring it into the @spill path in render.ts (emit the reference instead of re-spilling when a read is unchanged, threading the ledger across iterations) is deferred to a later slice — substrate only, cannot regress a run. Pinned by read-dedup.test.ts (11 tests). Remaining P7 slice: 8 per-stage context budget.",
+  "category": "convention",
+  "sourceRun": "2026-06-20T10-10-00-000Z-3618",
+  "taskKey": "issue-62",
+  "scope": [
+    "packages/core/src/read-dedup.ts",
+    "packages/core/src/index.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T10:10:00.000Z",
+  "useCount": 0
+}

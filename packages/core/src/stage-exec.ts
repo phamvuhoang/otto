@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { DEFAULT_AGENT, type AgentRuntimeId } from "./agent-runtime.js";
+import { analyzeContext } from "./context-report.js";
 import { applyPromptReduction } from "./prompt-reduction.js";
 import { renderTemplate } from "./render.js";
 import { DEFAULT_BACKOFF_MS, backoffFor, withRetries } from "./retry.js";
@@ -105,9 +106,15 @@ export async function executeStage(
         stageLog,
         { signal, runtime }
       );
-      return violations.length > 0
-        ? { ...result, safetyEvents: violations.map(violationToSafetyEvent) }
-        : result;
+      // Attribute the *final* prompt's window footprint by category (issue #62
+      // P7). `prompt` is post-reduction, so the breakdown reflects what was sent.
+      return {
+        ...result,
+        contextBreakdown: analyzeContext(prompt),
+        ...(violations.length > 0
+          ? { safetyEvents: violations.map(violationToSafetyEvent) }
+          : {}),
+      };
     },
     {
       max: maxRetries,

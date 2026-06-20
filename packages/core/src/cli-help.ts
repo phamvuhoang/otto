@@ -16,6 +16,9 @@ export type CliFlags = {
   help: boolean;
   version: boolean;
   printConfig: boolean;
+  /** `--context-report` toggle (default false; issue #62 P7). Prints the latest
+   *  run's per-stage context composition + token slope, then exits. */
+  contextReport: boolean;
   noKeepAlive: boolean;
   maxRetries?: number;
   detach: boolean;
@@ -163,6 +166,7 @@ export function parseFlags(
   let help = false;
   let version = false;
   let printConfig = false;
+  let contextReport = false;
   let noKeepAlive = false;
   let maxRetries: number | undefined;
   let expectingMaxRetries = false;
@@ -317,6 +321,7 @@ export function parseFlags(
     if (a === "-h" || a === "--help") help = true;
     else if (a === "-V" || a === "--version") version = true;
     else if (a === "--print-config") printConfig = true;
+    else if (a === "--context-report") contextReport = true;
     else if (a === "--no-keep-alive") noKeepAlive = true;
     else if (a === "--max-retries") expectingMaxRetries = true;
     else if (a === "--detach") detach = true;
@@ -401,6 +406,7 @@ export function parseFlags(
     help,
     version,
     printConfig,
+    contextReport,
     noKeepAlive,
     maxRetries,
     detach,
@@ -476,6 +482,7 @@ Flags:
   -h, --help          show this help and exit
   -V, --version       print bin + core version and exit
   --print-config      print resolved config + a preflight check of run prerequisites, then exit
+  --context-report    print the latest run's per-stage context composition + token slope (from .otto/runs/), then exit
   --no-keep-alive     skip OS wake-lock acquisition (default: acquire system-sleep inhibitor for loop lifetime)
   --max-retries <N>   per-stage retry budget on transient failure (default: 3; 0 disables retries)
   --detach            fork the loop into a background process, print pid + log path, and exit (parent returns 0)

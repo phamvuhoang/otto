@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.13.0...otto-core-v0.14.0) (2026-06-20)
+
+
+### Features
+
+* **core:** operator experience ([#45](https://github.com/phamvuhoang/otto/issues/45)) + skill extraction & reuse ([#44](https://github.com/phamvuhoang/otto/issues/44)) ([#58](https://github.com/phamvuhoang/otto/issues/58)) ([45c9ac3](https://github.com/phamvuhoang/otto/commit/45c9ac30b96e779d5bf4e5e32e259d37be637552))
+
 ## [0.13.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.12.0...otto-core-v0.13.0) (2026-06-19)
 
 

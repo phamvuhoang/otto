@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0](https://github.com/phamvuhoang/otto/compare/otto-v0.5.0...otto-v0.6.0) (2026-06-20)
+
+
+### Features
+
+* **core:** operator experience ([#45](https://github.com/phamvuhoang/otto/issues/45)) + skill extraction & reuse ([#44](https://github.com/phamvuhoang/otto/issues/44)) ([#58](https://github.com/phamvuhoang/otto/issues/58)) ([45c9ac3](https://github.com/phamvuhoang/otto/commit/45c9ac30b96e779d5bf4e5e32e259d37be637552))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @phamvuhoang/otto-core bumped to 0.14.0
+
 ## [0.5.0](https://github.com/phamvuhoang/otto/compare/otto-v0.4.1...otto-v0.5.0) (2026-06-19)
 
 

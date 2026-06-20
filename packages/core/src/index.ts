@@ -59,6 +59,18 @@ export {
   type CompactedCommits,
 } from "./iteration-compaction.js";
 export {
+  emptyReadLedger,
+  fingerprintContent,
+  formatReadReference,
+  recordRead,
+  summarizeReads,
+  type DedupResult,
+  type DedupSummary,
+  type ReadFingerprint,
+  type ReadLedger,
+  type ReadStatus,
+} from "./read-dedup.js";
+export {
   allocateRunId,
   listRunIds,
   readManifest,

@@ -48,9 +48,17 @@ this burns it down telemetry-first, each optimization gated on the prior slice.
   `formatCompactedCommits` re-renders the block with a "what was compacted" note.
   Loop wiring (swapping the template's `!?git log` commit injection for this) is a
   later slice. Pinned by `iteration-compaction.test.ts`.
-- [ ] **7. Read deduplication.** Track files already read this run; avoid
-  re-spilling unchanged content.
+- [x] **7. Read deduplication.** Track files already read this run; avoid
+  re-spilling unchanged content. Shipped as pure, INERT-on-the-loop functions in
+  `read-dedup.ts`: a `ReadLedger` (path → fingerprint) carried across iterations;
+  `fingerprintContent` (length-prefixed FNV-1a 32-bit, dependency-free) keys the
+  ledger; `recordRead` classifies each read as `first`/`unchanged`/`changed`
+  (purely, returning a fresh ledger) and reports `savedChars` for an unchanged
+  re-read; `summarizeReads` tallies run-level savings; `formatReadReference`
+  renders the short "already read, unchanged" line that later replaces a full
+  re-spill. Wiring it into the `@spill` path is a later slice. Pinned by
+  `read-dedup.test.ts`.
 - [ ] **8. Per-stage context budget.** A soft, model-aware ceiling that warns and
   triggers compaction when a stage's estimated context exceeds it.
 
-This run implements **task 6**.
+This run implements **task 7**.

@@ -612,6 +612,28 @@
   + a one-line `_Compacted: N … saved M chars …_` note ONLY when something was
   compacted. Loop wiring (swapping the template's `!?git log` commit tag for this)
   is a later slice — substrate only. Pinned by `iteration-compaction.test.ts`.
+- **Read deduplication (#62 P7, slice 7) — pure, INERT-on-the-loop
+  `read-dedup.ts`.** Otto's `@spill` tags re-run a command each iteration and write
+  the FULL output to a spill file the agent `Read`s; for file-content spills (issue
+  bodies, HEAD patch, big reference files) that content is usually UNCHANGED turn to
+  turn yet re-spilled + re-read in full — accumulated context, not work. A
+  `ReadLedger` (`{seen: path→ReadFingerprint}`) carried across iterations keys on
+  `fingerprintContent(content)` = `"<length>-<FNV-1a-32-base36>"` — a small inline
+  hash (module **imports nothing**, no `node:crypto`, no cycle); the length prefix
+  means different-length content can never collide and a hash collision only ever
+  causes a SAFE re-spill (conservative failure mode). `recordRead(ledger, path,
+  content)` is PURE (returns a fresh ledger, never mutates) and classifies the read
+  `first` / `unchanged` / `changed`; **`unchanged` reports `savedChars =
+  content.length`** (the full re-spill avoided), `first`/`changed` save 0 and must
+  spill fresh. Distinct paths track independently; a `changed` read updates the
+  ledger so a subsequent identical read dedups. `summarizeReads(results)` tallies
+  `{total, first, unchanged, changed, savedChars}` (the run-level "what was
+  deduped" surface); `formatReadReference(result, {refPath})` renders the short
+  `_Read deduplicated: … (saved N chars) — re-use the copy at <refPath>._` line that
+  later replaces the full content. Exported from index.ts. Wiring it into the
+  `@spill` path (emit the reference instead of re-spilling when `unchanged`) is a
+  later slice — substrate only, cannot regress a run. Pinned by `read-dedup.test.ts`.
+  Remaining P7 slice: (8) per-stage context budget.
 
 
 ## Gotchas

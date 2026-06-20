@@ -1,8 +1,9 @@
 <h1 align="center">Otto</h1>
 
 <p align="center">
-  <strong>Autonomous Claude Code loops that ship while you're AFK.</strong><br>
-  Hand Otto a plan, a PRD, or a backlog of GitHub issues — it implements, reviews, and commits, iteration after iteration, until the work is done.
+  <strong>An autonomous agent harness for Claude Code — it ships while you're AFK.</strong><br>
+  Hand Otto a plan, a PRD, or a backlog of GitHub/Linear issues — it implements, reviews, and commits, iteration after iteration, until the work is done.<br>
+  Every run is sandboxed, budgeted, governed, and evaluable, and leaves a git-tracked evidence trail you can inspect, compare, and trust.
 </p>
 
 <p align="center">
@@ -15,14 +16,16 @@
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#why-otto">Why Otto</a> ·
-  <a href="#examples">Examples</a> ·
+  <a href="#use-cases">Use cases</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#documentation">Docs</a>
 </p>
 
 ---
 
-Otto drives the [Claude Code](https://docs.anthropic.com/claude/docs/claude-code) CLI against a target repository in an iterating **implement → review** pipeline, running `claude` directly on the host. It remembers what it learns, thinks before it codes, reviews its own work on a budget, and survives rate limits and restarts. Docker is not required.
+Otto drives the [Claude Code](https://docs.anthropic.com/claude/docs/claude-code) CLI (or [Codex](https://github.com/openai/codex) via `--agent codex`) against a target repository in an iterating **implement → review** pipeline, running the agent directly on the host. It remembers what it learns, thinks before it codes, reviews its own work on a budget, and survives rate limits and restarts. Docker is not required.
+
+**Built as a real agent harness, not a `while`-loop:** native-OS sandboxing, per-run cost budgets, a git-tracked **evidence bundle** per run, a CI-runnable **eval/benchmark** harness, governed memory, a repo-local **safety policy** with prompt-injection taint-fencing, adaptive compute routing, and reusable **skills** — all driven from the CLI and importable as a library ([`@phamvuhoang/otto-core`](./packages/core)).
 
 > ⚠️ **Security:** Otto runs Claude with `--permission-mode bypassPermissions`. The default `OTTO_RUNNER=sandbox` uses Claude Code's native OS sandbox (Seatbelt on macOS) to confine writes to the workspace; `OTTO_RUNNER=host` runs unsandboxed. Point it only at repositories, plans, and issues you trust — see **[SECURITY.md](./SECURITY.md)**.
 
@@ -57,7 +60,22 @@ New to it? The **[QUICKSTART](./QUICKSTART.md)** walks zero-to-first-loop. No Gi
 
 ## Why Otto
 
-More than a `while`-loop around `claude`:
+A naïve harness just loops `claude` until the iteration count runs out. Otto is the loop **plus the harness around it** — the parts that make an unattended run safe, affordable, and trustworthy:
+
+| Concern         | A bare `while` loop around `claude` | **Otto**                                                                            |
+| --------------- | ----------------------------------- | ----------------------------------------------------------------------------------- |
+| When to stop    | a fixed count, or never             | senses completion (`NO MORE TASKS`); early-stops on stalled progress                |
+| Rate limits     | the loop dies                       | waits out the reset and resumes the same iteration; optional provider auto-switch   |
+| Crash / restart | redoes everything                   | resumes from `.otto/state.json`; never redoes committed work                        |
+| Code review     | none                                | self-review + an adversarial lens panel; only confirmed fixes land                  |
+| Cost            | blind                               | per-run `--budget` ceiling, pacing, and token accounting                            |
+| Memory          | none                                | git-tracked, governed learnings injected into every prompt                          |
+| Safety          | full blast radius                   | native-OS sandbox + repo-local `.otto/policy.json` + prompt-injection taint-fencing |
+| Observability   | terminal scrollback                 | an evidence bundle per run you can `inspect`, `compare`, and benchmark              |
+| Compute spend   | same review depth always            | adaptive routing by change risk                                                     |
+| Reuse           | copy-pasted prompts                 | validated, retrievable skills                                                        |
+
+The rest of this section is the detail behind each row:
 
 - 🧠 **It remembers.** Otto keeps a git-tracked `.otto/LEARNINGS.md` in your repo and injects it into every prompt. As it works it appends durable, reusable knowledge — conventions, gotchas, decisions _and their why_, dead ends — so each iteration starts smarter. The file rides in the work commit; delete it to reset Otto's memory.
 - 📐 **It thinks before it codes.** Every iteration runs an adaptive **brainstorm → spec → plan → TDD** workflow. Hand it a crisp plan and it implements directly; hand it a vague one and it plays both sides of a brainstorm — generating clarifying questions, answering each with the most reasonable repo-grounded default, recording assumptions to `.otto/specs/`, then implementing test-first. Autonomously: it records its reasoning and proceeds rather than stopping to ask.
@@ -78,72 +96,125 @@ Beyond the build loop, two read/repair modes reuse all of the above:
 
 ---
 
-## Examples
+## Use cases
+
+Recipes grouped by what you're trying to do. The trailing number on the loop bins is the **max iteration count**; a run also stops early when the agent emits `<promise>NO MORE TASKS</promise>`.
+
+### 1. Ship work autonomously
 
 ```bash
-# Ship a plan/PRD while you sleep — background, wake-lock, toast on finish/wedge
-otto-afk --detach --notify "./docs/plans/inventory.md ./docs/prd/PRD-Inventory.md" 50
+# Implement a plan + PRD, up to 10 iterations
+otto-afk "./docs/plans/feature.md ./docs/prd/feature.md" 10
 
-# Burn down your GitHub issue backlog — one issue per iteration
+# Overnight, unattended: fork to background, hold a wake-lock, toast on finish/wedge
+otto-afk --detach --notify "./docs/plans/inventory.md ./docs/prd/inventory.md" 50
+
+# Burn down a GitHub backlog — one issue per iteration
 otto-ghafk 10
-
-# Fix one specific issue and stop
-otto-ghafk --issue 42 5
+otto-ghafk --issue 42 5                         # just issue #42, then stop
+otto-ghafk --issue 42 --include-sub-issues 20   # an epic and its sub-issues
 
 # Burn down a Linear backlog (label `otto`); --issue ENG-123 scopes to one
-otto-linear-auth login                         # paste a Linear personal API key, once
+otto-linear-auth login                          # paste a Linear API key, once
 otto-linear-afk 10
-
-# Keep spend on a leash for an exploratory spike
-otto-afk --budget 5 "./docs/plans/spike.md" 20
-
-# Higher-confidence review: multi-lens panel → one consolidated fix(review): commit
-otto-afk --review-panel "./docs/plans/feature.md" 30
-
-# See actual token usage without changing prompts
-otto-afk --token-mode measure "./docs/plans/feature.md" 5
-
-# Opt into conservative prompt compaction and token reporting
-otto-afk --token-mode reduce "./docs/plans/feature.md" 5
-
-# Read-only audit: did the plan actually land? (writes .otto-tmp/verify-report.md)
-otto-afk --verify "./docs/plans/feature.md ./docs/prd/feature.md"
-
-# Apply an external code review, fixing actionable findings one per iteration
-otto-afk --apply-review ./code-review.md 20
-
-# Run as a daemon that wakes on newly-labelled issues
-otto-ghafk --watch --watch-interval 300 5
-
-# Inspect the most recent run's evidence bundle (what happened, why it stopped)
-otto-inspect latest
-
-# Operator view: list recent runs, then A/B two of them (free — no model call)
-otto-runs list
-otto-eval compare <run-a> <run-b>
-
-# See why the adaptive router chose each iteration's review depth
-otto-afk --adaptive-router --explain-routing "./docs/plans/feature.md" 10
-
-# Skills: suggest candidates from repeated runs; see why one would be selected
-otto-skills candidates
-otto-skills why packages/core/src/eval.ts
-
-# Audit governed memory: stale, conflicting, and frequently-used records
-otto-memory audit
-
-# Benchmark harness quality across configs (paid; replays the eval fixtures)
-otto-eval benchmarks/suite.json benchmarks/configs.json --iterations 3
-
-# Drive a repo other than the current directory; pin the model
-OTTO_WORKSPACE=~/code/other-repo OTTO_MODEL=opus otto-afk "./docs/plans/feature.md" 10
-
-# Run with Codex after `codex login` (or CODEX_API_KEY / OPENAI_API_KEY)
-otto-afk --agent codex --print-config
-OTTO_AGENT=codex otto-ghafk 5
 ```
 
-Full flag reference and more verify / apply-review recipes: **[docs/CLI.md](./docs/CLI.md)**.
+### 2. Operate & inspect the harness
+
+```bash
+# List recent runs at a glance: status, iterations, cost, elapsed (newest first)
+otto-runs list
+
+# Render one run's evidence bundle — "what happened and why did Otto stop?"
+otto-inspect latest
+otto-inspect 2026-06-20T05-53-11-000Z-12345     # a specific run id
+
+# A/B two recorded runs side-by-side — FREE, no model call
+otto-eval compare latest 2026-06-19T22-10-00-000Z-9876
+
+# See exactly what will resolve (config + preflight) before any paid run
+otto-afk --print-config
+```
+
+### 3. Evaluate & benchmark harness quality
+
+```bash
+# Replay the eval fixtures across configs and score each run (paid; never CI)
+otto-eval benchmarks/suite.json benchmarks/configs.json --iterations 3
+
+# Compare two past runs' trajectories — succeeded / cost / tokens / elapsed /
+# safety events / skills used — without re-running anything
+otto-eval compare <run-a> <run-b>
+
+# Measure real token usage (in/out/cache, per stage + run total) without changing prompts
+otto-afk --token-mode measure "./docs/plans/feature.md" 5
+```
+
+### 4. Control cost & compute
+
+```bash
+# Hard spend cap (halts at the ceiling) + pacing between iterations
+otto-afk --budget 5 --cooldown 2000 "./docs/plans/spike.md" 20
+
+# Higher-confidence review: correctness/security/tests lenses → adversarial verify
+# → one consolidated fix(review): commit of only the confirmed defects
+otto-afk --review-panel "./docs/plans/feature.md" 30
+
+# Spend review compute by risk: single reviewer for docs, full panel for security —
+# and print WHY each iteration routed the way it did
+otto-afk --adaptive-router --explain-routing "./docs/plans/feature.md" 10
+
+# Conservative render-time prompt compaction + token reporting
+otto-afk --token-mode reduce "./docs/plans/feature.md" 5
+```
+
+### 5. Govern memory, safety & skills
+
+```bash
+# Governed memory: audit stale / conflicting / frequently-used records before they
+# influence a run, then project the ACTIVE ones back into a bounded LEARNINGS.md
+otto-memory audit
+otto-memory project > .otto/LEARNINGS.md
+
+# Safety policy: a repo opts into governance by populating .otto/policy.json
+# (blocked commands, allowed write roots / network domains, secret patterns…).
+# Blocked host commands are skipped and recorded as a safety event in the bundle.
+
+# Skills: promote repeated successful workflows into validated, reusable procedures
+otto-skills candidates                          # workflows that succeeded the same way >= 2x
+otto-skills why packages/core/src/eval.ts       # which skills retrieval would pick, and why
+otto-skills list                                # inventory + validated/unvalidated/stale status
+```
+
+### 6. Verify & repair (read-only / surgical)
+
+```bash
+# Did the plan actually land? Read-only DONE/GAP/DEFERRED report; changes nothing
+otto-afk --verify "./docs/plans/feature.md ./docs/prd/feature.md"
+
+# Consume an external code review and fix its actionable findings, one per iteration
+otto-afk --apply-review ./code-review.md 20
+```
+
+### 7. Multi-provider, scope & daemon
+
+```bash
+# Run with Codex instead of Claude (after `codex login` / CODEX_API_KEY / OPENAI_API_KEY)
+otto-afk --agent codex --print-config
+OTTO_AGENT=codex otto-ghafk 5
+
+# Start on Claude, auto-switch to Codex on a rate limit instead of waiting
+otto-afk --fallback-agent codex --auto-switch-on-limit "./docs/plans/feature.md" 20
+
+# Drive a different repo and pin the model
+OTTO_WORKSPACE=~/code/other-repo OTTO_MODEL=claude-opus-4-8 otto-afk "./docs/plans/feature.md" 10
+
+# Daemon: poll for newly-labelled issues and pick them up as they arrive
+otto-ghafk --watch --watch-interval 300 5
+otto-ghafk --repo owner/name --watch 5          # scope the daemon to one repo
+```
+
+Full flag reference and more recipes: **[docs/CLI.md](./docs/CLI.md)**.
 
 ---
 

@@ -22,7 +22,7 @@ import {
 } from "./stream-render.js";
 import type { TokenUsage } from "./tokens.js";
 import { formatTokenUsage } from "./tokens.js";
-import { nextActionFor } from "./loop.js";
+import { nextActionFor } from "./next-action.js";
 
 // ---------------------------------------------------------------------------
 // Types

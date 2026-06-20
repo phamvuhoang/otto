@@ -22,6 +22,8 @@ import {
   writeRunReport,
   writeStageRecord,
   type RunArtifact,
+  type RunManifest,
+  type StageRecord,
 } from "./run-report.js";
 import { executeStage } from "./stage-exec.js";
 import {
@@ -50,6 +52,9 @@ import {
   type TokenMode,
   type TokenUsage,
 } from "./tokens.js";
+import { buildRunView, formatDoneCard } from "./run-view.js";
+import { nextActionFor } from "./next-action.js";
+export { nextActionFor };
 
 // The agent emits this literal when there is no more work; the same string is
 // mirrored in the playbook templates (prompt.md / ghprompt.md) that instruct it.
@@ -58,29 +63,6 @@ const SENTINEL = "<promise>NO MORE TASKS</promise>";
 const RATE_LIMIT_BUFFER_MS = 30_000;
 const RATE_LIMIT_FALLBACK_MS = 15 * 60_000;
 const DEFAULT_MAX_WAIT_MS = 6 * 3600_000;
-
-// Maps each end-of-run exit reason (the strings passed to `summarize`) to a
-// terse imperative hint telling the maintainer what to do next. Pure and
-// exported so it is unit-testable; unknown reasons fall back to a generic hint
-// rather than throwing.
-const NEXT_ACTION: Record<string, string> = {
-  complete: "review the diff, then open a PR",
-  done: "review the diff, then open a PR",
-  "done with failures":
-    "inspect the failed stage logs under `.otto-tmp/logs`, then re-run",
-  "stopped (budget)": "raise `--budget` and re-run to resume",
-  "halted (rate limit)": "re-run after the limit resets to resume",
-  aborted: "re-run to resume from the saved iteration",
-  "stopped (error)": "inspect the error above, then re-run",
-  "stopped (low progress)":
-    "the run stopped making changes — refine the plan/prompt, then re-run",
-  "paused (needs human)":
-    "a repeated failure needs a decision — inspect the logs, then re-run",
-};
-
-export function nextActionFor(reason: string): string {
-  return NEXT_ACTION[reason] ?? "re-run to resume";
-}
 
 // Counts *open* deferred findings recorded in `.otto/review-followups.md` by
 // tallying top-level Markdown bullets (lines starting with "- ", no leading
@@ -388,12 +370,20 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // the next seq, so records stay contiguous, and a failed panel attempt's
   // records can be rolled back by truncating + deleting (see the retry catch).
   const recordedStageFiles: string[] = [];
+  // Lightweight in-memory log mirroring recordedStageFiles; used by summarize
+  // to build a RunView for formatDoneCard without a disk round-trip.
+  const stageLog: { iteration: number; stage: string; isError: boolean }[] = [];
   const recordStage = (
     recIteration: number,
     stageName: string,
     sr: StageResult,
     startedAt: string
   ): void => {
+    stageLog.push({
+      iteration: recIteration,
+      stage: stageName,
+      isError: sr.isError,
+    });
     try {
       const name = writeStageRecord(workspaceDir, runId, recordedStageFiles.length, {
         iteration: recIteration,
@@ -574,21 +564,47 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // Also finalizes the run manifest here so the evidence bundle records the same
   // exit reason on every terminal path the loop funnels through summarize.
   const summarize = (reason: string, iterations: number): void => {
-    const iters = `${iterations} iteration${iterations === 1 ? "" : "s"}`;
-    const tokens =
-      tokenMode === "off" ? "" : ` · tokens ${formatTokenUsage(runTokenUsage)}`;
+    // Build a finalized manifest snapshot (same fields finalizeManifest writes)
+    // so buildRunView can derive status/elapsedMs from it. hasFollowups is kept
+    // false here — the deferred-count line is written separately below to
+    // preserve the greppable count format ("N deferred follow-ups …").
+    const nowTs = nowIso();
+    const manifestSnap: RunManifest = {
+      runId,
+      bin,
+      mode,
+      inputs,
+      runtime: { id: activeAgentId, displayName: activeAgentDisplayName },
+      branchStrategy,
+      iterations: total,
+      completedIterations: iterations,
+      costUsd: runCostUsd,
+      tokenUsage: runTokenUsage,
+      exitReason: reason,
+      nextAction: nextActionFor(reason),
+      artifacts: [] as RunArtifact[],
+      startedAt: manifestStartedAt,
+      finishedAt: nowTs,
+    };
+    const view = buildRunView(manifestSnap, stageLog as unknown as StageRecord[]);
+    let out = formatDoneCard(view) + "\n";
+    // Runtime label + optional token usage: keeps the greppable "runtime: <id>"
+    // in stdout (tests check for it) and the token count assertion.
     const runtimeLabel = switched
       ? `${switchFromId} -> ${activeAgentId} (switched once: rate limit)`
       : activeAgentId;
-    let line =
-      `${greenOut(SYM_OUT.bullet)} ${boldOut(`Otto ${reason}`)}` +
-      `${dimOut(` · ${iters} · $${runCostUsd.toFixed(2)}${tokens} · runtime: ${runtimeLabel}`)}\n` +
-      `${dimOut(`  → next: ${nextActionFor(reason)}`)}\n`;
+    out += `${dimOut(`  runtime: ${runtimeLabel}`)}`;
+    if (tokenMode !== "off") {
+      out += `${dimOut(` · tokens ${formatTokenUsage(runTokenUsage)}`)}`;
+    }
+    out += "\n";
+    // Deferred follow-ups: written with the count so the greppable format
+    // ("N deferred follow-ups in .otto/review-followups.md") is preserved.
     const deferred = deferredFollowupCount(workspaceDir);
     if (deferred > 0) {
-      line += `${dimOut(`  ⚑ ${deferred} deferred follow-up${deferred === 1 ? "" : "s"} in .otto/review-followups.md`)}\n`;
+      out += `${dimOut(`  ⚑ ${deferred} deferred follow-up${deferred === 1 ? "" : "s"} in .otto/review-followups.md`)}\n`;
     }
-    process.stdout.write(line);
+    process.stdout.write(out);
     finalizeManifest(reason, iterations);
   };
   let sawFailure = false;
@@ -764,6 +780,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               const discardedRecords = recordedStageFiles.splice(recordSnapshot);
               if (discardedRecords.length > 0) {
                 removeStageRecords(workspaceDir, runId, discardedRecords);
+                stageLog.splice(recordSnapshot);
               }
               const resetsAt = (err as RateLimitError).resetsAt;
 

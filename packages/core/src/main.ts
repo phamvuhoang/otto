@@ -15,6 +15,7 @@ export async function runAfk(
     takesInputArg: true,
     cliVersion: opts.cliVersion,
     verifyStage: STAGES.verifier,
+    planStage: STAGES.plan,
     applyReviewStage: STAGES.applyReviewImplementer,
     mode: "afk",
   });

@@ -1,0 +1,17 @@
+{
+  "id": "2026-06-20T14-00-00-000Z-63-5",
+  "content": "--plan one-shot wiring (issue #63 P8, slice 5) — run-bin.ts + main.ts + cli-help.ts. Wires the slice-4 plan stage into the run behind a --plan flag. KEY design constraint: the plan stage canNOT be prepended to the normal chain [implementer, reviewer], because loop.ts treats the FIRST stage as the GATE and checks its result for the <promise>NO MORE TASKS</promise> sentinel — and plan.md emits that sentinel when the plan already exists, which would wrongly EXIT the loop before implementing. Therefore --plan is a ONE-SHOT that REPLACES the chain with [cfg.planStage!] (author the spec+plan, exit; a separate normal otto-afk run then implements it — matching 'persisted for human review before it writes code'). Modelled exactly on --verify: afk-only via a new optional RunBinConfig.planStage field set ONLY in main.ts (gh-main.ts does NOT set it, so otto-ghafk --plan errors '--plan is only supported by otto-afk' — the ghafk plan flow needs issue-fetch in the template, deferred); added to modeCount so --issue/--verify/--plan/--apply-review/--watch stay mutually exclusive; input-taking (uses the positional inputs like a normal afk run); iterations forced to 1. REFACTOR: the previously verify-specific input/iterations handling block is now keyed on `const oneShot = flags.verify || flags.plan` with `const oneShotFlag = flags.verify ? '--verify' : '--plan'` for the usage + 'is one-shot; ignoring the iterations argument' messages; the stages selection adds `: flags.plan ? [cfg.planStage!]` between the verify and applyReview arms. runMode gains a 'plan' label (flags.verify?'verify':flags.plan?'plan':flags.applyReview!=null?'review':cfg.mode), threaded into runLoop state + --print-config mode line. cli-help.ts: CliFlags.plan boolean field + `let plan=false` + `else if (a==='--plan') plan=true` + include in returned flags + a help line. Pinned by cli-help.test.ts (parseFlags --plan default false / set true with rest) + run-bin.test.ts (runs ONLY the plan stage one-shot — asserts runLoop called once with stages [plan], iterations 1, inputs passed; rejects --plan for a cfg without planStage). OTTO_PLAN env deferred (flag-only this slice). Plan: .otto/tasks/issue-63/plan.md (this run = slice 5 of 7). Remaining: 6 human checkpoint, 7 plan-quality gate/feedback.",
+  "category": "convention",
+  "sourceRun": "2026-06-20T14-00-00-000Z-manual",
+  "taskKey": "issue-63",
+  "scope": [
+    "packages/core/src/run-bin.ts",
+    "packages/core/src/main.ts",
+    "packages/core/src/cli-help.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T14:00:00.000Z",
+  "useCount": 0
+}

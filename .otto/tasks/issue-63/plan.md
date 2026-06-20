@@ -1,0 +1,63 @@
+# Plan — issue #63: P8 Spec & plan authoring
+
+Ordered, bite-sized, testable tasks. One task per Otto run. The issue is Medium;
+this burns it down rubric-first (measure plan quality before generating plans),
+each slice gated on the prior, mirroring how #62 shipped pure substrate then
+wired it.
+
+- [ ] **1. Plan-quality rubric — pure scorer + formatter.** `plan-rubric.ts`:
+  `scorePlanQuality(doc): PlanRubricScore` scores a spec/plan markdown document
+  against eight criteria — problem, decisions/assumptions, scope guard, file map,
+  task breakdown, failing-test-first, verify commands, testable success criteria
+  — each a pure deterministic predicate (header/keyword heuristics, no model);
+  returns per-criterion results, met-count / max score, a 0..1 `ratio`, and the
+  `missing` list. `formatPlanRubric` renders a human-readable scorecard. Pure,
+  INERT, exported from `index.ts`. Pinned by `plan-rubric.test.ts`.
+- [x] **2. Capture the rubric as an eval signal.** Surfaced the plan-completeness
+  score next to the other run signals: `EvalSignals.planQualityRatio` (0..1 or
+  `null` when no plan scored), set by `scoreTrajectory(manifest, stages, {
+  planScore })` — the caller passes the already-computed `PlanRubricScore` so the
+  scorer stays pure (the rubric reads a document, not the trajectory). Added a
+  higher-is-better "Plan quality" column to `compareTrajectories`. Pinned by
+  `eval.test.ts`.
+- [x] **3. `otto-afk --plan-report` read-only surface.** `plan-report-cli.ts`:
+  `readTaskPlans(workspaceDir)` scores every `.otto/tasks/<key>/` (spec+plan
+  concatenated) with the rubric; `formatPlanReport` (pure) renders a per-task
+  scorecard; `runPlanReport` prints it and returns an exit code (1 when no plan).
+  Flag wired in `cli-help.ts` + early-return in `run-bin.ts` (exit-code propagated,
+  mirroring `--context-report`). Pinned by `plan-report-cli.test.ts`,
+  `cli-help.test.ts`, `run-bin.test.ts`.
+- [x] **4. The `plan` stage — template + registry.** Added `STAGES.plan` →
+  `plan.md`, an authoring-only template (no implementation; writes only
+  `.otto/tasks/<task-key>/{spec,plan}.md`) that reuses the autonomous-brainstorm
+  philosophy and instructs the proven shape (problem → decisions → scope guard →
+  file map → task-by-task failing-test-first + explicit verify commands),
+  gate-compatible (emits `NO MORE TASKS` when already planned). Wiring it into a
+  chain is slice 5, so it is inert on real runs for now. Pinned by
+  `plan-stage.test.ts` (render-contract).
+- [x] **5. Wire the `plan` stage into the chain (opt-in).** Added a `--plan`
+  one-shot (otto-afk), mirroring `--verify`: `cfg.planStage` (set only in
+  `main.ts`), mutually exclusive with the other modes, input-taking, iterations
+  forced to 1, chain replaced with `[planStage]`, `runMode` → `"plan"`. A planning
+  run authors the spec+plan for human review, then exits — implementation is a
+  separate normal run. Pinned by `cli-help.test.ts` + `run-bin.test.ts`.
+- [x] **6. Optional human checkpoint.** `plan-checkpoint.ts` (pure + injectable):
+  `formatCheckpointPrompt` renders the rubric scorecard + approve/edit/reject
+  question; `parseCheckpointResponse` maps the answer (reject is the safe default);
+  `resolvePlanCheckpoint(prompt, deps)` prints it and, when non-interactive (AFK),
+  auto-approves and records the decision ("record assumptions and proceed"),
+  otherwise reads one line. Exported from `index.ts`. Live interactive wiring is a
+  follow-up (Otto is AFK). Pinned by `plan-checkpoint.test.ts`.
+- [x] **7. Plan-quality gate / feedback.** `plan-gate.ts` (pure): `assessPlanGate`
+  turns a rubric score into a PASS/FAIL verdict vs `DEFAULT_PLAN_QUALITY_THRESHOLD`
+  (0.75), reporting the `shortfall` (criteria needed to clear the bar) and the
+  `missing` set — the re-plan target; `formatPlanGate` renders it. Wired into
+  `--plan-report` so each task shows PASS/FAIL. The automated self-healing re-plan
+  loop (re-run the plan stage on FAIL) is a documented follow-up. Pinned by
+  `plan-gate.test.ts` + `plan-report-cli.test.ts`.
+
+All 7 plan tasks are complete: the P8 plan-authoring substrate (rubric → eval
+signal → `--plan-report` → the `plan` stage → `--plan` wiring → human checkpoint →
+quality gate) ships across this branch. Remaining follow-ups (not blocking): live
+interactive checkpoint wiring, an automated re-plan loop, `OTTO_PLAN` env, and a
+ghafk plan flow with issue-fetch.

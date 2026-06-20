@@ -430,6 +430,12 @@ describe("parseFlags --verify / --apply-review", () => {
     expect(f.verify).toBe(true);
     expect(f.rest).toEqual(["plan.md prd.md"]);
   });
+  it("parses --plan (boolean), default false", () => {
+    expect(parseFlags(["5"]).plan).toBe(false);
+    const f = parseFlags(["--plan", "build a thing"]);
+    expect(f.plan).toBe(true);
+    expect(f.rest).toEqual(["build a thing"]);
+  });
   it("parses --apply-review <doc>", () => {
     const f = parseFlags(["--apply-review", "review.md", "10"]);
     expect(f.applyReview).toBe("review.md");
@@ -462,6 +468,15 @@ describe("parseFlags --context-report", () => {
   });
   it("sets contextReport when the flag is present", () => {
     expect(parseFlags(["--context-report"]).contextReport).toBe(true);
+  });
+});
+
+describe("parseFlags --plan-report", () => {
+  it("defaults planReport to false", () => {
+    expect(parseFlags(["5"]).planReport).toBe(false);
+  });
+  it("sets planReport when the flag is present", () => {
+    expect(parseFlags(["--plan-report"]).planReport).toBe(true);
   });
 });
 

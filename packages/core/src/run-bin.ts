@@ -72,6 +72,8 @@ export type RunBinConfig = {
   issueStage?: Stage;
   /** Single read-only gate stage used when --verify is set. Only otto-afk sets this. */
   verifyStage?: Stage;
+  /** Single authoring gate stage used when --plan is set (#63 P8). Only otto-afk sets this. */
+  planStage?: Stage;
   /** Gate stage used when --apply-review is set. Only otto-afk sets this. */
   applyReviewStage?: Stage;
   /** Run mode identifier threaded into runLoop state (e.g. "afk" / "ghafk"). */
@@ -138,6 +140,16 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   if (flags.contextReport) {
     const { runContextReport } = await import("./context-report-cli.js");
     const code = await runContextReport();
+    if (code !== 0) process.exit(code);
+    return;
+  }
+
+  // --plan-report (issue #63 P8): a read-only surface scoring the authored plans
+  // under .otto/tasks/ with the plan-quality rubric. Like --context-report it
+  // prints and exits without running a stage.
+  if (flags.planReport) {
+    const { runPlanReport } = await import("./plan-report-cli.js");
+    const code = await runPlanReport();
     if (code !== 0) process.exit(code);
     return;
   }
@@ -253,9 +265,11 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   // the selected mode. Depends only on flags, not on the guards below.
   const runMode = flags.verify
     ? "verify"
-    : flags.applyReview != null
-      ? "review"
-      : cfg.mode;
+    : flags.plan
+      ? "plan"
+      : flags.applyReview != null
+        ? "review"
+        : cfg.mode;
 
   // Single source of truth for the --watch label: the per-mode resolver
   // (otto-linear-afk → OTTO_LINEAR_LABEL) falling back to OTTO_WATCH_LABEL.
@@ -473,16 +487,21 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   const modeCount =
     (flags.issue != null ? 1 : 0) +
     (flags.verify ? 1 : 0) +
+    (flags.plan ? 1 : 0) +
     (flags.applyReview != null ? 1 : 0) +
     (flags.watch ? 1 : 0);
   if (modeCount > 1) {
     console.error(
-      "--issue, --verify, --apply-review, and --watch are mutually exclusive"
+      "--issue, --verify, --plan, --apply-review, and --watch are mutually exclusive"
     );
     process.exit(1);
   }
   if (flags.verify && !cfg.verifyStage) {
     console.error("--verify is only supported by otto-afk");
+    process.exit(1);
+  }
+  if (flags.plan && !cfg.planStage) {
+    console.error("--plan is only supported by otto-afk");
     process.exit(1);
   }
   if (flags.applyReview != null && !cfg.applyReviewStage) {
@@ -506,21 +525,24 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       : cfg.takesInputArg
         ? flags.rest[1]
         : flags.rest[0];
-  if (flags.verify && (!cfg.takesInputArg || !inputs)) {
-    console.error(`Usage: ${cfg.bin} --verify "<plan-and-prd>"`);
+  // --verify and --plan are both one-shot, input-taking gates (no iterations arg).
+  const oneShot = flags.verify || flags.plan;
+  const oneShotFlag = flags.verify ? "--verify" : "--plan";
+  if (oneShot && (!cfg.takesInputArg || !inputs)) {
+    console.error(`Usage: ${cfg.bin} ${oneShotFlag} "<plan-and-prd>"`);
     process.exit(1);
   }
-  if (!flags.verify && ((cfg.takesInputArg && !inputs) || !iterationsArg)) {
+  if (!oneShot && ((cfg.takesInputArg && !inputs) || !iterationsArg)) {
     console.error(`Usage: ${cfg.bin} ${cfg.usage}`);
     console.error(`       ${cfg.bin} --help`);
     process.exit(1);
   }
-  // --verify is one-shot regardless of any positional count.
-  if (flags.verify && iterationsArg) {
-    console.error("--verify is one-shot; ignoring the iterations argument");
+  // One-shot regardless of any positional count.
+  if (oneShot && iterationsArg) {
+    console.error(`${oneShotFlag} is one-shot; ignoring the iterations argument`);
   }
-  const iterations = flags.verify ? 1 : Number.parseInt(iterationsArg, 10);
-  if (!flags.verify && (!Number.isFinite(iterations) || iterations < 1)) {
+  const iterations = oneShot ? 1 : Number.parseInt(iterationsArg, 10);
+  if (!oneShot && (!Number.isFinite(iterations) || iterations < 1)) {
     console.error(`Invalid iterations: ${iterationsArg}`);
     process.exit(1);
   }
@@ -539,11 +561,13 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
 
   const stages: [Stage, ...Stage[]] = flags.verify
     ? [cfg.verifyStage!]
-    : flags.applyReview != null
-      ? [cfg.applyReviewStage!, ...cfg.stages.slice(1)]
-      : flags.issue != null
-        ? [cfg.issueStage!, ...cfg.stages.slice(1)]
-        : cfg.stages;
+    : flags.plan
+      ? [cfg.planStage!]
+      : flags.applyReview != null
+        ? [cfg.applyReviewStage!, ...cfg.stages.slice(1)]
+        : flags.issue != null
+          ? [cfg.issueStage!, ...cfg.stages.slice(1)]
+          : cfg.stages;
 
   if (flags.detach && detachLogPath) {
     detachAndExit({

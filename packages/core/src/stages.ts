@@ -10,6 +10,13 @@ export type Stage = {
 // to the workspace via the native OS sandbox; `OTTO_RUNNER=host` runs unsandboxed
 // (git-recoverable workspace only). See the spec under docs/superpowers/specs/.
 export const STAGES = {
+  // Authors a spec + plan (no implementation) for human review before code
+  // (issue #63 P8). Registered here; wiring it into a chain is a later slice.
+  plan: {
+    name: "plan",
+    template: "plan.md",
+    permissionMode: "bypassPermissions",
+  } satisfies Stage,
   implementer: {
     name: "implementer",
     template: "afk.md",

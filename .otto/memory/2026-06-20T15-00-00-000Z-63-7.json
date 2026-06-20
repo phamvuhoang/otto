@@ -1,0 +1,16 @@
+{
+  "id": "2026-06-20T15-00-00-000Z-63-7",
+  "content": "Plan-quality gate (issue #63 P8, slice 7) — new plan-gate.ts (pure), WIRED into --plan-report. Turns the slice-1 rubric score into a PASS/FAIL quality verdict for a 'self-healing plan' bar. assessPlanGate(score: PlanRubricScore, opts?: { threshold }) returns PlanGateVerdict { passed (ratio >= threshold), ratio, threshold, missing (labels of unmet criteria, from the score — the re-plan target), shortfall (max(0, ceil(threshold*maxScore) - metCount) = how many MORE criteria a re-plan must meet to clear the bar, 0 when passed) }. DEFAULT_PLAN_QUALITY_THRESHOLD = 0.75 (three-quarters of the 8 criteria — a plan missing one or two sections still passes, a thin plan fails). formatPlanGate(v) -> 'plan gate: PASS|FAIL (X% vs Y% threshold)' + on FAIL a '  re-plan to add N more: <missing>' line. UNLIKE the pure-only slices 2/6, slice 7 is WIRED: formatPlanReport (slice 3, plan-report-cli.ts) now appends formatPlanGate(assessPlanGate(score)) per task, so `otto-afk --plan-report` flags which authored plans fall below the quality bar (updated plan-report-cli.test.ts to expect 'plan gate: PASS' for the complete fixture + 'plan gate: FAIL' for the thin one). The AUTOMATED self-healing re-plan LOOP (re-run the plan stage when the gate FAILs, feeding `missing` back) is a documented follow-up — the gate DECISION is the substrate this slice ships; the loop trigger is not (loop wiring + task-key plumbing, same reason slice 6's interactive wiring was deferred). Edge math: threshold 1 -> needs all 8; threshold 0 -> always passes; shortfall floored at 0. Exported from index.ts (DEFAULT_PLAN_QUALITY_THRESHOLD, assessPlanGate, formatPlanGate + type PlanGateVerdict). Pinned by plan-gate.test.ts (passes at/above default; fails below with shortfall+missing; custom threshold 1/0; format PASS without re-plan note / FAIL with shortfall) + plan-report-cli.test.ts (gate line per task). This COMPLETES issue #63 P8: all 7 plan tasks done — rubric (1) -> eval signal (2) -> --plan-report (3) -> plan stage+template (4) -> --plan one-shot wiring (5) -> human checkpoint (6) -> quality gate (7), on branch otto/63. Open follow-ups (non-blocking, not on the plan): live interactive checkpoint wiring, automated re-plan loop, OTTO_PLAN env, ghafk plan flow with issue-fetch.",
+  "category": "convention",
+  "sourceRun": "2026-06-20T15-00-00-000Z-manual",
+  "taskKey": "issue-63",
+  "scope": [
+    "packages/core/src/plan-gate.ts",
+    "packages/core/src/plan-report-cli.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T15:00:00.000Z",
+  "useCount": 0
+}

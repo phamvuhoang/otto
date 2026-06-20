@@ -16,8 +16,10 @@ import { cleanScratch } from "./scratch.js";
 import { getAgentRuntime, stageLogPath, type StageResult } from "./runner.js";
 import {
   allocateRunId,
+  hasRunReport,
   removeStageRecords,
   writeManifest,
+  writeRunReport,
   writeStageRecord,
   type RunArtifact,
 } from "./run-report.js";
@@ -460,6 +462,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
   let completedIterations = 0;
   let sentinelHit = false;
+  // Most recent emitted quality report (P9 #64), kept so finalize can persist it
+  // to the bundle for `otto-explain`. Captured by content marker; null until a
+  // stage emits one (afk/plan-mode never does).
+  let lastReportText: string | null = null;
   let runCostUsd = 0;
   let runTokenUsage = emptyTokenUsage();
   let cooldownFactor = 1;
@@ -516,6 +522,15 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         description: "deferred reviewer follow-ups",
       });
     }
+    // The persisted plain-language report (P9 #64), linked only when a stage
+    // emitted one and finalize wrote it (see finalizeManifest below).
+    if (existsSync(join(workspaceDir, ".otto", "runs", runId, "report.md"))) {
+      list.push({
+        kind: "report",
+        path: join(".otto", "runs", runId, "report.md"),
+        description: "plain-language run report (otto-explain)",
+      });
+    }
     return list;
   };
 
@@ -527,6 +542,9 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // covered without threading the manifest through each return site.
   const finalizeManifest = (reason: string, completed: number): void => {
     try {
+      // Persist the emitted report before the manifest, so collectArtifacts can
+      // detect and link it (best-effort; absent when no stage emitted one).
+      if (lastReportText) writeRunReport(workspaceDir, runId, lastReportText);
       writeManifest(workspaceDir, {
         runId,
         bin,
@@ -857,6 +875,11 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         // substages (lens/verify/synth) via the threaded recordStage, so skip
         // the umbrella record to avoid double-counting the synth result.
         if (!usePanel) recordStage(i, stage.name, sr!, stageStartedAt);
+
+        // Persist the most recent emitted quality report so otto-explain can
+        // re-render this run for a non-engineer (P9 #64). Keyed on the report's
+        // content marker — the implementer emits it; afk/plan-mode emits none.
+        if (sr!.result && hasRunReport(sr!.result)) lastReportText = sr!.result;
 
         if (s === 0) {
           if (sr!.result.includes(SENTINEL)) {

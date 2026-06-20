@@ -5,12 +5,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   allocateRunId,
+  hasRunReport,
   listRunIds,
   readManifest,
+  readRunReport,
   readStageRecords,
   runReportDir,
   runsDir,
   writeManifest,
+  writeRunReport,
   writeStageRecord,
   type RunManifest,
   type SafetyEvent,
@@ -127,6 +130,32 @@ describe("listRunIds", () => {
   });
   it("returns [] when .otto/runs is absent", () => {
     expect(listRunIds(tmp())).toEqual([]);
+  });
+});
+
+describe("run report persistence (P9 #64)", () => {
+  const REPORT = "# Otto quality report\n\n## Verdict\n\nNeeds human review\n";
+
+  it("round-trips a written report", () => {
+    const d = tmp();
+    writeRunReport(d, manifest.runId, REPORT);
+    expect(readRunReport(d, manifest.runId)).toBe(REPORT);
+  });
+
+  it("ensures a trailing newline", () => {
+    const d = tmp();
+    writeRunReport(d, manifest.runId, "# Otto quality report");
+    expect(readRunReport(d, manifest.runId)).toBe("# Otto quality report\n");
+  });
+
+  it("reads null for an absent report (never throws)", () => {
+    expect(readRunReport(tmp(), "no-such-run")).toBeNull();
+  });
+
+  it("hasRunReport keys on the report H1 marker, not the stage name", () => {
+    expect(hasRunReport("blah\n# Otto quality report\n## Verdict")).toBe(true);
+    expect(hasRunReport("<review>OK</review>")).toBe(false);
+    expect(hasRunReport("")).toBe(false);
   });
 });
 

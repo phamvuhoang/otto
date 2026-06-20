@@ -58,8 +58,12 @@ test("contract parse sanity — the test's sources of truth resolved", () => {
     CONTRACT_SECTIONS,
     [
       "Verdict",
-      "Task Source",
       "What Changed",
+      "Why",
+      "How To Verify",
+      "What To Watch",
+      "What I Was Unsure About",
+      "Task Source",
       "Evidence",
       "Human Acceptance Checklist",
       "Gaps And Follow-Ups",

@@ -7,10 +7,18 @@
 
 Produce an **Otto quality report** with the exact section headings below. Rules:
 
+- **Layperson-first.** Lead with plain language a non-engineer can act on — the
+  prose sections (What Changed · Why · How To Verify · What To Watch · What I Was
+  Unsure About) come first; keep code-cited engineer detail below the divider.
+  Write the top sections with no jargon, file paths, or SHAs.
 - **Readable first.** Keep it short enough to review in a couple of minutes — a
   maintainer should not have to replay the run log. Specific beats exhaustive.
+- **Verification a non-engineer can run.** _How To Verify_ is numbered,
+  non-technical steps — what to do and what they should see — not a command dump.
+  Include a sample command + expected result only when a layperson could run it.
 - **Cite evidence for every claim.** A `file:line`, a commit SHA, a command +
   its result, a report section, or an issue/PR link — never a vague assertion.
+  Evidence lives below the divider, not in the prose sections.
 - **Tests are evidence, not the verdict.** Green checks go in the Evidence
   section; they do not by themselves make the verdict Accepted.
 - **Pick one honest verdict. When evidence is thin, scope is uncertain, or you
@@ -25,21 +33,49 @@ Produce an **Otto quality report** with the exact section headings below. Rules:
 One of — **Accepted** · **Accepted with follow-ups** · **Needs human review** · **Rejected**
 (when uncertain, choose **Needs human review**)
 
+## What Changed
+
+<Plain language, no jargon — what is different now for a person using this, in
+one or two sentences. No file paths or SHAs here; those go under Evidence.>
+
+## Why
+
+<The goal in human terms — what problem this solves or what it now makes
+possible. One or two sentences a non-engineer understands.>
+
+## How To Verify
+
+<Numbered, NON-technical steps a layperson can follow to confirm it works — what
+to do and what they should see. A sample command + its expected result only when
+a non-engineer could run it; otherwise describe what to look at.>
+
+1. <step — and what you should see>
+2. <step — and what you should see>
+
+## What To Watch
+
+<Risks, limits, or things to keep an eye on, in plain language — or "nothing
+notable".>
+
+## What I Was Unsure About
+
+<What Otto was uncertain about, in human terms — the judgement calls a reviewer
+should double-check — or "nothing — this was straightforward".>
+
+---
+
+_Engineer detail below — a non-engineer can stop reading here._
+
 ## Task Source
 
 - Mode: <afk | ghafk | linear-afk | apply-review | verify>
 - Source: <plan/PRD path, GitHub issue #, or Linear ref>
 - Issue or plan: <link or path>
 
-## What Changed
-
-- Summary: <one or two sentences — what was actually done>
-- Commits: <SHAs on this branch>
-- Files: <paths touched>
-
 ## Evidence
 
-- Implementation evidence: <file:line or commit proving each claim>
+- Implementation evidence: <file:line or commit SHA proving each claim; the
+  commits on this branch + the files touched>
 - Test/typecheck evidence: <commands run + pass/fail counts>
 - Manual or acceptance evidence: <what was observed, or "none">
 

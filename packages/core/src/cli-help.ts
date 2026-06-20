@@ -58,6 +58,12 @@ export type CliFlags = {
   /** `--model-routing` toggle (default false; opt-in, issue #66 P11). Routes each
    *  stage to a model tier by difficulty + change risk + failure escalation. */
   modelRouting: boolean;
+  /** `--fan-out` toggle (default false; opt-in, issue #66 P11). Runs independent
+   *  plan tasks as isolated worktree sub-agents before the sequential loop. */
+  fanOut: boolean;
+  /** `--fan-out-concurrency <n>` (default 3; issue #66 P11). Max concurrent
+   *  sub-agents per wave. */
+  fanOutConcurrency: number;
   watch: boolean;
   watchIntervalSec?: number;
   /**
@@ -204,6 +210,9 @@ export function parseFlags(
   let adaptiveRouter = false;
   let explainRouting = false;
   let modelRouting = false;
+  let fanOut = false;
+  let fanOutConcurrency = 3;
+  let expectingFanOutConcurrency = false;
   let watch = false;
   let watchIntervalSec: number | undefined;
   let expectingWatchInterval = false;
@@ -237,6 +246,16 @@ export function parseFlags(
       }
       maxRetries = Number.parseInt(a, 10);
       expectingMaxRetries = false;
+      continue;
+    }
+    if (expectingFanOutConcurrency) {
+      if (!/^\d+$/.test(a) || Number.parseInt(a, 10) < 1) {
+        throw new Error(
+          `--fan-out-concurrency must be a positive integer, got: ${JSON.stringify(a)}`
+        );
+      }
+      fanOutConcurrency = Number.parseInt(a, 10);
+      expectingFanOutConcurrency = false;
       continue;
     }
     if (expectingLog) {
@@ -356,6 +375,8 @@ export function parseFlags(
     else if (a === "--adaptive-router") adaptiveRouter = true;
     else if (a === "--explain-routing") explainRouting = true;
     else if (a === "--model-routing") modelRouting = true;
+    else if (a === "--fan-out") fanOut = true;
+    else if (a === "--fan-out-concurrency") expectingFanOutConcurrency = true;
     else if (a === "--watch") watch = true;
     else if (a === "--watch-interval") expectingWatchInterval = true;
     else if (a === "--issue") expectingIssue = true;
@@ -445,6 +466,8 @@ export function parseFlags(
     adaptiveRouter,
     explainRouting,
     modelRouting,
+    fanOut,
+    fanOutConcurrency,
     watch,
     watchIntervalSec,
     issue,
@@ -525,6 +548,8 @@ Flags:
   --adaptive-router   route review depth by per-iteration change risk: single reviewer (low) / lens subset (medium) / full panel (high) (or OTTO_ADAPTIVE_ROUTER=1; default: off)
   --explain-routing   print the adaptive router's per-iteration reasoning (change class, risk, chosen depth/lenses); requires --adaptive-router (or OTTO_EXPLAIN_ROUTING=1; default: off)
   --model-routing     route each stage to a model tier by difficulty + change risk, escalating on repeated failure; a pinned --model/OTTO_MODEL overrides it (or OTTO_MODEL_ROUTING=1; default: off)
+  --fan-out           run independent plan tasks (from a .otto/tasks/<key>/tasks.json) as isolated worktree sub-agents before the sequential loop (or OTTO_FAN_OUT=1; default: off)
+  --fan-out-concurrency <n>  max concurrent sub-agents per fan-out wave (default: 3)
   --branch <mode>     where Otto commits: current (default) | branch (new branch) | worktree (isolated checkout)
   --branch-prefix <p> branch name prefix for branch/worktree modes (default: otto/)
   --branch-convention <c>  validated branch namespace <c>/<task-key> (e.g. feat, feature, fix); normalizes a trailing slash; overrides --branch-prefix (or OTTO_BRANCH_CONVENTION; default: otto)
@@ -614,6 +639,10 @@ export type PrintConfigOptions = {
   modelRouting?: boolean;
   /** Resolved tier → model ladder, shown when model routing is on (issue #66 P11). */
   tierLadder?: TierLadder;
+  /** Sub-agent fan-out enabled (issue #66 P11). */
+  fanOut?: boolean;
+  /** Max concurrent sub-agents per fan-out wave (issue #66 P11). */
+  fanOutConcurrency?: number;
   watch?: boolean;
   watchIntervalSec?: number;
   /**
@@ -669,6 +698,8 @@ export function printConfig(
     explainRouting = false,
     modelRouting = false,
     tierLadder,
+    fanOut = false,
+    fanOutConcurrency = 3,
     watch = false,
     watchIntervalSec,
     watchLabel = process.env.OTTO_WATCH_LABEL?.trim() || "otto",
@@ -771,6 +802,7 @@ export function printConfig(
   review                ${reviewStatus}
   routing               ${routingStatus}
   model routing         ${modelRoutingStatus}
+  fan-out               ${fanOut ? `on (concurrency ${fanOutConcurrency})` : "off"}
   branch                ${branchStatus}
   watch                 ${watchStatus}
   scope                 ${scopeStatus}

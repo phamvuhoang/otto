@@ -513,6 +513,28 @@ describe("parseFlags --model-routing", () => {
   });
 });
 
+describe("parseFlags --fan-out", () => {
+  it("defaults fanOut off and concurrency 3", () => {
+    const f = parseFlags(["5"]);
+    expect(f.fanOut).toBe(false);
+    expect(f.fanOutConcurrency).toBe(3);
+  });
+  it("parses --fan-out and --fan-out-concurrency", () => {
+    const f = parseFlags(["--fan-out", "--fan-out-concurrency", "4", "5"]);
+    expect(f.fanOut).toBe(true);
+    expect(f.fanOutConcurrency).toBe(4);
+  });
+  it("rejects a non-positive fan-out concurrency", () => {
+    expect(() => parseFlags(["--fan-out-concurrency", "0"])).toThrow(/positive integer/);
+  });
+  it("shows fan-out in print-config", () => {
+    expect(configOutput({ fanOut: true, fanOutConcurrency: 4 })).toMatch(
+      /fan-out\s+on \(concurrency 4\)/
+    );
+    expect(configOutput({})).toMatch(/fan-out\s+off/);
+  });
+});
+
 describe("parseFlags --verbose", () => {
   it("defaults verbose to false", () => {
     expect(parseFlags(["5"]).verbose).toBe(false);

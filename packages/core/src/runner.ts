@@ -40,6 +40,10 @@ export type RunStageOptions = {
    *  resolveModelSelection — the caller (executeStage) has already applied the
    *  pin > route > default precedence. Absent ⇒ today's env-based resolution. */
   modelSpec?: string;
+  /** Extra sandbox write roots beyond the workspace (issue #66 P11). A fan-out
+   *  sub-agent passes its parent repo so it can commit from its worktree (whose
+   *  shared `.git` lives outside the worktree dir). Sandbox runner only. */
+  sandboxWriteRoots?: string[];
 };
 
 export type StageResult = {
@@ -317,11 +321,14 @@ const SANDBOX_EXCLUDED_COMMANDS = ["gh *", "gcloud *", "terraform *"];
  */
 export function buildSandboxSettings(
   workspaceDir: string,
-  allowedDomains: string[]
+  allowedDomains: string[],
+  extraWriteRoots: string[] = []
 ): Record<string, unknown> {
   const sandbox: Record<string, unknown> = {
     enabled: true,
-    filesystem: { allowWrite: [workspaceDir] },
+    // `extraWriteRoots` lets a fan-out sub-agent commit from a worktree whose
+    // shared `.git` lives in the parent repo, outside the worktree dir (#66 P11).
+    filesystem: { allowWrite: [workspaceDir, ...extraWriteRoots] },
     excludedCommands: SANDBOX_EXCLUDED_COMMANDS,
   };
   if (allowedDomains.length > 0) {
@@ -562,7 +569,8 @@ export async function runStage(
   ) {
     const settings = buildSandboxSettings(
       workspaceDir,
-      resolveSandboxNet(process.env.OTTO_SANDBOX_NET)
+      resolveSandboxNet(process.env.OTTO_SANDBOX_NET),
+      options.sandboxWriteRoots ?? []
     );
     settingsHostPath = join(
       tmpHostDir,

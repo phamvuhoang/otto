@@ -12,6 +12,7 @@ import type { AgentRuntimeId } from "./agent-runtime.js";
 import { git, headSha } from "./git.js";
 import type { TierLadder } from "./model-tier.js";
 import { planParallelGroups, type PlanTask } from "./plan-tasks.js";
+import type { StageResult } from "./runner.js";
 import { executeStage } from "./stage-exec.js";
 import { STAGES } from "./stages.js";
 import { createWorktree } from "./worktree.js";
@@ -48,6 +49,10 @@ export type RunFanoutOptions = {
    * sub-implementer stage. A throw defers the task (its worktree is discarded).
    */
   runSubAgent?: (task: PlanTask, worktreeDir: string) => Promise<void>;
+  /** Called with each default sub-agent's result so the loop rolls its cost +
+   *  tokens into the run total (budget/pacing). Not called for an injected
+   *  `runSubAgent`. */
+  onSubAgent?: (sr: StageResult) => void;
 };
 
 /** Bounded-concurrency map: at most `limit` promises in flight at once. */
@@ -74,7 +79,7 @@ function defaultRunSubAgent(
   opts: RunFanoutOptions
 ): (task: PlanTask, worktreeDir: string) => Promise<void> {
   return async (task, worktreeDir) => {
-    await executeStage({
+    const sr = await executeStage({
       stage: STAGES.subImplementer,
       vars: {
         RESUME: "",
@@ -90,7 +95,12 @@ function defaultRunSubAgent(
       modelRouting: opts.routing,
       tierLadder: opts.ladder,
       logLabel: `sub-${task.id}`,
+      // The worktree's shared `.git` lives in the parent repo, outside the
+      // worktree dir — allow writes there so `git commit` works under the
+      // sandbox runner (issue #66 P11).
+      sandboxWriteRoots: [opts.workspaceDir],
     });
+    opts.onSubAgent?.(sr);
   };
 }
 

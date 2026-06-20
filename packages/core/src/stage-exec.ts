@@ -46,6 +46,9 @@ export type ExecuteStageOptions = {
   riskAssessment?: RiskAssessment;
   /** Repeated-failure escalation count that bumps the routed tier. */
   escalations?: number;
+  /** Extra sandbox write roots (issue #66 P11): a fan-out sub-agent passes its
+   *  parent repo so `git commit` from the worktree reaches the shared `.git`. */
+  sandboxWriteRoots?: string[];
 };
 
 /** Fallback ladder when routing is requested without one — every tier resolves
@@ -135,7 +138,13 @@ export async function executeStage(
         iteration,
         spillHostDir,
         stageLog,
-        { signal, runtime, sink: opts.sink, modelSpec: model.spec }
+        {
+          signal,
+          runtime,
+          sink: opts.sink,
+          modelSpec: model.spec,
+          sandboxWriteRoots: opts.sandboxWriteRoots,
+        }
       );
       // Attribute the *final* prompt's window footprint by category (issue #62
       // P7). `prompt` is post-reduction, so the breakdown reflects what was sent.

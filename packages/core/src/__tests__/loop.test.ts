@@ -698,6 +698,22 @@ describe("runLoop", () => {
     expect(implModels[2]).toBe("opus"); // two prior failures → strong
   });
 
+  it("with --fan-out but no tasks.json, runs the normal sequential loop (#66 P11)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+    await runLoop(
+      loopOptions(dirs, { fanOut: true, fanOutConcurrency: 3 })
+    );
+    // No .otto/tasks/<key>/tasks.json exists → fan-out is a no-op and the gate
+    // implementer stage still runs (graceful degradation invariant).
+    const implCalls = mocks.runStage.mock.calls.filter(
+      (c) => c[0].name === "implementer"
+    ).length;
+    expect(implCalls).toBe(1);
+    expect(stdoutText() + "").toBeDefined();
+  });
+
   it("returns a LoopOutcome with accumulated cost and sentinel flag", async () => {
     const dirs = makeDirs();
     roots.push(dirs.root);

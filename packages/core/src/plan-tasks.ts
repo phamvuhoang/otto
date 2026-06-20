@@ -7,7 +7,7 @@
  * normal sequential loop runs (graceful degradation is mandatory).
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /** One decomposed plan task. */
@@ -93,6 +93,41 @@ export function readPlanTasks(workspaceDir: string, taskKey: string): PlanTask[]
   } catch {
     return [];
   }
+}
+
+/**
+ * Discover a plan task graph without knowing the task-key (the plan agent picks
+ * the slug itself). Scans `.otto/tasks/<key>/tasks.json`, parses each, and
+ * returns the tasks from the most-recently-modified valid, non-empty file — the
+ * one most likely to belong to the current work. `[]` when none qualify, so
+ * fan-out simply disables.
+ */
+export function discoverPlanTasks(workspaceDir: string): PlanTask[] {
+  const tasksDir = join(workspaceDir, ".otto", "tasks");
+  let dirs: string[];
+  try {
+    dirs = readdirSync(tasksDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+  } catch {
+    return [];
+  }
+  let best: { tasks: PlanTask[]; mtimeMs: number } | undefined;
+  for (const key of dirs) {
+    const file = join(tasksDir, key, "tasks.json");
+    let txt: string;
+    let mtimeMs: number;
+    try {
+      txt = readFileSync(file, "utf8");
+      mtimeMs = statSync(file).mtimeMs;
+    } catch {
+      continue;
+    }
+    const tasks = parsePlanTasks(txt);
+    if (tasks.length === 0) continue;
+    if (!best || mtimeMs > best.mtimeMs) best = { tasks, mtimeMs };
+  }
+  return best?.tasks ?? [];
 }
 
 /**

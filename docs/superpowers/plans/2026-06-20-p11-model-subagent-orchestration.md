@@ -1321,3 +1321,15 @@ git commit -m "feat(core): --fan-out loop wiring + eval overlays + docs (#66 P11
 **Type consistency:** `ModelTier`, `TierLadder`, `StageModel`, `resolveStageModel`, `routeModel`, `PlanTask`, `FanoutResult`, `RunTask`, `defaultRunTask` names are used identically across tasks. `RunStageOptions.modelSpec` (Task 1) is consumed by `executeStage` (Task 1) and `defaultRunTask` (Task 7). `Stage.tier` (Task 1) is read by `resolveStageModel` (Task 1) and set for `subImplementer` (Task 6).
 
 **Verification:** every task ends green on `pnpm --filter @phamvuhoang/otto-core test` (scoped) and the full `pnpm -r typecheck && pnpm -r test && pnpm test` at phase boundaries.
+
+## Implementation notes (deltas from this plan, as built)
+
+Recorded for the reviewer — where the landed code diverged from the plan above:
+
+- **Test location.** Tests live in `packages/core/src/__tests__/*.test.ts` with `../module.js` imports (not `packages/core/__tests__/`).
+- **`resolveModelSelection` moved** from `runner.ts` to `model-tier.ts` (re-exported from `runner.ts` for back-compat). `runner.ts` is heavily mocked in `loop`/`stage-exec` tests; the pin check had to be decoupled from the mock surface or `resolveStageModel` blew up under the mock.
+- **Fan-out is two-phase, not per-task merge.** The slice-6 `runTask` seam matured into an injectable `runSubAgent` (the parallel phase) plus a runFanout-owned **serial** cherry-pick phase — concurrent cherry-picks would race the shared workspace index. `defaultRunTask` became `defaultRunSubAgent`.
+- **`discoverPlanTasks` added.** The runtime never derives the plan agent's chosen task-key, so the loop scans `.otto/tasks/*/tasks.json` and uses the most-recently-modified valid graph instead of `readPlanTasks(workspaceDir, taskKey)`.
+- **Fan-out runs first-iteration-only.** It accelerates the initial independent work; the normal implementer/reviewer loop then converges (integrates, fixes, finishes). Avoids re-running landed tasks every iteration.
+- **Escalation signal.** The loop had no real `repeatedFailureStreak` (the policy hardcodes `0`), so model escalation is driven by a consecutive **gate-stage `isError`** streak (`streak − 1` escalations) tracked in `loop.ts`.
+- **Sandbox write-roots (not in the original plan).** A fan-out sub-agent commits from a worktree whose shared `.git` lives in the parent repo, outside its worktree dir — so `buildSandboxSettings` gained an `extraWriteRoots` param, threaded as `sandboxWriteRoots` through `RunStageOptions`/`ExecuteStageOptions`, and the default sub-agent passes the parent repo. Without it, `git commit` is blocked under the default sandbox runner.

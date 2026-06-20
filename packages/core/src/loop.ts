@@ -14,7 +14,10 @@ import {
   explainRouting as formatRouting,
   routeReview,
 } from "./risk.js";
-import type { TierLadder } from "./model-tier.js";
+import { resolveTierLadder, type TierLadder } from "./model-tier.js";
+import { discoverPlanTasks } from "./plan-tasks.js";
+import { runFanout } from "./fanout.js";
+import { reapWorktrees } from "./worktree.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { cleanScratch } from "./scratch.js";
@@ -162,6 +165,12 @@ export type LoopOptions = {
   modelRouting?: boolean;
   /** tier → model ladder consulted when `modelRouting` resolves a tier. */
   tierLadder?: TierLadder;
+  /** Opt-in sub-agent fan-out (issue #66 P11): on the first iteration, run the
+   *  independent tasks of a `.otto/tasks/<key>/tasks.json` as isolated worktree
+   *  sub-agents before the sequential loop. No valid tasks.json → no-op. */
+  fanOut?: boolean;
+  /** Max concurrent sub-agents per fan-out wave (default 3). */
+  fanOutConcurrency?: number;
   /** Injected AbortSignal for daemon callers (e.g. watch mode). When provided,
    *  runLoop skips wake-lock acquisition and process signal handler installation;
    *  the caller owns both. */
@@ -302,6 +311,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     explainRouting = false,
     modelRouting = false,
     tierLadder,
+    fanOut = false,
+    fanOutConcurrency = 3,
     resolveChangedPaths,
     signal: externalSignal,
     mode = "afk",
@@ -691,6 +702,43 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       // review depth (P2) or model tier (P11).
       const iterStartSha =
         adaptiveRouter || modelRouting ? headSha(workspaceDir) : null;
+
+      // Sub-agent fan-out (issue #66 P11): on the first iteration only, land the
+      // plan's independent tasks in parallel worktrees before the sequential
+      // loop. Deferred or absent work flows through the normal implementer below
+      // — fan-out is an accelerator, never a correctness dependency.
+      if (fanOut && i === startIteration) {
+        const planTasks = discoverPlanTasks(workspaceDir);
+        if (planTasks.length === 0) {
+          process.stderr.write(
+            `${dim("fan-out: no valid .otto/tasks/<key>/tasks.json — running sequentially")}\n`
+          );
+        } else {
+          reapWorktrees(workspaceDir);
+          process.stderr.write(
+            `${bold(SYM.bullet)} ${bold("fan-out")} ${dim(`· ${planTasks.length} task(s), concurrency ${fanOutConcurrency}`)}\n`
+          );
+          const fr = await runFanout({
+            tasks: planTasks,
+            workspaceDir,
+            packageDir,
+            iteration: i,
+            maxRetries,
+            cooldownMs,
+            concurrency: fanOutConcurrency,
+            ladder: tierLadder ?? resolveTierLadder(),
+            routing: modelRouting,
+            runtimeId: activeAgentId,
+            signal: activeSignal,
+            onSubAgent: accountStage,
+          });
+          const landed = fr.outcomes.filter((o) => o.status === "landed").length;
+          process.stderr.write(
+            `${dim(SYM.cont)} ${greenOut(String(landed))} landed, ${fr.deferred.length} deferred ${dim("(deferred tasks continue in the sequential loop)")}\n`
+          );
+        }
+      }
+
       for (let s = 0; s < stages.length; s++) {
         const stage = stages[s];
 

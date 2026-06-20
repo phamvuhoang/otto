@@ -257,6 +257,15 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     );
   const tierLadder = resolveTierLadder(process.env);
 
+  // Sub-agent fan-out (issue #66 P11): run independent plan tasks as isolated
+  // worktree sub-agents before the sequential loop. Opt-in; needs a tasks.json.
+  const fanOut =
+    flags.fanOut ||
+    ["1", "true", "yes", "on"].includes(
+      (process.env.OTTO_FAN_OUT ?? "").trim().toLowerCase()
+    );
+  const fanOutConcurrency = flags.fanOutConcurrency;
+
   const DEFAULT_LENSES = ["correctness", "security", "tests"];
   const envLenses = (process.env.OTTO_REVIEW_LENSES ?? "")
     .split(",")
@@ -421,6 +430,8 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       explainRouting,
       modelRouting,
       tierLadder: modelRouting ? tierLadder : undefined,
+      fanOut,
+      fanOutConcurrency,
       watch: flags.watch,
       watchIntervalSec: flags.watchIntervalSec,
       watchLabel,
@@ -668,6 +679,8 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     explainRouting,
     modelRouting,
     tierLadder,
+    fanOut,
+    fanOutConcurrency,
     verbose: flags.verbose,
     mode: runMode,
     branchStrategy: resolved.strategy,

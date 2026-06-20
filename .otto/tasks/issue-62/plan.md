@@ -27,9 +27,16 @@ this burns it down telemetry-first, each optimization gated on the prior slice.
   `formatCacheEfficiency` over the already-captured per-stage `TokenUsage.cacheRead*`,
   surfaced as a cache-efficiency line on the existing `--context-report`. Pinned by
   `tokens.test.ts` + `context-report-cli.test.ts`.
-- [ ] **5. Bounded learnings injection.** Retrieve only task-scope-relevant
+- [x] **5. Bounded learnings injection.** Retrieve only task-scope-relevant
   governed-memory records (reuse P3 `select… `/`memory.ts`) instead of the whole
-  `LEARNINGS.md`; cap the block and report what was dropped.
+  `LEARNINGS.md`; cap the block and report what was dropped. Shipped as pure,
+  INERT-on-the-loop functions in `memory.ts`: `selectRelevantMemory` ranks active
+  records by task-scope relevance (taskKey > repo-wide > other; ties by
+  confidence/useCount/recency), `boundLearnings` caps at a char budget
+  (`DEFAULT_LEARNINGS_BUDGET_CHARS`) and reports the dropped set, and
+  `formatBoundedLearnings` projects the selection with a "what was dropped" note.
+  Loop wiring (swapping the whole-file `!?cat LEARNINGS.md` injection for this) is
+  deferred to a later slice. Pinned by `memory.test.ts`.
 - [ ] **6. Inter-iteration compaction.** Summarize prior iterations into a bounded
   state rather than carrying the full transcript forward.
 - [ ] **7. Read deduplication.** Track files already read this run; avoid
@@ -37,4 +44,4 @@ this burns it down telemetry-first, each optimization gated on the prior slice.
 - [ ] **8. Per-stage context budget.** A soft, model-aware ceiling that warns and
   triggers compaction when a stage's estimated context exceeds it.
 
-This run implements **task 4**.
+This run implements **task 5**.

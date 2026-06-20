@@ -1,0 +1,16 @@
+{
+  "id": "2026-06-20T09-40-00-000Z-62-5",
+  "content": "Bounded learnings injection (issue #62 P7, slice 5) shipped as pure, INERT-on-the-loop functions added to memory.ts (NOT a new module) — they layer on the existing projectLearnings. selectRelevantMemory(records, ctx) ranks ACTIVE records (derived-stale/superseded excluded, like projectLearnings) by task-scope relevance: taskKey match (+3) > repo-wide/empty-scope (+1) > other, ties broken by confidence desc -> useCount desc -> recency (NEWER id first, the REVERSE of projectLearnings's chronological in-section order, because for a budget you keep the freshest). boundLearnings(records, ctx) greedily takes ranked records while cumulative content.length stays <= budget (ctx.maxChars ?? DEFAULT_LEARNINGS_BUDGET_CHARS = 6000); the FIRST record that would overflow and EVERY lower-ranked record after it are 'dropped' — a clean rank boundary ('kept the most relevant that fit'), not a fill-the-gaps pack. Returns { selected, dropped, selectedChars, droppedChars, budgetChars }. formatBoundedLearnings(bounded, now) = projectLearnings(selected, now) plus a one-line '_Bounded: N lower-relevance learning(s) (M chars) omitted to fit the K-char context budget; see otto-memory audit for the full set._' note ONLY when something was dropped (no drop -> byte-identical to the projection). Deliberately NO changedPaths/scope-glob signal (unlike selectSkills in skills.ts): learnings inject at RENDER time, before the agent edits anything, so changed files are not known yet — taskKey is the honest injection-time relevance signal, and this also avoids a memory->skills globMatch import (no cycle, but unwanted coupling). Cap is by record content.length (deterministic), not rendered-projection size. Exported from index.ts (selectRelevantMemory, boundLearnings, formatBoundedLearnings, DEFAULT_LEARNINGS_BUDGET_CHARS, types BoundedMemory/MemorySelectionContext). Loop wiring (replacing each template's !?cat ./.otto/LEARNINGS.md injection with this bounded set) is deferred to a later slice — this is the substrate, cannot regress a run. Pinned by memory.test.ts. Remaining P7 slices: 6 inter-iteration compaction, 7 read-dedup, 8 per-stage budget.",
+  "category": "convention",
+  "sourceRun": "2026-06-20T09-40-00-000Z-3618",
+  "taskKey": "issue-62",
+  "scope": [
+    "packages/core/src/memory.ts",
+    "packages/core/src/index.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T09:40:00.000Z",
+  "useCount": 0
+}

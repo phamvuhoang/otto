@@ -569,6 +569,26 @@
   ones — cache usage is independent of the estimated composition), and **omitted when
   `totalInputTokens === 0`**. Pinned by `tokens.test.ts` (summarize/format) +
   `context-report-cli.test.ts` (line present w/ usage, omitted w/o).
+- **Bounded learnings injection (#62 P7, slice 5) — pure, INERT-on-the-loop
+  retrieval+cap in `memory.ts`, NOT a new module.** Three exports layer on the
+  existing `projectLearnings`: `selectRelevantMemory(records, ctx)` ranks ACTIVE
+  records (derived-stale/superseded excluded, like `projectLearnings`) by
+  task-scope relevance — `taskKey` match (+3) > repo-wide/empty-scope (+1) > other
+  — ties broken by confidence → useCount → recency (NEWER id first, the reverse of
+  `projectLearnings`'s chronological in-section order, because for a budget you
+  keep the freshest). `boundLearnings(records, ctx)` greedily takes ranked records
+  while cumulative `content.length` stays ≤ budget (`ctx.maxChars ??
+  DEFAULT_LEARNINGS_BUDGET_CHARS` = 6000); the FIRST overflow and everything after
+  it are `dropped` — a clean rank boundary ("kept the most relevant that fit"), not
+  a fill-the-gaps pack. `formatBoundedLearnings` = `projectLearnings(selected)` +
+  a one-line `_Bounded: N … omitted …_` note ONLY when something was dropped (no
+  drop → byte-identical to the projection). **Deliberately NO changedPaths/scope-glob
+  signal** (unlike `selectSkills`): learnings inject at RENDER time, before the
+  agent edits anything, so changed files aren't known yet — taskKey is the honest
+  injection-time relevance signal (avoids a memory→skills `globMatch` import too).
+  Cap is by record `content.length` (deterministic), not rendered-projection size.
+  Loop wiring (replacing the templates' `!?cat ./.otto/LEARNINGS.md`) is a later
+  slice — this is substrate. Pinned by `memory.test.ts`.
 
 
 ## Gotchas

@@ -73,7 +73,10 @@ A naïve harness just loops `claude` until the iteration count runs out. Otto is
 | Safety          | full blast radius                   | native-OS sandbox + repo-local `.otto/policy.json` + prompt-injection taint-fencing |
 | Observability   | terminal scrollback                 | an evidence bundle per run you can `inspect`, `compare`, and benchmark              |
 | Compute spend   | same review depth always            | adaptive routing by change risk                                                     |
-| Reuse           | copy-pasted prompts                 | validated, retrievable skills                                                        |
+| Model spend     | top model for every stage           | cheapest sufficient model tier per stage; escalate on repeated failure              |
+| Parallelism     | one growing context, serial         | independent plan tasks fan out to isolated worktree sub-agents, then merge          |
+| Reuse           | copy-pasted prompts                 | validated, retrievable skills                                                       |
+| Sharing         | learnings stay in the repo          | opt-in, secrecy-filtered public journal (zero-leak gate)                            |
 
 The rest of this section is the detail behind each row:
 
@@ -88,6 +91,9 @@ The rest of this section is the detail behind each row:
 - 🛡️ **It governs what an unattended run may do.** A git-tracked `.otto/policy.json` declares repo-local safety rules — blocked commands, allowed write roots / network domains, secret patterns, high-risk globs, approval-required actions. Otto evaluates every host-shell / `@spill` command against the deny-list at the render boundary: a blocked command is _skipped_ — never executed — and recorded as a `blocked` safety event in the run's evidence bundle. Untrusted inputs it ingests (issue bodies, comments, external review docs) are fenced in a labelled `<untrusted>` block carrying a do-not-obey warning, so prompt-injection text can't pose as instructions. **The default empty policy restricts nothing**, so trusted local workflows are unchanged — a repo opts into governance by populating the file.
 - 🛠️ **It gives you an operator view.** A CLI-first cockpit over the evidence bundles: `otto-runs list` for a one-row-per-run summary (status, iterations, cost, elapsed), `otto-inspect [latest]` for one run's report, `otto-explain [latest]` to re-render any run in plain language a non-engineer can verify, `otto-tail [latest]` to attach to a running loop and watch a live status tree (prints the done card once it finalizes), and `otto-eval compare <run-a> <run-b>` to A/B two past runs side-by-side **without re-paying for a run**. `--explain-routing` prints the adaptive router's per-iteration reasoning (change class, risk, chosen review depth) so a routing decision is never a black box. The in-run console is quiet by default (one terse line per meaningful action — edits, commits, test results, errors); `--verbose` restores the full firehose.
 - 🧩 **It can turn repeated workflows into skills.** Stable, repeated procedures (release flow, test bootstrap, a migration pattern) can be promoted into git-tracked `.otto/skills/<name>/` packages — instructions + metadata + constraints + a last-validated run. `otto-skills candidates` suggests them from runs that succeeded the same way twice; `otto-skills why <changed-files>` shows which skills retrieval would pick and **why** (by capability, touched files, and change risk). A skill must be **validated before it is eligible**, and stale skills are flagged rather than reapplied.
+- 🧮 **It can spend the cheapest model that does the job.** Opt-in `--model-routing` routes each stage to a model **tier** — `cheap` for docs/test-only changes, `mid` for ordinary code, `strong` for design/review/security — and **escalates a tier on repeated failure**, so a wedged run climbs to a stronger model on its own. A pinned `--model`/`OTTO_MODEL` always wins and disables routing. Pure, deterministic tier selection; the ladder (`haiku`/`sonnet`/`opus` by default) is overridable per tier.
+- 🪢 **It can parallelize independent work.** When a plan ships a machine-readable task graph (`.otto/tasks/<key>/tasks.json`, authored by `--plan`), opt-in `--fan-out` runs the independent tasks as **isolated git-worktree sub-agents** (each with its own bounded context), then cherry-picks their commits back onto the workspace — **serially, with a hard fallback**: any merge conflict or sub-agent failure defers that task to the normal sequential loop, so fan-out never leaves the tree half-merged. Worst case it degrades to today's behavior.
+- 📣 **It can build in public — safely.** Opt-in per repo, at the end of a run Otto can turn one generic craft learning into a short "field note" and publish it to **Threads** ("a coding agent's field notes"). Every candidate passes an **airtight, default-deny secrecy gate** — a deterministic deny-list (secrets, tokens, paths, code, URLs, the repo's own names, plus your `.otto/policy.json` secret patterns), a generalization check, and an adversarial LLM judge biased to refuse — and **a post that cannot be proven safe is never sent** (zero-leak is the hard gate). The sandboxed agent only ever produces text; the harness owns the gate and the network. **Draft-only by default** (screened notes land in `.otto/journal/drafts/`); actually posting needs an explicit **double opt-in**.
 
 Beyond the build loop, two read/repair modes reuse all of the above:
 
@@ -117,6 +123,15 @@ otto-ghafk --issue 42 --include-sub-issues 20   # an epic and its sub-issues
 # Burn down a Linear backlog (label `otto`); --issue ENG-123 scopes to one
 otto-linear-auth login                          # paste a Linear API key, once
 otto-linear-afk 10
+
+# Plan first: author a world-class spec + test-first plan (+ a machine-readable
+# task graph) under .otto/tasks/ for human review — makes NO source edits, then exits
+otto-afk --plan "./docs/ideas/inventory-revamp.md"
+
+# Then fan the plan's INDEPENDENT tasks out to isolated worktree sub-agents
+# (parallel), before the normal sequential loop finishes + reviews
+otto-afk --plan --fan-out "./docs/ideas/inventory-revamp.md" 20
+otto-afk --fan-out --fan-out-concurrency 4 "./docs/plans/feature.md" 20
 ```
 
 ### 2. Operate & inspect the harness
@@ -163,6 +178,14 @@ otto-eval compare <run-a> <run-b>
 
 # Measure real token usage (in/out/cache, per stage + run total) without changing prompts
 otto-afk --token-mode measure "./docs/plans/feature.md" 5
+
+# See what filled the context window each stage + the per-iteration token slope
+# of the latest run (playbook / learnings / diffs / reads) — read-only, then exit
+otto-afk --context-report
+
+# Score the authored plans (.otto/tasks/*/spec.md + plan.md) against the
+# plan-quality rubric (scope guard? per-task verify? file map?) — read-only
+otto-afk --plan-report
 ```
 
 ### 4. Control cost & compute
@@ -178,6 +201,16 @@ otto-afk --review-panel "./docs/plans/feature.md" 30
 # Spend review compute by risk: single reviewer for docs, full panel for security —
 # and print WHY each iteration routed the way it did
 otto-afk --adaptive-router --explain-routing "./docs/plans/feature.md" 10
+
+# Spend the cheapest model per stage: cheap for docs/tests, strong for review —
+# escalating a tier on repeated failure. --explain-routing prints each decision.
+otto-afk --model-routing --explain-routing "./docs/plans/feature.md" 10
+
+# Override the tier ladder (default haiku/sonnet/opus) for this run
+OTTO_TIER_STRONG=claude-opus-4-8 otto-afk --model-routing "./docs/plans/feature.md" 10
+
+# A pinned model always wins and disables tier routing (every stage uses the pin)
+OTTO_MODEL=claude-opus-4-8 otto-afk --model-routing "./docs/plans/feature.md" 10
 
 # Conservative render-time prompt compaction + token reporting
 otto-afk --token-mode reduce "./docs/plans/feature.md" 5
@@ -228,6 +261,33 @@ OTTO_WORKSPACE=~/code/other-repo OTTO_MODEL=claude-opus-4-8 otto-afk "./docs/pla
 otto-ghafk --watch --watch-interval 300 5
 otto-ghafk --repo owner/name --watch 5          # scope the daemon to one repo
 ```
+
+### 8. Build in public (Threads — opt-in, off by default)
+
+At the end of a run Otto can publish a generic, secrecy-screened "field note" to Threads. It is **a complete no-op unless you opt in**, and **draft-only until you double opt-in** to posting.
+
+```bash
+# 1. Opt the repo in — .otto/config.json (draft-only: writes screened notes to disk)
+cat > .otto/config.json <<'JSON'
+{ "journal": { "enabled": true, "autonomous": false,
+               "categories": ["gotcha", "dead-end"], "minDaysBetweenPosts": 1 } }
+JSON
+
+# Now every run drafts at most one screened note to .otto/journal/drafts/<id>.md
+# (gate decisions are logged to .otto/journal/audit.log). Otto never posts yet.
+otto-afk "./docs/plans/feature.md" 10
+
+# 2. To let Otto actually POST, give it Threads credentials...
+export OTTO_THREADS_TOKEN=<long-lived-threads-token>
+export OTTO_THREADS_USER_ID=<threads-user-id>
+#    ...or ~/.config/otto/threads.json: { "token": "...", "userId": "..." }
+
+# 3. ...flip autonomous in config AND set the env flag (the double opt-in):
+#    "journal": { "enabled": true, "autonomous": true, ... }
+OTTO_JOURNAL_AUTONOMOUS=1 otto-afk "./docs/plans/feature.md" 10
+```
+
+Even autonomous, a note ships only if it clears every gate (deny-list → generalization → adversarial judge); anything ambiguous is denied and drafted instead of posted. Cadence (`minDaysBetweenPosts`) and de-duplication (`.otto/journal/posted.json`) cap it to at most one post per run.
 
 Full flag reference and more recipes: **[docs/CLI.md](./docs/CLI.md)**.
 
@@ -289,13 +349,20 @@ otto-afk --print-config     # resolved config + a preflight check of run prerequ
 **Flags** (per-run; same set across all bins unless noted):
 
 - **Agent runtime** — `--agent <claude|codex>` (default `claude`), `--fallback-agent <claude|codex>`, `--auto-switch-on-limit`
-- **Loop & cost** — `--budget <usd>`, `--cooldown <ms>`, `--max-retries <N>`, `--max-wait <dur>`, `--token-mode <off|measure|reduce>`, `--review-panel`, `--adaptive-router`, `--fresh`
-- **Process & UX** — `--detach`, `--log <path>`, `--notify`, `--no-keep-alive`, `--print-config`, `--help`, `--version`
+- **Loop & cost** — `--budget <usd>`, `--cooldown <ms>`, `--max-retries <N>`, `--max-wait <dur>`, `--token-mode <off|measure|reduce>`, `--review-panel`, `--adaptive-router`, `--model-routing`, `--fresh`
+- **Orchestration** (`otto-afk`) — `--model-routing` (per-stage model tier by difficulty/risk), `--fan-out` + `--fan-out-concurrency <n>` (parallel worktree sub-agents from a plan task graph)
+- **Process & UX** — `--detach`, `--log <path>`, `--notify`, `--no-keep-alive`, `--explain-routing`, `--verbose`, `--print-config`, `--context-report`, `--plan-report`, `--help`, `--version`
 - **Branch** — `--branch <current|branch|worktree>`, `--branch-convention <c>`, `--branch-prefix <p>`
 - **Targeting** (`otto-ghafk` / `otto-linear-afk`) — `--watch`, `--watch-interval <sec>`, `--repo <owner/name>`, `--project <name>`, `--issue <ref>`, `--include-sub-issues` (otto-ghafk; with `--issue`)
-- **Modes** (`otto-afk`) — `--verify`, `--apply-review <doc>`
+- **Modes** (`otto-afk`) — `--plan` (author spec + plan, no edits), `--verify` (read-only reconcile), `--apply-review <doc>`
 
-**Environment variables** (per-shell defaults): `OTTO_WORKSPACE`, `OTTO_RUNNER`, `OTTO_SANDBOX_NET`, `OTTO_RESULT_GRACE_MS`, `OTTO_AGENT`, `OTTO_FALLBACK_AGENT`, `OTTO_AUTO_SWITCH_ON_LIMIT`, `OTTO_MODEL`, `OTTO_CLAUDE_MODEL`, `OTTO_CODEX_MODEL`, `OTTO_TOKEN_MODE`, `OTTO_REVIEW_LENSES`, `OTTO_MAX_WAIT`, `OTTO_WATCH_LABEL`, `OTTO_GITHUB_REPO(S)`, `OTTO_INCLUDE_SUB_ISSUES`, `OTTO_BRANCH`, `OTTO_BRANCH_PREFIX`, `OTTO_BRANCH_CONVENTION`, `OTTO_LINEAR_API_KEY` / `LINEAR_API_KEY`, `OTTO_LINEAR_LABEL`, `OTTO_LINEAR_TEAM`, `OTTO_LINEAR_PROJECT(S)`, `OTTO_LINEAR_DONE_STATE`, and `NO_COLOR` / `TERM=dumb`.
+**Environment variables** (per-shell defaults): `OTTO_WORKSPACE`, `OTTO_RUNNER`, `OTTO_SANDBOX_NET`, `OTTO_RESULT_GRACE_MS`, `OTTO_AGENT`, `OTTO_FALLBACK_AGENT`, `OTTO_AUTO_SWITCH_ON_LIMIT`, `OTTO_MODEL`, `OTTO_CLAUDE_MODEL`, `OTTO_CODEX_MODEL`, `OTTO_TOKEN_MODE`, `OTTO_REVIEW_LENSES`, `OTTO_ADAPTIVE_ROUTER`, `OTTO_EXPLAIN_ROUTING`, `OTTO_MAX_WAIT`, `OTTO_WATCH_LABEL`, `OTTO_GITHUB_REPO(S)`, `OTTO_INCLUDE_SUB_ISSUES`, `OTTO_BRANCH`, `OTTO_BRANCH_PREFIX`, `OTTO_BRANCH_CONVENTION`, `OTTO_LINEAR_API_KEY` / `LINEAR_API_KEY`, `OTTO_LINEAR_LABEL`, `OTTO_LINEAR_TEAM`, `OTTO_LINEAR_PROJECT(S)`, `OTTO_LINEAR_DONE_STATE`, and `NO_COLOR` / `TERM=dumb`.
+
+Phase-2 orchestration & journal (all opt-in, off by default):
+
+- **Model routing (P11)** — `OTTO_MODEL_ROUTING` (truthy = on; same as `--model-routing`), `OTTO_TIER_CHEAP` / `OTTO_TIER_MID` / `OTTO_TIER_STRONG` (override the tier→model ladder; default `haiku` / `sonnet` / `opus`).
+- **Sub-agent fan-out (P11)** — `OTTO_FAN_OUT` (truthy = on; same as `--fan-out`).
+- **Public journal (P12)** — opt in per repo via `.otto/config.json` `{ "journal": { "enabled": true, "autonomous": false, "categories": ["gotcha","dead-end"], "minDaysBetweenPosts": 1 } }`. Posting requires a **double opt-in**: `journal.autonomous: true` **and** `OTTO_JOURNAL_AUTONOMOUS=1`. Threads credentials come from `OTTO_THREADS_TOKEN` + `OTTO_THREADS_USER_ID` (or `~/.config/otto/threads.json`). Drafts/audit/ledger live under `.otto/journal/` (git-ignored).
 
 Full per-value descriptions, defaults, and runner/sandbox/branch details live in **[docs/CONFIG.md](./docs/CONFIG.md)**; every flag and mode is documented in **[docs/CLI.md](./docs/CLI.md)**.
 

@@ -42,6 +42,9 @@ export type CliFlags = {
   reviewPanel: boolean;
   /** `--adaptive-router` toggle (default false; opt-in, issue #41 P2). */
   adaptiveRouter: boolean;
+  /** `--explain-routing` toggle (default false; issue #45 P6). Prints the
+   *  adaptive router's per-iteration reasoning; no effect without the router. */
+  explainRouting: boolean;
   watch: boolean;
   watchIntervalSec?: number;
   /**
@@ -180,6 +183,7 @@ export function parseFlags(
   let autoSwitchOnLimit = false;
   let reviewPanel = false;
   let adaptiveRouter = false;
+  let explainRouting = false;
   let watch = false;
   let watchIntervalSec: number | undefined;
   let expectingWatchInterval = false;
@@ -326,6 +330,7 @@ export function parseFlags(
     else if (a === "--auto-switch-on-limit") autoSwitchOnLimit = true;
     else if (a === "--review-panel") reviewPanel = true;
     else if (a === "--adaptive-router") adaptiveRouter = true;
+    else if (a === "--explain-routing") explainRouting = true;
     else if (a === "--watch") watch = true;
     else if (a === "--watch-interval") expectingWatchInterval = true;
     else if (a === "--issue") expectingIssue = true;
@@ -409,6 +414,7 @@ export function parseFlags(
     autoSwitchOnLimit,
     reviewPanel,
     adaptiveRouter,
+    explainRouting,
     watch,
     watchIntervalSec,
     issue,
@@ -483,6 +489,7 @@ Flags:
   --auto-switch-on-limit  switch to the fallback runtime when the active one hits a limit (or OTTO_AUTO_SWITCH_ON_LIMIT=1 / config "autoSwitchOnLimit"; default: off)
   --review-panel      replace the single reviewer stage with correctness/security/tests lens reviewers + one synth commit (default: off)
   --adaptive-router   route review depth by per-iteration change risk: single reviewer (low) / lens subset (medium) / full panel (high) (or OTTO_ADAPTIVE_ROUTER=1; default: off)
+  --explain-routing   print the adaptive router's per-iteration reasoning (change class, risk, chosen depth/lenses); requires --adaptive-router (or OTTO_EXPLAIN_ROUTING=1; default: off)
   --branch <mode>     where Otto commits: current (default) | branch (new branch) | worktree (isolated checkout)
   --branch-prefix <p> branch name prefix for branch/worktree modes (default: otto/)
   --branch-convention <c>  validated branch namespace <c>/<task-key> (e.g. feat, feature, fix); normalizes a trailing slash; overrides --branch-prefix (or OTTO_BRANCH_CONVENTION; default: otto)
@@ -516,6 +523,7 @@ Environment variables:
   OTTO_AUTO_SWITCH_ON_LIMIT  switch to the fallback runtime on a limit when truthy (1/true/yes/on); same as --auto-switch-on-limit (default: off).
   OTTO_REVIEW_LENSES   comma-separated lens list for --review-panel (default: correctness,security,tests).
   OTTO_ADAPTIVE_ROUTER  route review depth by change risk when truthy (1/true/yes/on); same as --adaptive-router (default: off).
+  OTTO_EXPLAIN_ROUTING  print the adaptive router's per-iteration reasoning when truthy (1/true/yes/on); same as --explain-routing (default: off).
   OTTO_WATCH_LABEL     issue label to poll for in watch mode (default: "otto").
   OTTO_INCLUDE_SUB_ISSUES  set to 1/true/yes to enable --include-sub-issues without the flag.
   OTTO_GITHUB_REPO     scope otto-ghafk to a single GitHub repo ("owner/name"); same as --repo.
@@ -560,6 +568,10 @@ export type PrintConfigOptions = {
   fallbackError?: string;
   /** Resolved review lenses (empty array = single reviewer). */
   reviewLenses?: string[];
+  /** Adaptive router enabled (issue #41 P2). */
+  adaptiveRouter?: boolean;
+  /** Explain-routing enabled (issue #45 P6); no effect without the router. */
+  explainRouting?: boolean;
   watch?: boolean;
   watchIntervalSec?: number;
   /**
@@ -610,6 +622,8 @@ export function printConfig(
     autoSwitchOnLimit = false,
     fallbackError,
     reviewLenses = [],
+    adaptiveRouter = false,
+    explainRouting = false,
     watch = false,
     watchIntervalSec,
     watchLabel = process.env.OTTO_WATCH_LABEL?.trim() || "otto",
@@ -665,6 +679,11 @@ export function printConfig(
   const reviewStatus = reviewLenses.length
     ? `panel: ${reviewLenses.join(", ")}`
     : "single reviewer";
+  const routingStatus = adaptiveRouter
+    ? `adaptive${explainRouting ? " · explain on" : ""}`
+    : explainRouting
+      ? "off (--explain-routing needs --adaptive-router)"
+      : "off";
   const watchStatus = watch
     ? `on (every ${watchIntervalSec ?? 300}s, label "${watchLabel}")`
     : "off";
@@ -699,6 +718,7 @@ export function printConfig(
   token mode            ${tokenModeStatus}
   max-wait              ${maxWaitMs != null ? `${Math.round(maxWaitMs / 60000)}m` : "6h (default)"}
   review                ${reviewStatus}
+  routing               ${routingStatus}
   branch                ${branchStatus}
   watch                 ${watchStatus}
   scope                 ${scopeStatus}

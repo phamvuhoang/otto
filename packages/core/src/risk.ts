@@ -166,3 +166,21 @@ export function routeReview(
   const depth = reviewDepthForLevel(assessment.level);
   return { depth, lenses: selectLenses(depth, available), assessment };
 }
+
+/**
+ * Render a {@link RouteDecision} as a multi-line operator explanation: the change
+ * class + risk level, the signals that drove it, and the chosen review depth +
+ * lenses. Pure — the loop prints this each iteration under `--explain-routing`
+ * (issue #45) so a maintainer can see *why* a given review depth was selected.
+ */
+export function explainRouting(route: RouteDecision): string {
+  const { assessment, depth, lenses } = route;
+  const lensLabel = lenses.length
+    ? lenses.join(", ")
+    : "(none — single reviewer)";
+  return [
+    `routing: ${assessment.class} (risk ${assessment.level})`,
+    ...assessment.reasons.map((r) => `  · ${r}`),
+    `  → review depth: ${depth}; lenses: ${lensLabel}`,
+  ].join("\n");
+}

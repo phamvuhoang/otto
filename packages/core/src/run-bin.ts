@@ -216,6 +216,14 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       (process.env.OTTO_ADAPTIVE_ROUTER ?? "").trim().toLowerCase()
     );
 
+  // Explain-routing (issue #45 P6): print the router's per-iteration reasoning.
+  // Same flag/env shape as the router; only meaningful with the router on.
+  const explainRouting =
+    flags.explainRouting ||
+    ["1", "true", "yes", "on"].includes(
+      (process.env.OTTO_EXPLAIN_ROUTING ?? "").trim().toLowerCase()
+    );
+
   const DEFAULT_LENSES = ["correctness", "security", "tests"];
   const envLenses = (process.env.OTTO_REVIEW_LENSES ?? "")
     .split(",")
@@ -373,6 +381,8 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       autoSwitchOnLimit: fallback.autoSwitch,
       fallbackError,
       reviewLenses: reviewLenses ?? [],
+      adaptiveRouter,
+      explainRouting,
       watch: flags.watch,
       watchIntervalSec: flags.watchIntervalSec,
       watchLabel,
@@ -607,6 +617,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     tokenMode,
     reviewLenses,
     adaptiveRouter,
+    explainRouting,
     mode: runMode,
     branchStrategy: resolved.strategy,
     maxWaitMs,

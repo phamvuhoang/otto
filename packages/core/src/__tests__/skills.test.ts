@@ -13,8 +13,10 @@ import {
   parseSkill,
   readSkill,
   readSkills,
+  recordValidation,
   skillDir,
   skillExists,
+  skillStatus,
   toSkillName,
   writeSkill,
   type Skill,
@@ -153,5 +155,49 @@ describe("listSkillIds / readSkills / skillExists", () => {
   it("absent skills dir → [] (never throws)", () => {
     expect(listSkillIds(tmp())).toEqual([]);
     expect(readSkills(tmp())).toEqual([]);
+  });
+});
+
+describe("skillStatus / recordValidation", () => {
+  const validatedAt = "2026-06-01T00:00:00.000Z";
+
+  it("is unvalidated when no run has validated it", () => {
+    expect(skillStatus(skill({ validation: {} }))).toBe("unvalidated");
+  });
+
+  it("is validated when proven and within (or without) a freshness window", () => {
+    const s = skill({ validation: { lastValidatedRun: "run-1", lastValidatedAt: validatedAt } });
+    // No revalidate window → always validated once proven.
+    expect(skillStatus(s, new Date("2027-01-01T00:00:00.000Z"))).toBe("validated");
+    // Within the window → validated.
+    const windowed = skill({
+      revalidateAfterDays: 30,
+      validation: { lastValidatedRun: "run-1", lastValidatedAt: validatedAt },
+    });
+    expect(skillStatus(windowed, new Date("2026-06-15T00:00:00.000Z"))).toBe("validated");
+  });
+
+  it("goes stale once revalidateAfterDays elapse since validation", () => {
+    const s = skill({
+      revalidateAfterDays: 7,
+      validation: { lastValidatedRun: "run-1", lastValidatedAt: validatedAt },
+    });
+    expect(skillStatus(s, new Date("2026-06-20T00:00:00.000Z"))).toBe("stale");
+  });
+
+  it("ignores an unparseable validation timestamp rather than staling it", () => {
+    const s = skill({
+      revalidateAfterDays: 7,
+      validation: { lastValidatedRun: "run-1", lastValidatedAt: "not-a-date" },
+    });
+    expect(skillStatus(s, new Date("2027-01-01T00:00:00.000Z"))).toBe("validated");
+  });
+
+  it("recordValidation stamps the run + time without mutating the input", () => {
+    const s = skill({ validation: {} });
+    const v = recordValidation(s, "run-9", new Date("2026-06-19T00:00:00.000Z"));
+    expect(v.validation).toEqual({ lastValidatedRun: "run-9", lastValidatedAt: "2026-06-19T00:00:00.000Z" });
+    expect(s.validation).toEqual({}); // input untouched
+    expect(skillStatus(v)).toBe("validated");
   });
 });

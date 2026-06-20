@@ -259,3 +259,55 @@ export function writeSkill(workspaceDir: string, skill: Skill): void {
 export function skillExists(workspaceDir: string, name: string): boolean {
   return existsSync(skillManifestPath(workspaceDir, name));
 }
+
+/**
+ * Validation lifecycle (issue #44 slice 2). `unvalidated` = never proven by a
+ * run (so it must not be applied automatically); `validated` = a successful run
+ * proved it and it is within its freshness window; `stale` = it was validated but
+ * `revalidateAfterDays` have since elapsed and it needs re-proving.
+ */
+export type SkillStatus = "validated" | "unvalidated" | "stale";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Parse an ISO timestamp to epoch ms; unparseable → null (never throws). */
+function epoch(iso: string | undefined): number | null {
+  if (typeof iso !== "string") return null;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * Derive a skill's validation status from its recorded validation + freshness
+ * policy at `now`. A skill with no `validation.lastValidatedRun` is `unvalidated`;
+ * one validated but past its `revalidateAfterDays` window (measured from
+ * `lastValidatedAt`) is `stale`; otherwise `validated`. Unparseable timestamps
+ * are ignored rather than treated as expired (mirrors `memoryStatus`). Pure —
+ * the retrieval gate uses this so only `validated` skills are auto-eligible.
+ */
+export function skillStatus(skill: Skill, now: Date = new Date()): SkillStatus {
+  if (!skill.validation.lastValidatedRun) return "unvalidated";
+  if (skill.revalidateAfterDays !== undefined) {
+    const since = epoch(skill.validation.lastValidatedAt);
+    if (since !== null && now.getTime() - since > skill.revalidateAfterDays * DAY_MS) {
+      return "stale";
+    }
+  }
+  return "validated";
+}
+
+/**
+ * Return a copy of the skill marked validated by a successful `runId` at `now`.
+ * Pure — the input is not mutated; the caller writes it back to persist the
+ * validation (recording a validation is a run's job, never the read-only bin's).
+ */
+export function recordValidation(
+  skill: Skill,
+  runId: string,
+  now: Date = new Date()
+): Skill {
+  return {
+    ...skill,
+    validation: { lastValidatedRun: runId, lastValidatedAt: now.toISOString() },
+  };
+}

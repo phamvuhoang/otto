@@ -260,6 +260,14 @@ export {
   type PlanRubricScore,
 } from "./plan-rubric.js";
 export {
+  REPORT_CRITERIA,
+  formatReportRubric,
+  scoreReportLegibility,
+  type ReportCriterion,
+  type ReportCriterionResult,
+  type ReportRubricScore,
+} from "./report-rubric.js";
+export {
   formatCheckpointPrompt,
   parseCheckpointResponse,
   resolvePlanCheckpoint,

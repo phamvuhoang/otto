@@ -40,6 +40,14 @@ export {
   type TokenUsage,
 } from "./tokens.js";
 export {
+  analyzeContext,
+  estimateTokens,
+  formatContextReport,
+  type ContextBreakdown,
+  type ContextCategory,
+  type ContextSegment,
+} from "./context-report.js";
+export {
   allocateRunId,
   listRunIds,
   readManifest,

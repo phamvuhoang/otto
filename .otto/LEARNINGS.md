@@ -500,6 +500,24 @@
   `skillUsageCount` (unranked eval column) surface usage — INERT until auto-use.
   Read-only `otto-skills` bin (`list`/`audit`/`why`/`candidates`) never runs tests
   or mutates a package. Pinned by `skills.test.ts` / `skills-cli.test.ts`.
+- **Context telemetry (#62 P7, slice 1) — `context-report.ts`, pure + INERT on the
+  loop.** "Measure before optimizing": `analyzeContext(renderedPrompt)` attributes
+  the inline window footprint by category — `commits`/`learnings`/`inputs`/
+  `playbook` — so a later P7 slice can prove it shrank the right thing. It segments
+  on the **rendered** prompt's stable top-level XML-ish block tags
+  (`<commits>`,`<learnings>`,`<inputs>`/`<issue>`/`<issues-summary>`/
+  `<issues-full-file>`), and **all four category char counts sum to the whole
+  prompt** (recognized blocks → their category, everything else → `playbook` as the
+  remainder, never double-counted). Token figures are an ESTIMATE
+  (`estimateTokens = ceil(chars/4)`, labelled with `~` in `formatContextReport`) —
+  the AUTHORITATIVE per-stage usage stays `tokens.ts`/provider; this answers the
+  orthogonal COMPOSITION question a single usage total can't. Segments are sorted
+  chars-descending and empty categories are omitted. `file reads` /
+  `prior-iteration transcript` are deliberately NOT categories here (agent-runtime/
+  cross-iteration, not in one rendered prompt — they belong to the read-dedup /
+  compaction slices). Pure like `tokens.ts`/`eval.ts`; wiring into
+  `StageResult`/the bundle + an `otto-afk --context-report` surface are later plan
+  tasks (`.otto/tasks/issue-62/plan.md`). Pinned by `context-report.test.ts`.
 
 
 ## Gotchas

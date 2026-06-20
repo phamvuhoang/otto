@@ -83,6 +83,67 @@ export function screenGate1(entry: string, ctx: GateContext): GateResult {
   return { ok: true };
 }
 
+export const MAX_ENTRY_CHARS = 500;
+export const MIN_ENTRY_CHARS = 20;
+
+/** Shapes that betray a specific task/ticket. */
+const TASK_KEY_RE = /\b(issue-\d+|[A-Z]{2,}-\d+)\b/;
+
+/**
+ * Gate 2: the note must read as GENERIC craft. Deny task-key shapes, any term
+ * carried from the source record (scope globs / taskKey / run id), and notes
+ * outside the length bounds. Pure.
+ */
+export function screenGate2(entry: string, ctx: GateContext): GateResult {
+  const text = entry.trim();
+  if (text.length < MIN_ENTRY_CHARS || text.length > MAX_ENTRY_CHARS) {
+    return { ok: false, gate: 2, reason: "deny:length" };
+  }
+  if (TASK_KEY_RE.test(text)) {
+    return { ok: false, gate: 2, reason: "deny:task-key" };
+  }
+  for (const term of ctx.forbiddenTerms) {
+    const t = term.trim();
+    if (
+      t.length >= 3 &&
+      new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(text)
+    ) {
+      return { ok: false, gate: 2, reason: "deny:forbidden-term" };
+    }
+  }
+  return { ok: true };
+}
+
+export type Gate3Judge = (entry: string) => Promise<boolean>;
+
+/**
+ * Run the full gate: 1 (deny-list) → 2 (generalization) → 3 (judge, optional).
+ * Default-deny: an empty entry, any non-pass gate, or a thrown judge denies. The
+ * judge runs LAST and only on an entry the deterministic gates already passed.
+ */
+export async function screenEntry(
+  entry: string,
+  ctx: GateContext,
+  judge?: Gate3Judge
+): Promise<GateResult> {
+  if (!entry || !entry.trim()) {
+    return { ok: false, gate: 1, reason: "deny:empty" };
+  }
+  const g1 = screenGate1(entry, ctx);
+  if (!g1.ok) return g1;
+  const g2 = screenGate2(entry, ctx);
+  if (!g2.ok) return g2;
+  if (judge) {
+    try {
+      const safe = await judge(entry);
+      if (!safe) return { ok: false, gate: 3, reason: "deny:judge-unsafe" };
+    } catch {
+      return { ok: false, gate: 3, reason: "deny:judge-error" };
+    }
+  }
+  return { ok: true };
+}
+
 /** Append one JSON line to the journal audit trail. Never throws. */
 export function appendAudit(
   workspaceDir: string,

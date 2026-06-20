@@ -355,7 +355,12 @@ export {
 export { runTail, type TailDeps } from "./tail.js";
 export {
   appendAudit,
+  screenEntry,
   screenGate1,
+  screenGate2,
+  MAX_ENTRY_CHARS,
+  MIN_ENTRY_CHARS,
+  type Gate3Judge,
   type GateContext,
   type GateResult,
 } from "./journal-gate.js";

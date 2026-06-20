@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { screenGate1, type GateContext } from "../journal-gate.js";
+import {
+  screenGate1,
+  screenGate2,
+  screenEntry,
+  MAX_ENTRY_CHARS,
+  type GateContext,
+} from "../journal-gate.js";
 
 const ctx = (over: Partial<GateContext> = {}): GateContext => ({
   repoIdentifiers: ["otto", "phamvuhoang"],
@@ -43,5 +49,61 @@ describe("screenGate1 — deny-list", () => {
     deny("acme-internal build broke", ctx({ secretPatterns: ["acme-internal"] }));
     const r = screenGate1("totally fine text", ctx({ secretPatterns: ["("] }));
     expect(r.ok).toBe(false);
+  });
+});
+
+describe("screenGate2 — generalization", () => {
+  it("passes generic craft prose", () => {
+    expect(
+      screenGate2(
+        "Writing the test first kept me honest about the real requirement.",
+        ctx()
+      ).ok
+    ).toBe(true);
+  });
+  it("denies task-key shapes", () => {
+    expect(screenGate2("fixed issue-42 today, that was rough", ctx()).ok).toBe(false);
+    expect(screenGate2("the ticket ENG-1234 was tricky to reproduce", ctx()).ok).toBe(
+      false
+    );
+  });
+  it("denies forbidden source terms (scope/taskKey/run)", () => {
+    expect(
+      screenGate2(
+        "the parser module was the real cause of the slowdown here",
+        ctx({ forbiddenTerms: ["parser"] })
+      ).ok
+    ).toBe(false);
+  });
+  it("denies an over-length or too-short note", () => {
+    expect(screenGate2("x".repeat(MAX_ENTRY_CHARS + 1), ctx()).ok).toBe(false);
+    expect(screenGate2("too short", ctx()).ok).toBe(false);
+  });
+});
+
+describe("screenEntry — orchestrator (default-deny)", () => {
+  const clean =
+    "Writing the failing test before the change kept my work honest and focused.";
+  it("passes a clean note through gates 1+2 with no judge", async () => {
+    expect((await screenEntry(clean, ctx())).ok).toBe(true);
+  });
+  it("denies when the judge says unsafe", async () => {
+    const r = await screenEntry(clean, ctx(), async () => false);
+    expect(r).toMatchObject({ ok: false, gate: 3 });
+  });
+  it("denies when the judge throws (fail closed)", async () => {
+    const r = await screenEntry(clean, ctx(), async () => {
+      throw new Error("boom");
+    });
+    expect(r.ok).toBe(false);
+  });
+  it("short-circuits at gate 1 before calling the judge", async () => {
+    let called = false;
+    const r = await screenEntry("leak https://x.com here now", ctx(), async () => {
+      called = true;
+      return true;
+    });
+    expect(r).toMatchObject({ ok: false, gate: 1 });
+    expect(called).toBe(false);
   });
 });

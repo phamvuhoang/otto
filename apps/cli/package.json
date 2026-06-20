@@ -28,6 +28,7 @@
     "otto-inspect": "./bin/otto-inspect.js",
     "otto-runs": "./bin/otto-runs.js",
     "otto-memory": "./bin/otto-memory.js",
+    "otto-skills": "./bin/otto-skills.js",
     "otto-eval": "./bin/otto-eval.js",
     "otto-linear-afk": "./bin/otto-linear-afk.js",
     "otto-linear": "./bin/otto-linear.js",

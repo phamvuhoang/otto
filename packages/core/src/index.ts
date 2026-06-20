@@ -169,6 +169,14 @@ export {
   type SkillValidation,
 } from "./skills.js";
 export {
+  formatCandidates,
+  formatSkillsAudit,
+  formatSkillsReport,
+  formatWhy,
+  runSkills,
+  type SkillsDeps,
+} from "./skills-cli.js";
+export {
   compareTrajectories,
   scoreTrajectory,
   type EvalSignals,

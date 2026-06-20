@@ -143,6 +143,7 @@ export {
   type TaintSource,
 } from "./taint.js";
 export {
+  findSkillCandidates,
   globMatch,
   listSkillIds,
   parseSkill,
@@ -158,7 +159,9 @@ export {
   skillStatus,
   toSkillName,
   writeSkill,
+  type CandidateRun,
   type Skill,
+  type SkillCandidate,
   type SkillMatch,
   type SkillMatchContext,
   type SkillStatus,

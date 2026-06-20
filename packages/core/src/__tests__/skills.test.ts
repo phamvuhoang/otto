@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  findSkillCandidates,
   globMatch,
   listSkillIds,
   parseSkill,
@@ -259,5 +260,51 @@ describe("selectSkills", () => {
       { capability: "release" }
     ).map((m) => m.name);
     expect(order).toEqual(["high", "low", "z-unvalidated"]);
+  });
+});
+
+describe("findSkillCandidates", () => {
+  const run = (over: Partial<import("../skills.js").CandidateRun> = {}) => ({
+    runId: "r",
+    bin: "otto-afk",
+    mode: "afk",
+    inputs: "plan.md",
+    exitReason: "complete",
+    ...over,
+  });
+
+  it("surfaces a signature seen >= 2 times among successful runs", () => {
+    const cands = findSkillCandidates([
+      run({ runId: "a1", inputs: "release.md" }),
+      run({ runId: "a2", inputs: "release.md" }),
+      run({ runId: "b1", inputs: "one-off.md" }), // single → not a candidate
+    ]);
+    expect(cands).toHaveLength(1);
+    expect(cands[0].inputs).toBe("release.md");
+    expect(cands[0].runIds).toEqual(["a1", "a2"]);
+    expect(cands[0].count).toBe(2);
+    expect(cands[0].suggestedName).toBe("afk-release-md");
+  });
+
+  it("ignores unsuccessful runs", () => {
+    const cands = findSkillCandidates([
+      run({ runId: "a1", inputs: "x.md", exitReason: "complete" }),
+      run({ runId: "a2", inputs: "x.md", exitReason: "stopped (budget)" }),
+    ]);
+    expect(cands).toEqual([]);
+  });
+
+  it("groups by bin+mode+inputs and sorts by count desc", () => {
+    const cands = findSkillCandidates([
+      run({ runId: "g1", mode: "ghafk", bin: "otto-ghafk", inputs: "42" }),
+      run({ runId: "g2", mode: "ghafk", bin: "otto-ghafk", inputs: "42" }),
+      run({ runId: "p1", inputs: "p.md" }),
+      run({ runId: "p2", inputs: "p.md" }),
+      run({ runId: "p3", inputs: "p.md" }),
+    ]);
+    expect(cands.map((c) => [c.inputs, c.count])).toEqual([
+      ["p.md", 3],
+      ["42", 2],
+    ]);
   });
 });

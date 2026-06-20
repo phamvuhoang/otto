@@ -8,6 +8,7 @@ import {
 import { join } from "node:path";
 
 import { classifyRisk, type RiskAssessment } from "./risk.js";
+import type { RunManifest } from "./run-report.js";
 
 /**
  * Skill extraction and reuse (issue #44 P5). A **skill** is a repo-local,
@@ -428,5 +429,69 @@ export function selectSkills(
       Number(b.eligible) - Number(a.eligible) ||
       b.score - a.score ||
       a.name.localeCompare(b.name)
+  );
+}
+
+/** The run fields candidate identification needs (a subset of {@link RunManifest}). */
+export type CandidateRun = Pick<
+  RunManifest,
+  "runId" | "bin" | "mode" | "inputs" | "exitReason"
+>;
+
+/**
+ * A repeated successful workflow worth promoting into a skill (issue #44 slice
+ * 4): the runs that share it, and a suggested package name. It is only a
+ * *suggestion* — extraction stays a maintainer action, never auto-promoted.
+ */
+export type SkillCandidate = {
+  /** Stable grouping signature `<bin>::<mode>::<inputs>`. */
+  signature: string;
+  bin: string;
+  mode: string;
+  inputs: string;
+  /** A filesystem-safe skill name suggestion derived from the signature. */
+  suggestedName: string;
+  /** Run ids of the successful runs sharing this signature, chronological. */
+  runIds: string[];
+  count: number;
+};
+
+const SUCCESS_REASONS: ReadonlySet<string> = new Set(["complete", "done"]);
+
+/**
+ * Identify candidate skills from recorded runs: group **successful** runs
+ * (`exitReason` ∈ {complete, done}) by their `<bin>::<mode>::<inputs>` signature
+ * and surface every signature seen `minCount` (default 2) or more times. A
+ * conservative, deterministic heuristic — the same task succeeding repeatedly is
+ * the strongest signal that it is worth turning into a reusable procedure. Pure;
+ * no model call, no auto-promotion. Sorted by count desc, then signature.
+ */
+export function findSkillCandidates(
+  runs: CandidateRun[],
+  minCount = 2
+): SkillCandidate[] {
+  const groups = new Map<string, CandidateRun[]>();
+  for (const r of runs) {
+    if (r.exitReason == null || !SUCCESS_REASONS.has(r.exitReason)) continue;
+    const signature = `${r.bin}::${r.mode}::${r.inputs}`;
+    (groups.get(signature) ?? groups.set(signature, []).get(signature)!).push(r);
+  }
+
+  const candidates: SkillCandidate[] = [];
+  for (const [signature, group] of groups) {
+    if (group.length < minCount) continue;
+    const { bin, mode, inputs } = group[0];
+    candidates.push({
+      signature,
+      bin,
+      mode,
+      inputs,
+      suggestedName: toSkillName(`${mode}-${inputs}`) || toSkillName(mode),
+      runIds: group.map((r) => r.runId).sort(),
+      count: group.length,
+    });
+  }
+  return candidates.sort(
+    (a, b) => b.count - a.count || a.signature.localeCompare(b.signature)
   );
 }

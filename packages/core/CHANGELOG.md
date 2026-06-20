@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.18.0...otto-core-v0.19.0) (2026-06-20)
+
+
+### Features
+
+* **core:** model & sub-agent orchestration ([#66](https://github.com/phamvuhoang/otto/issues/66) P11) ([#77](https://github.com/phamvuhoang/otto/issues/77)) ([bc5f452](https://github.com/phamvuhoang/otto/commit/bc5f4526a79f5ad9618cf48027c80db8a8c2a4c4))
+
 ## [0.18.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.17.0...otto-core-v0.18.0) (2026-06-20)
 
 

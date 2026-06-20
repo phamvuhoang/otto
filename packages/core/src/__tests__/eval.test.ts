@@ -15,6 +15,7 @@ function signals(overrides: Partial<EvalSignals> = {}): EvalSignals {
     totalTokens: 1000,
     elapsedMs: 10_000,
     safetyEventCount: 0,
+    skillUsageCount: 0,
     ...overrides,
   };
 }
@@ -166,6 +167,16 @@ describe("scoreTrajectory", () => {
   it("reports zero safety events when none are recorded", () => {
     expect(scoreTrajectory(manifest(), [stage()]).safetyEventCount).toBe(0);
   });
+
+  it("counts skills used across the manifest and stage records", () => {
+    const use = { name: "release-flow", version: "1.0.0" };
+    const s = scoreTrajectory(
+      manifest({ skillsUsed: [use] }),
+      [stage({ skillsUsed: [use, use] }), stage()]
+    );
+    expect(s.skillUsageCount).toBe(3);
+    expect(scoreTrajectory(manifest(), [stage()]).skillUsageCount).toBe(0);
+  });
 });
 
 describe("compareTrajectories", () => {
@@ -180,10 +191,10 @@ describe("compareTrajectories", () => {
     ]);
     const lines = out.split("\n");
     expect(lines[0]).toBe(
-      "| Run | Succeeded | Exit | Iterations | Stages | Errors | Cost (USD) | Tokens | Elapsed (ms) | Safety events |"
+      "| Run | Succeeded | Exit | Iterations | Stages | Errors | Cost (USD) | Tokens | Elapsed (ms) | Safety events | Skills used |"
     );
     expect(lines[1]).toBe(
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     );
     expect(lines).toHaveLength(4);
     expect(lines[2]).toContain("| baseline |");

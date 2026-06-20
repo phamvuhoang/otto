@@ -45,6 +45,25 @@ export type SafetyEvent =
     };
 
 /**
+ * A skill applied during a run (issue #44 P5): which package/version, and why it
+ * was selected (the retrieval reasons). Recorded into the trajectory so skill
+ * usage shows up in run reports and benchmark comparisons.
+ *
+ * INERT this slice: the type and the optional `skillsUsed` fields exist, but no
+ * bin/loop populates them yet — skills are surfaced read-only via `otto-skills`
+ * and never auto-applied this PR. The field is ready for the future auto-use
+ * slice; a recorded trajectory simply carries none today.
+ */
+export type SkillUsage = {
+  /** The skill package name applied. */
+  name: string;
+  /** The skill version applied. */
+  version: string;
+  /** Why retrieval selected it (so a run report can explain the choice). */
+  reasons?: string[];
+};
+
+/**
  * A named pointer to a file Otto produced during a run (rendered prompt, NDJSON
  * log, diff summary, …). Paths are workspace-relative so the bundle is portable.
  */
@@ -70,6 +89,8 @@ export type StageRecord = {
   logPath?: string;
   /** Safety events emitted while this stage ran (issue #43); absent = none. */
   safetyEvents?: SafetyEvent[];
+  /** Skills applied while this stage ran (issue #44, INERT); absent = none. */
+  skillsUsed?: SkillUsage[];
   startedAt: string;
   finishedAt: string;
 };
@@ -101,6 +122,8 @@ export type RunManifest = {
   artifacts: RunArtifact[];
   /** Run-level safety events not tied to a single stage (issue #43); absent = none. */
   safetyEvents?: SafetyEvent[];
+  /** Skills applied during the run (issue #44, INERT); absent = none. */
+  skillsUsed?: SkillUsage[];
   startedAt: string;
   finishedAt?: string;
 };

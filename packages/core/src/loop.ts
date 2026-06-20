@@ -9,7 +9,7 @@ import { changedFilesSince, headSha } from "./git.js";
 import { sleep, isThrottle, nextCooldownFactor } from "./pacing.js";
 import { decide } from "./policy.js";
 import { deriveProgress, type IterationObservation } from "./progress.js";
-import { routeReview } from "./risk.js";
+import { explainRouting as formatRouting, routeReview } from "./risk.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { cleanScratch } from "./scratch.js";
@@ -159,6 +159,10 @@ export type LoopOptions = {
   /** Opt-in adaptive compute router (issue #41): route review depth per iteration
    *  by the risk of that iteration's change. When off, `reviewLenses` is used as-is. */
   adaptiveRouter?: boolean;
+  /** Opt-in (issue #45 P6): print the adaptive router's per-iteration reasoning
+   *  (change class/risk, chosen depth/lenses, policy decision). No effect when
+   *  `adaptiveRouter` is off — there is no routing decision to explain. */
+  explainRouting?: boolean;
   /** Injectable resolver for an iteration's changed paths (default: git diff since
    *  the iteration-start HEAD). Used only when `adaptiveRouter` is on. */
   resolveChangedPaths?: (workspaceDir: string) => string[];
@@ -295,6 +299,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     tokenMode = "off",
     reviewLenses,
     adaptiveRouter = false,
+    explainRouting = false,
     resolveChangedPaths,
     signal: externalSignal,
     mode = "afk",
@@ -344,6 +349,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   process.stderr.write(
     `${USE_COLOR ? `${dim("━━━")} ${bold(versionLine)} ${dim("━━━")}` : `== ${versionLine} ==`}\n`
   );
+  // --explain-routing only has decisions to explain when the router is on; say so
+  // once rather than silently no-op the flag (issue #45 operator clarity).
+  if (explainRouting && !adaptiveRouter) {
+    process.stderr.write(
+      `${dim("note: --explain-routing has no effect without --adaptive-router")}\n`
+    );
+  }
 
   // Allocate the run id and write an initial evidence-bundle manifest at loop
   // start, so a run that crashes before any terminal path still leaves a record
@@ -641,12 +653,19 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             : changedFilesSince(workspaceDir, iterStartSha);
           const route = routeReview(changed, reviewLenses);
           effectiveLenses = route.lenses;
-          const how = route.lenses.length
-            ? `${route.depth} (${route.lenses.join(", ")})`
-            : "single reviewer";
-          process.stderr.write(
-            `${dim(`↳ adaptive router: ${route.assessment.class} → ${how}`)}\n`
-          );
+          if (explainRouting) {
+            // Full reasoning (class/risk/signals/depth/lenses), one line per row.
+            for (const line of formatRouting(route).split("\n")) {
+              process.stderr.write(`${dim(`↳ ${line}`)}\n`);
+            }
+          } else {
+            const how = route.lenses.length
+              ? `${route.depth} (${route.lenses.join(", ")})`
+              : "single reviewer";
+            process.stderr.write(
+              `${dim(`↳ adaptive router: ${route.assessment.class} → ${how}`)}\n`
+            );
+          }
         }
 
         const usePanel =
@@ -875,6 +894,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           repeatedFailureStreak: 0,
           failingChecks: null,
         });
+        // Under --explain-routing, surface the progress decision every iteration
+        // (including `continue`), so the operator sees why the run kept going.
+        if (explainRouting && decision.action === "continue") {
+          process.stderr.write(
+            `${dim(`↳ progress: continue — ${decision.reason}`)}\n`
+          );
+        }
         if (decision.action !== "continue") {
           process.stderr.write(
             `${dim(`↳ adaptive router: ${decision.action} — ${decision.reason}`)}\n`

@@ -95,7 +95,80 @@ const defaultDeps: EvalDeps = {
 };
 
 const USAGE =
-  "Usage: otto-eval <suite.json> [<configs.json>] [--iterations <n>]";
+  "Usage: otto-eval <suite.json> [<configs.json>] [--iterations <n>]\n" +
+  "       otto-eval compare <run-a> <run-b>";
+
+const COMPARE_USAGE = "Usage: otto-eval compare <run-a|latest> <run-b|latest>";
+
+/** Injectable host surface for {@link runEvalCompare} (mirrors `InspectDeps`). */
+export type CompareDeps = {
+  env: NodeJS.ProcessEnv;
+  cwd: string;
+  out: (msg: string) => void;
+  err: (msg: string) => void;
+};
+
+const compareDefaultDeps: CompareDeps = {
+  env: process.env,
+  cwd: process.cwd(),
+  out: (m) => process.stdout.write(`${m}\n`),
+  err: (m) => process.stderr.write(`${m}\n`),
+};
+
+/**
+ * Resolve a run-id argument against a workspace: an explicit id, or `latest` →
+ * the most recent bundle. Returns null when `latest` is asked of an empty
+ * `.otto/runs/` (the caller reports it).
+ */
+function resolveRunId(workspaceDir: string, arg: string): string | null {
+  if (arg !== "latest") return arg;
+  const ids = listRunIds(workspaceDir);
+  return ids.length ? ids[ids.length - 1] : null;
+}
+
+/**
+ * Drive `otto-eval compare <run-a> <run-b>`: a **read-only, non-paid** comparison
+ * of two already-recorded run bundles. Unlike the benchmark runner it never
+ * invokes a model — it scores each bundle's trajectory (`scoreTrajectory`) and
+ * prints the side-by-side `compareTrajectories` table, so an operator can A/B two
+ * past runs without reading source or re-paying for a run. `latest` resolves to
+ * the most recent bundle. Resolves to `0`, or `1` when an id is missing/unknown.
+ */
+export async function runEvalCompare(
+  argv: string[],
+  deps: CompareDeps = compareDefaultDeps
+): Promise<number> {
+  if (argv[0] === "-h" || argv[0] === "--help") {
+    deps.out(COMPARE_USAGE);
+    return 0;
+  }
+  const [aArg, bArg, ...extra] = argv;
+  if (!aArg || !bArg || extra.length > 0) {
+    deps.err(`compare takes exactly two run ids.\n${COMPARE_USAGE}`);
+    return 1;
+  }
+
+  const workspaceDir = resolve(deps.env.OTTO_WORKSPACE ?? deps.cwd);
+  const labelled: { label: string; signals: ReturnType<typeof scoreTrajectory> }[] = [];
+  for (const arg of [aArg, bArg]) {
+    const runId = resolveRunId(workspaceDir, arg);
+    const manifest = runId ? readManifestFs(workspaceDir, runId) : null;
+    if (!manifest) {
+      deps.err(
+        `No evidence bundle for run '${arg}' under ${workspaceDir}/.otto/runs/. ` +
+          "Check the run id (or pass `latest`)."
+      );
+      return 1;
+    }
+    labelled.push({
+      label: runId!,
+      signals: scoreTrajectory(manifest, readStageRecordsFs(workspaceDir, runId!)),
+    });
+  }
+
+  deps.out(compareTrajectories(labelled));
+  return 0;
+}
 
 /**
  * Validate a raw eval-config matrix (array of `{label, args?, env?}`). Throws on
@@ -162,6 +235,17 @@ export async function runEval(
   argv: string[],
   deps: EvalDeps = defaultDeps
 ): Promise<number> {
+  // `compare` is the read-only, non-paid path: short-circuit before any suite
+  // loading or model invocation. It reuses runEval's stdio/env injection.
+  if (argv[0] === "compare") {
+    return runEvalCompare(argv.slice(1), {
+      env: deps.env,
+      cwd: deps.cwd,
+      out: deps.out,
+      err: deps.err,
+    });
+  }
+
   const args = parseArgs(argv);
   if (args.help) {
     deps.out(USAGE);

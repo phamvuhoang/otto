@@ -4,8 +4,17 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { parseEvalConfigs, runEval, type EvalDeps } from "../eval-run.js";
-import type { RunManifest, StageRecord } from "../run-report.js";
+import {
+  parseEvalConfigs,
+  runEval,
+  runEvalCompare,
+  type EvalDeps,
+} from "../eval-run.js";
+import {
+  writeManifest,
+  type RunManifest,
+  type StageRecord,
+} from "../run-report.js";
 import { emptyTokenUsage } from "../tokens.js";
 
 function manifest(overrides: Partial<RunManifest> = {}): RunManifest {
@@ -174,5 +183,72 @@ describe("runEval", () => {
       }),
     }));
     expect(captured).toEqual([5]);
+  });
+});
+
+describe("runEvalCompare", () => {
+  let ws: string;
+  let out: string[];
+  let errs: string[];
+  function deps() {
+    return {
+      env: { OTTO_WORKSPACE: ws } as NodeJS.ProcessEnv,
+      cwd: ws,
+      out: (m: string) => out.push(m),
+      err: (m: string) => errs.push(m),
+    };
+  }
+
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), "otto-eval-compare-"));
+    out = [];
+    errs = [];
+  });
+  afterEach(() => rmSync(ws, { recursive: true, force: true }));
+
+  it("scores two existing bundles and prints a comparison table", async () => {
+    writeManifest(ws, manifest({ runId: "run-a", costUsd: 0.5, exitReason: "complete" }));
+    writeManifest(ws, manifest({ runId: "run-b", costUsd: 2.0, exitReason: "done" }));
+    const code = await runEvalCompare(["run-a", "run-b"], deps());
+    expect(code).toBe(0);
+    const table = out.join("\n");
+    expect(table).toContain("run-a");
+    expect(table).toContain("run-b");
+    // Comparison marks the cheaper run best on the cost column.
+    expect(table).toMatch(/\$0\.5.*best|best/);
+  });
+
+  it("resolves 'latest' to the most recent bundle", async () => {
+    writeManifest(ws, manifest({ runId: "2026-06-19T00-00-00-000Z-1" }));
+    writeManifest(ws, manifest({ runId: "2026-06-19T09-00-00-000Z-1" }));
+    const code = await runEvalCompare(["2026-06-19T00-00-00-000Z-1", "latest"], deps());
+    expect(code).toBe(0);
+    expect(out.join("\n")).toContain("2026-06-19T09-00-00-000Z-1");
+  });
+
+  it("exits 1 when a run bundle is missing", async () => {
+    writeManifest(ws, manifest({ runId: "run-a" }));
+    const code = await runEvalCompare(["run-a", "ghost"], deps());
+    expect(code).toBe(1);
+    expect(errs.join("\n")).toMatch(/ghost/);
+  });
+
+  it("exits 1 unless exactly two ids are given", async () => {
+    expect(await runEvalCompare(["only-one"], deps())).toBe(1);
+    expect(errs.join("\n")).toMatch(/two run ids/i);
+  });
+
+  it("is reachable via the runEval 'compare' subcommand", async () => {
+    writeManifest(ws, manifest({ runId: "run-a" }));
+    writeManifest(ws, manifest({ runId: "run-b" }));
+    const code = await runEval(["compare", "run-a", "run-b"], {
+      ...({} as EvalDeps),
+      env: { OTTO_WORKSPACE: ws } as NodeJS.ProcessEnv,
+      cwd: ws,
+      out: (m: string) => out.push(m),
+      err: (m: string) => errs.push(m),
+    });
+    expect(code).toBe(0);
+    expect(out.join("\n")).toContain("run-a");
   });
 });

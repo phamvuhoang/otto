@@ -51,6 +51,7 @@ export {
   type RunArtifact,
   type RunManifest,
   type SafetyEvent,
+  type SkillUsage,
   type StageRecord,
 } from "./run-report.js";
 export {
@@ -58,6 +59,13 @@ export {
   runInspect,
   type InspectDeps,
 } from "./inspect.js";
+export {
+  formatRunsList,
+  runRuns,
+  summarizeManifest,
+  type RunsDeps,
+  type RunSummary,
+} from "./runs-cli.js";
 export {
   formatAuditReport,
   runMemory,
@@ -88,6 +96,8 @@ export {
 export {
   parseEvalConfigs,
   runEval,
+  runEvalCompare,
+  type CompareDeps,
   type EvalConfig,
   type EvalDeps,
   type EvalInvocation,
@@ -133,6 +143,40 @@ export {
   wrapUntrusted,
   type TaintSource,
 } from "./taint.js";
+export {
+  findSkillCandidates,
+  globMatch,
+  listSkillIds,
+  parseSkill,
+  readSkill,
+  readSkills,
+  recordValidation,
+  selectSkills,
+  skillDir,
+  skillExists,
+  skillInstructionsPath,
+  skillManifestPath,
+  skillsDir,
+  skillStatus,
+  toSkillName,
+  writeSkill,
+  type CandidateRun,
+  type Skill,
+  type SkillCandidate,
+  type SkillMatch,
+  type SkillMatchContext,
+  type SkillStatus,
+  type SkillTrust,
+  type SkillValidation,
+} from "./skills.js";
+export {
+  formatCandidates,
+  formatSkillsAudit,
+  formatSkillsReport,
+  formatWhy,
+  runSkills,
+  type SkillsDeps,
+} from "./skills-cli.js";
 export {
   compareTrajectories,
   scoreTrajectory,

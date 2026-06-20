@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   classifyRisk,
+  explainRouting,
   reviewDepthForLevel,
   routeReview,
   selectLenses,
@@ -131,5 +132,24 @@ describe("routeReview", () => {
     const r = routeReview([], available);
     expect(r.depth).toBe("panel");
     expect(r.lenses).toEqual(available);
+  });
+});
+
+describe("explainRouting", () => {
+  it("renders class, risk, reasons, and chosen depth/lenses", () => {
+    const route = routeReview(["src/a.ts", "docs/b.md"], ["correctness", "security", "tests"]);
+    const out = explainRouting(route);
+    expect(out).toContain(`routing: ${route.assessment.class}`);
+    expect(out).toContain(`risk ${route.assessment.level}`);
+    // Every reason is surfaced as a bullet line.
+    for (const r of route.assessment.reasons) expect(out).toContain(r);
+    expect(out).toContain(`review depth: ${route.depth}`);
+    expect(out).toContain(route.lenses.join(", "));
+  });
+
+  it("labels an empty lens set as the single reviewer", () => {
+    const route = routeReview(["README.md"], ["correctness"]); // docs-only → single
+    expect(route.lenses).toEqual([]);
+    expect(explainRouting(route)).toMatch(/single reviewer/);
   });
 });

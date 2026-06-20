@@ -446,3 +446,26 @@ describe("parseFlags --verify / --apply-review", () => {
     expect(f.applyReview).toBeUndefined();
   });
 });
+
+describe("parseFlags --explain-routing", () => {
+  it("defaults explainRouting to false", () => {
+    expect(parseFlags(["5"]).explainRouting).toBe(false);
+  });
+  it("sets explainRouting when the flag is present", () => {
+    expect(parseFlags(["--explain-routing", "5"]).explainRouting).toBe(true);
+  });
+});
+
+describe("printConfig routing", () => {
+  it("shows the router off by default", () => {
+    expect(configOutput({})).toMatch(/routing\s+off/);
+  });
+  it("shows adaptive routing with explain on", () => {
+    const out = configOutput({ adaptiveRouter: true, explainRouting: true });
+    expect(out).toMatch(/routing\s+adaptive · explain on/);
+  });
+  it("flags --explain-routing as ineffective without the router", () => {
+    const out = configOutput({ adaptiveRouter: false, explainRouting: true });
+    expect(out).toMatch(/routing\s+off \(--explain-routing needs --adaptive-router\)/);
+  });
+});

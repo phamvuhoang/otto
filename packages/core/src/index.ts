@@ -373,3 +373,11 @@ export {
   type ThreadsClient,
   type ThreadsErrorKind,
 } from "./threads-api.js";
+export { forbiddenTermsFor, selectCandidate } from "./journal-source.js";
+export {
+  appendLedger,
+  hashContent,
+  readLedger,
+  recentlyPosted,
+  type PostedEntry,
+} from "./journal-ledger.js";

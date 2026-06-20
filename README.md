@@ -86,7 +86,7 @@ The rest of this section is the detail behind each row:
 - 🧾 **It leaves a paper trail.** Every run writes a durable **evidence bundle** to `.otto/runs/<run-id>/` — a manifest (inputs, runtime, iteration count, token/cost totals, exit reason, next action) plus one record per stage. `otto-inspect [latest]` renders it into a compact "what happened and why did Otto stop?" report, so you review the outcome instead of replaying `.otto-tmp/logs`.
 - 🗃️ **Its memory is governed, not a growing blob.** Underneath the flat `LEARNINGS.md`, Otto can keep structured memory records as one git-tracked JSON file each under `.otto/memory/<id>.json` — every record carrying provenance (source run, task key), scope (which files/modules it applies to), confidence, trust level, and a freshness policy (expiry / revalidate). Newer records supersede older ones. `otto-memory audit` reports stale, conflicting, and frequently-used entries _before_ they influence a run, and `otto-memory project` renders only the **active** records back into a bounded `LEARNINGS.md` — so prompt size from memory stays explainable instead of contaminating unrelated runs with stale assumptions.
 - 🛡️ **It governs what an unattended run may do.** A git-tracked `.otto/policy.json` declares repo-local safety rules — blocked commands, allowed write roots / network domains, secret patterns, high-risk globs, approval-required actions. Otto evaluates every host-shell / `@spill` command against the deny-list at the render boundary: a blocked command is _skipped_ — never executed — and recorded as a `blocked` safety event in the run's evidence bundle. Untrusted inputs it ingests (issue bodies, comments, external review docs) are fenced in a labelled `<untrusted>` block carrying a do-not-obey warning, so prompt-injection text can't pose as instructions. **The default empty policy restricts nothing**, so trusted local workflows are unchanged — a repo opts into governance by populating the file.
-- 🛠️ **It gives you an operator view.** A CLI-first cockpit over the evidence bundles: `otto-runs list` for a one-row-per-run summary (status, iterations, cost, elapsed), `otto-inspect [latest]` for one run's report, `otto-explain [latest]` to re-render any run in plain language a non-engineer can verify, and `otto-eval compare <run-a> <run-b>` to A/B two past runs side-by-side **without re-paying for a run**. `--explain-routing` prints the adaptive router's per-iteration reasoning (change class, risk, chosen review depth) so a routing decision is never a black box.
+- 🛠️ **It gives you an operator view.** A CLI-first cockpit over the evidence bundles: `otto-runs list` for a one-row-per-run summary (status, iterations, cost, elapsed), `otto-inspect [latest]` for one run's report, `otto-explain [latest]` to re-render any run in plain language a non-engineer can verify, `otto-tail [latest]` to attach to a running loop and watch a live status tree (prints the done card once it finalizes), and `otto-eval compare <run-a> <run-b>` to A/B two past runs side-by-side **without re-paying for a run**. `--explain-routing` prints the adaptive router's per-iteration reasoning (change class, risk, chosen review depth) so a routing decision is never a black box. The in-run console is quiet by default (one terse line per meaningful action — edits, commits, test results, errors); `--verbose` restores the full firehose.
 - 🧩 **It can turn repeated workflows into skills.** Stable, repeated procedures (release flow, test bootstrap, a migration pattern) can be promoted into git-tracked `.otto/skills/<name>/` packages — instructions + metadata + constraints + a last-validated run. `otto-skills candidates` suggests them from runs that succeeded the same way twice; `otto-skills why <changed-files>` shows which skills retrieval would pick and **why** (by capability, touched files, and change risk). A skill must be **validated before it is eligible**, and stale skills are flagged rather than reapplied.
 
 Beyond the build loop, two read/repair modes reuse all of the above:
@@ -133,11 +133,22 @@ otto-inspect 2026-06-20T05-53-11-000Z-12345     # a specific run id
 otto-explain latest
 otto-explain 2026-06-20T05-53-11-000Z-12345     # a specific run id
 
+# Attach to a running loop — polls the evidence bundle and prints a live tree;
+# switches to the done card once the run finalizes (note: otto-watch is the
+# separate ghafk/linear daemon that polls for labelled issues)
+otto-tail                                        # attach to the latest run
+otto-tail 2026-06-20T05-53-11-000Z-12345        # attach to a specific run id
+
 # A/B two recorded runs side-by-side — FREE, no model call
 otto-eval compare latest 2026-06-19T22-10-00-000Z-9876
 
 # See exactly what will resolve (config + preflight) before any paid run
 otto-afk --print-config
+
+# Console output: by default Otto prints one terse line per meaningful action
+# (file edits, git commits, test results, errors). Use --verbose to restore the
+# full in-run firehose from all agent events.
+otto-afk --verbose "my plan" 10
 ```
 
 ### 3. Evaluate & benchmark harness quality
@@ -226,7 +237,7 @@ Full flag reference and more recipes: **[docs/CLI.md](./docs/CLI.md)**.
 
 Otto ships as two npm packages:
 
-- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool). The read-only operator bins: `otto-inspect` renders one run's evidence bundle, `otto-explain` re-renders any run in plain language for a non-engineer, `otto-runs` lists recent runs, `otto-eval compare` A/Bs two of them (and `otto-eval` benchmarks harness quality across configs — the [eval suite](./benchmarks)), `otto-memory` audits the governed memory records, and `otto-skills` inventories repo-local skill packages.
+- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool). The read-only operator bins: `otto-inspect` renders one run's evidence bundle, `otto-explain` re-renders any run in plain language for a non-engineer, `otto-runs` lists recent runs, `otto-tail` attaches to a running loop for a live status tree, `otto-eval compare` A/Bs two of them (and `otto-eval` benchmarks harness quality across configs — the [eval suite](./benchmarks)), `otto-memory` audits the governed memory records, and `otto-skills` inventories repo-local skill packages.
 - **[`@phamvuhoang/otto-core`](./packages/core)** — the library: iteration loop, native-sandbox runner, template renderer, stage registry. Importable from any Node project.
 
 Each iteration runs a **stage chain**: a **gate** stage (implement / verify / apply-review, depending on the bin and flags) followed by a **reviewer**. Before each stage, Otto renders a prompt template — expanding `@include`, `@spill`, `` !?`cmd` ``, `` !`cmd` ``, and `{{ INPUTS }}` tags — and injects the workspace's `.otto/LEARNINGS.md`. If the gate emits the sentinel `<promise>NO MORE TASKS</promise>`, the loop exits before the reviewer runs.

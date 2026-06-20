@@ -340,3 +340,16 @@ export {
   defaultLinearCliDeps,
   type LinearCliDeps,
 } from "./linear-cli.js";
+export {
+  parsePlanProgress,
+  type PlanProgress,
+  type PlanProgressItem,
+} from "./plan-progress.js";
+export {
+  buildRunView,
+  formatDoneCard,
+  formatLiveTree,
+  type RunView,
+  type RunViewStage,
+} from "./run-view.js";
+export { runTail, type TailDeps } from "./tail.js";

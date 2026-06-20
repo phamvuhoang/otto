@@ -12,8 +12,14 @@ import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = readFileSync(join(root, "docs", "CLI.md"), "utf8");
+// NEXT_ACTION map moved to next-action.ts; loopSrc still points to loop.ts
+// for the deferred-follow-up tally check (which remains in loop.ts).
 const loopSrc = readFileSync(
   join(root, "packages", "core", "src", "loop.ts"),
+  "utf8"
+);
+const nextActionSrc = readFileSync(
+  join(root, "packages", "core", "src", "next-action.ts"),
   "utf8"
 );
 
@@ -84,7 +90,7 @@ const EXAMPLE_BLOCK =
 
 test("each documented summary/hint matches summarize()/nextActionFor()", () => {
   const section = recipesSection(cli);
-  const map = nextActionMap(loopSrc);
+  const map = nextActionMap(nextActionSrc);
 
   const blocks = [...section.matchAll(EXAMPLE_BLOCK)];
   assert.ok(

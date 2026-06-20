@@ -144,6 +144,21 @@ describe("executeStage token mode", () => {
     expect(sr.contextBreakdown!.totalChars).toBe(sentPrompt.length);
   });
 
+  it("forwards the injected sink to runStage", async () => {
+    const sink = { setStage: vi.fn(), onEvent: vi.fn() };
+    await executeStage({
+      stage,
+      vars: { INPUTS: "plan" },
+      workspaceDir,
+      packageDir,
+      iteration: 1,
+      maxRetries: 0,
+      sink,
+    });
+    const runOpts = mocks.runStage.mock.calls[0][6] as { sink?: unknown };
+    expect(runOpts.sink).toBe(sink);
+  });
+
   it("threads agentId into the stage log filename", async () => {
     await executeStage({
       stage,

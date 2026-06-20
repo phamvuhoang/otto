@@ -65,7 +65,7 @@ vi.mock("../stream-render.js", () => ({
   greenOut: (s: string) => s,
   boldOut: (s: string) => s,
   dimOut: (s: string) => s,
-  SYM: { cross: "FAIL" },
+  SYM: { bullet: "*", cont: "  >", check: "ok", cross: "FAIL", rule: "=", ellip: "..." },
   SYM_OUT: { bullet: "*" },
 }));
 

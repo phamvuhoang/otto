@@ -2,6 +2,11 @@
 
 Last updated: 2026-06-18
 
+> **Status:** P0–P6 below are **shipped**. The next phase —
+> efficiency (token cost), input/output legibility, multi-model/sub-agent
+> orchestration, and build-in-public — is planned in
+> **[HARNESS_ROADMAP_PHASE2.md](./HARNESS_ROADMAP_PHASE2.md)** (P7–P12).
+
 This roadmap translates recent agent-harness research into a product plan for
 Otto. It complements `docs/ROADMAP.md`, which focuses on the agent runtime
 abstraction and Codex support. The strategic direction here is broader:

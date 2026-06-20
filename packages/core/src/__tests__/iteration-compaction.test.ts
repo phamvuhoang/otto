@@ -54,6 +54,31 @@ describe("parseCommitLog", () => {
     expect(parseCommitLog("")).toEqual([]);
     expect(parseCommitLog("   \n  \n")).toEqual([]);
   });
+
+  it("skips a chunk whose first line is not a commit hash but keeps valid ones", () => {
+    // The non-hash chunk has ≥3 non-empty lines, so it clears the `<3` guard and
+    // is rejected by the hash check (line 75), not the length guard.
+    const raw = [
+      "not-a-hash",
+      "2026-06-20",
+      "garbage body line",
+      "---",
+      "aaaaaaa",
+      "2026-06-20",
+      "feat: real",
+      "---",
+      "",
+    ].join("\n");
+    const entries = parseCommitLog(raw);
+    expect(entries).toEqual([
+      {
+        hash: "aaaaaaa",
+        date: "2026-06-20",
+        subject: "feat: real",
+        body: "feat: real",
+      },
+    ]);
+  });
 });
 
 describe("compactCommits", () => {

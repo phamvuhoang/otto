@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.19.0...otto-core-v0.20.0) (2026-06-20)
+
+
+### Features
+
+* **core:** Otto's public journal — build-in-public on Threads ([#67](https://github.com/phamvuhoang/otto/issues/67) P12) ([#79](https://github.com/phamvuhoang/otto/issues/79)) ([4a50b6b](https://github.com/phamvuhoang/otto/commit/4a50b6bf3f4ba824f2db44ce35f8c49c0b0a87b0))
+
 ## [0.19.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.18.0...otto-core-v0.19.0) (2026-06-20)
 
 

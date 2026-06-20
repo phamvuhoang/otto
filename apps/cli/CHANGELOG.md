@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0](https://github.com/phamvuhoang/otto/compare/otto-v0.7.0...otto-v0.8.0) (2026-06-20)
+
+
+### Features
+
+* **core:** live execution visualization — console redesign, otto-tail, done card ([#65](https://github.com/phamvuhoang/otto/issues/65) P10) ([#75](https://github.com/phamvuhoang/otto/issues/75)) ([8b8930d](https://github.com/phamvuhoang/otto/commit/8b8930dee9dab62bbd438375d62c50a7e1418197))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @phamvuhoang/otto-core bumped to 0.18.0
+
 ## [0.7.0](https://github.com/phamvuhoang/otto/compare/otto-v0.6.2...otto-v0.7.0) (2026-06-20)
 
 

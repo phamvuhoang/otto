@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.17.0...otto-core-v0.18.0) (2026-06-20)
+
+
+### Features
+
+* **core:** live execution visualization — console redesign, otto-tail, done card ([#65](https://github.com/phamvuhoang/otto/issues/65) P10) ([#75](https://github.com/phamvuhoang/otto/issues/75)) ([8b8930d](https://github.com/phamvuhoang/otto/commit/8b8930dee9dab62bbd438375d62c50a7e1418197))
+
 ## [0.17.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.16.0...otto-core-v0.17.0) (2026-06-20)
 
 

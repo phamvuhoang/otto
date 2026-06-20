@@ -1,0 +1,15 @@
+{
+  "id": "2026-06-20T14-30-00-000Z-63-6",
+  "content": "Optional human checkpoint (issue #63 P8, slice 6) — new plan-checkpoint.ts (pure + injectable substrate). Renders the authored plan's rubric scorecard and asks the operator to approve/edit/reject before implementation begins (the issue's 'optional human checkpoint', tying to the interactive approval-gate candidate). KEY constraint: Otto runs AFK (claude --print, non-interactive), so a blocking stdin prompt CANNOT be forced into the loop — the checkpoint is OPT-IN and record-and-proceed. parseCheckpointResponse(raw): CheckpointDecision maps the operator's free text to 'approve' (y/yes/a/approve), 'edit' (e/edit), or 'reject' (EVERYTHING else incl. empty/n/no/ambiguous) — REJECT is the deliberate safe default so an empty/ambiguous answer never silently green-lights implementation; case-insensitive + trimmed. formatCheckpointPrompt({taskKey, planPath, score}) renders 'Plan checkpoint — <key>' + formatPlanRubric(score) + 'Review the authored plan at <path>.' + 'Approve this plan before implementation? [y]es / [e]dit / [N]o'. resolvePlanCheckpoint(prompt, deps: { interactive, readLine: ()=>Promise<string>, out }) prints the prompt then: if !interactive (AFK, no human) -> prints 'Non-interactive run: plan auto-approved (record assumptions and proceed).' and returns 'approve' WITHOUT ever calling readLine; else returns parseCheckpointResponse(await readLine()). Deps injected so the resolver is fully unit-tested with no real TTY/stdin (an interactive caller would pass interactive: process.stdin.isTTY and a readline-backed readLine). Exported from index.ts (formatCheckpointPrompt, parseCheckpointResponse, resolvePlanCheckpoint + types CheckpointDecision, PlanCheckpointDeps). Live interactive wiring into run-bin/the loop (and the task-key plumbing it would need to locate the just-authored plan) is DEFERRED — substrate only, matching how P7 shipped several pure-then-wired slices; in AFK the checkpoint is effectively a no-op (auto-approve), so substrate is functionally complete for the autonomous path. Pinned by plan-checkpoint.test.ts (7 tests: parse approve/edit/reject incl. case+trim+safe-default; format contains key/scorecard/path/question; resolve auto-approves + records + never reads when non-interactive; reads+parses yes/edit/empty when interactive; prints the prompt). Plan: .otto/tasks/issue-63/plan.md (this run = slice 6 of 7). Remaining: 7 plan-quality gate/feedback.",
+  "category": "convention",
+  "sourceRun": "2026-06-20T14-30-00-000Z-manual",
+  "taskKey": "issue-63",
+  "scope": [
+    "packages/core/src/plan-checkpoint.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T14:30:00.000Z",
+  "useCount": 0
+}

@@ -742,6 +742,19 @@
   `cli-help.ts` (`CliFlags.plan` + parse + help line). Pinned by `cli-help.test.ts`
   (parse) + `run-bin.test.ts` (runs only the plan stage one-shot; rejects a bin
   without `planStage`). OTTO_PLAN env left as a follow-up (flag-only this slice).
+- **Optional human checkpoint (#63 P8, slice 6) — `plan-checkpoint.ts`.** Otto runs
+  AFK (`claude --print`, non-interactive), so a blocking stdin prompt can't be
+  forced into the loop — the checkpoint is OPT-IN + record-and-proceed. Pure +
+  injectable substrate: `parseCheckpointResponse(raw)` maps an answer to
+  `approve`/`edit`/`reject` (REJECT is the safe default — empty/`n`/ambiguous never
+  green-lights); `formatCheckpointPrompt({taskKey,planPath,score})` renders the
+  rubric scorecard + the `[y]es / [e]dit / [N]o` question; `resolvePlanCheckpoint
+  (prompt, deps)` prints it and, when `deps.interactive` is false (AFK), AUTO-
+  APPROVES + records the decision and NEVER reads stdin, else reads one line. Deps
+  ({interactive, readLine, out}) injected so the resolver is unit-tested with no
+  real TTY/stdin. Exported from index.ts. Live interactive wiring (and the
+  task-key plumbing run-bin would need) deferred — substrate, matching how P7
+  shipped pure-then-wired. Pinned by `plan-checkpoint.test.ts`.
 
 
 ## Gotchas

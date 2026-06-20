@@ -252,6 +252,13 @@ export {
   type PlanRubricScore,
 } from "./plan-rubric.js";
 export {
+  formatCheckpointPrompt,
+  parseCheckpointResponse,
+  resolvePlanCheckpoint,
+  type CheckpointDecision,
+  type PlanCheckpointDeps,
+} from "./plan-checkpoint.js";
+export {
   evaluateExpectation,
   parseBenchmarkSuite,
   parseBenchmarkTask,

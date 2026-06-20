@@ -41,10 +41,13 @@ wired it.
   forced to 1, chain replaced with `[planStage]`, `runMode` → `"plan"`. A planning
   run authors the spec+plan for human review, then exits — implementation is a
   separate normal run. Pinned by `cli-help.test.ts` + `run-bin.test.ts`.
-- [ ] **6. Optional human checkpoint.** Render the generated plan and let the
-  operator approve/edit before implementation begins (ties to the interactive
-  approval-gate candidate); skipped in autonomous mode ("record assumptions and
-  proceed"). Pinned by a checkpoint test.
+- [x] **6. Optional human checkpoint.** `plan-checkpoint.ts` (pure + injectable):
+  `formatCheckpointPrompt` renders the rubric scorecard + approve/edit/reject
+  question; `parseCheckpointResponse` maps the answer (reject is the safe default);
+  `resolvePlanCheckpoint(prompt, deps)` prints it and, when non-interactive (AFK),
+  auto-approves and records the decision ("record assumptions and proceed"),
+  otherwise reads one line. Exported from `index.ts`. Live interactive wiring is a
+  follow-up (Otto is AFK). Pinned by `plan-checkpoint.test.ts`.
 - [ ] **7. Plan-quality gate / feedback.** Optionally re-plan when the rubric
   `ratio` is below a threshold (a self-healing plan loop), reporting the score and
   what was missing. Pinned by a loop test.

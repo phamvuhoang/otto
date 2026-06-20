@@ -589,6 +589,29 @@
   Cap is by record `content.length` (deterministic), not rendered-projection size.
   Loop wiring (replacing the templates' `!?cat ./.otto/LEARNINGS.md`) is a later
   slice — this is substrate. Pinned by `memory.test.ts`.
+- **Inter-iteration compaction (#62 P7, slice 6) — pure, INERT-on-the-loop
+  `iteration-compaction.ts`.** Key realization: Otto spawns a FRESH `claude
+  --print` each iteration, so there is NO live transcript carried forward — the
+  only prior-iteration state that fills the next prompt's window is the
+  `<commits>` block (`git log -n 5 --format="%H%n%ad%n%B---" --date=short`). It is
+  count-bounded (5) but each commit BODY is unbounded, so verbose/long histories
+  inflate it. So "summarize prior iterations into a bounded state" = bound that
+  commit block. `parseCommitLog(raw)` splits on `^---$` lines into
+  `{hash,date,subject,body}` entries (first line must be a `[0-9a-f]{7,40}` hash,
+  so the `No commits found` fallback → `[]`; never throws). `compactCommits(commits,
+  {maxChars})` mirrors slice-5 `boundLearnings` shape but DEGRADES instead of
+  DROPS: greedily keep newest-first commits FULL while cumulative
+  `renderFull` chars ≤ budget (`DEFAULT_COMMITS_BUDGET_CHARS` = 2400), then the
+  first overflow + everything after is summarized to **subject-only** (the commit
+  subject IS the iteration's one-line summary — dropping the body, not the commit,
+  is the honest "summarize not carry-full" realization that distinguishes it from
+  `boundLearnings`'s drop). Reports `savedChars` (body chars removed). `kept` is
+  always a contiguous newest prefix + `compacted` the suffix, so
+  `[...kept,...compacted]` preserves newest-first order. `formatCompactedCommits`
+  re-renders the `<commits>`-style body (full for kept, subject-only for compacted)
+  + a one-line `_Compacted: N … saved M chars …_` note ONLY when something was
+  compacted. Loop wiring (swapping the template's `!?git log` commit tag for this)
+  is a later slice — substrate only. Pinned by `iteration-compaction.test.ts`.
 
 
 ## Gotchas

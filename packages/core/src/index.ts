@@ -51,6 +51,14 @@ export {
   type ContextSegment,
 } from "./context-report.js";
 export {
+  DEFAULT_COMMITS_BUDGET_CHARS,
+  compactCommits,
+  formatCompactedCommits,
+  parseCommitLog,
+  type CommitEntry,
+  type CompactedCommits,
+} from "./iteration-compaction.js";
+export {
   allocateRunId,
   listRunIds,
   readManifest,

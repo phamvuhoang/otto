@@ -37,11 +37,20 @@ this burns it down telemetry-first, each optimization gated on the prior slice.
   `formatBoundedLearnings` projects the selection with a "what was dropped" note.
   Loop wiring (swapping the whole-file `!?cat LEARNINGS.md` injection for this) is
   deferred to a later slice. Pinned by `memory.test.ts`.
-- [ ] **6. Inter-iteration compaction.** Summarize prior iterations into a bounded
-  state rather than carrying the full transcript forward.
+- [x] **6. Inter-iteration compaction.** Summarize prior iterations into a bounded
+  state rather than carrying the full transcript forward. Shipped as pure,
+  INERT-on-the-loop functions in `iteration-compaction.ts`: the carried-forward
+  prior-iteration state in Otto is the `<commits>` block (`git log -n 5
+  --format="%H%n%ad%n%B---"`) — count-bounded but body-unbounded. `parseCommitLog`
+  parses that format into entries; `compactCommits` keeps the newest commits full
+  while cumulative chars stay under `DEFAULT_COMMITS_BUDGET_CHARS` and degrades
+  older ones to their subject line (summarized, not dropped), reporting `savedChars`;
+  `formatCompactedCommits` re-renders the block with a "what was compacted" note.
+  Loop wiring (swapping the template's `!?git log` commit injection for this) is a
+  later slice. Pinned by `iteration-compaction.test.ts`.
 - [ ] **7. Read deduplication.** Track files already read this run; avoid
   re-spilling unchanged content.
 - [ ] **8. Per-stage context budget.** A soft, model-aware ceiling that warns and
   triggers compaction when a stage's estimated context exceeds it.
 
-This run implements **task 5**.
+This run implements **task 6**.

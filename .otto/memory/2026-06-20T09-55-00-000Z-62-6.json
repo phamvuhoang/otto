@@ -1,0 +1,16 @@
+{
+  "id": "2026-06-20T09-55-00-000Z-62-6",
+  "content": "Inter-iteration compaction (issue #62 P7, slice 6) shipped as pure, INERT-on-the-loop functions in a NEW module iteration-compaction.ts. Key realization: Otto spawns a FRESH `claude --print` each iteration, so there is NO live transcript carried forward between iterations — the only prior-iteration state that fills the next prompt's window is the <commits> block (`git log -n 5 --format=\"%H%n%ad%n%B---\" --date=short`). It is count-bounded (5) but each commit BODY is unbounded, so verbose/long histories inflate it. So 'summarize prior iterations into a bounded state rather than carrying the full transcript forward' = bound that commit block. parseCommitLog(raw) splits on `^---$` lines into {hash,date,subject,body} entries; the first line must be a [0-9a-f]{7,40} hash, so the `No commits found` fallback and malformed chunks yield [] (never throws). compactCommits(commits, {maxChars}) mirrors slice-5 boundLearnings shape but DEGRADES instead of DROPS: greedily keep newest-first commits FULL while cumulative renderFull chars (`hash\\ndate\\nbody`) <= budget (DEFAULT_COMMITS_BUDGET_CHARS = 2400), then the first overflow and every commit after it is summarized to subject-only (`hash\\ndate\\nsubject`). The commit subject IS the iteration's one-line summary, so dropping the BODY (not the commit) is the honest 'summarize-not-carry-full' realization that distinguishes it from boundLearnings's outright drop. Returns { kept, compacted, keptChars, compactedChars, savedChars, budgetChars } where savedChars = body chars removed. kept is always a contiguous newest prefix and compacted the suffix, so [...kept,...compacted] preserves newest-first order. formatCompactedCommits(c) re-renders the <commits>-style body (full for kept, subject-only for compacted, each followed by a `---` line) plus a one-line '_Compacted: N older commit(s) summarized to their subject (saved M chars) to keep prior-iteration context within the K-char budget._' note ONLY when something was compacted (none -> unmodified full block). Exported from index.ts (parseCommitLog, compactCommits, formatCompactedCommits, DEFAULT_COMMITS_BUDGET_CHARS, types CommitEntry/CompactedCommits). Loop wiring (swapping each template's `!?git log ...` commit injection tag for this bounded set) is deferred to a later slice — substrate only, cannot regress a run. Pinned by iteration-compaction.test.ts. Remaining P7 slices: 7 read-dedup, 8 per-stage budget.",
+  "category": "convention",
+  "sourceRun": "2026-06-20T09-55-00-000Z-3618",
+  "taskKey": "issue-62",
+  "scope": [
+    "packages/core/src/iteration-compaction.ts",
+    "packages/core/src/index.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T09:55:00.000Z",
+  "useCount": 0
+}

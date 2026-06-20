@@ -46,6 +46,7 @@ import {
   SYM_OUT,
 } from "./stream-render.js";
 import type { Stage } from "./stages.js";
+import { maybeJournal } from "./journal.js";
 import {
   addTokenUsage,
   emptyTokenUsage,
@@ -999,6 +1000,23 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     releaseOnce();
     if (notify && (sentinelHit || completedIterations === total)) {
       notifyComplete(completedIterations, sentinelHit);
+    }
+    // Public journal (issue #67 P12): at run end, optionally draft/post a
+    // generic field note through the secrecy gate. A no-op unless the repo opts
+    // in via .otto/config.json; never throws and never affects the run outcome.
+    if (!activeSignal.aborted) {
+      try {
+        await maybeJournal({
+          workspaceDir,
+          packageDir,
+          iteration: completedIterations || 1,
+          maxRetries,
+          agentId: activeAgentId,
+          signal: activeSignal,
+        });
+      } catch {
+        // the journal must never affect a run's outcome.
+      }
     }
   }
   summarize(sawFailure ? "done with failures" : "done", completedIterations);

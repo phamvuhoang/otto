@@ -25,7 +25,7 @@
 
 Otto drives the [Claude Code](https://docs.anthropic.com/claude/docs/claude-code) CLI (or [Codex](https://github.com/openai/codex) via `--agent codex`) against a target repository in an iterating **implement → review** pipeline, running the agent directly on the host. It remembers what it learns, thinks before it codes, reviews its own work on a budget, and survives rate limits and restarts. Docker is not required.
 
-**Built as a real agent harness, not a `while`-loop:** native-OS sandboxing, per-run cost budgets, a git-tracked **evidence bundle** per run, a CI-runnable **eval/benchmark** harness, governed memory, a repo-local **safety policy** with prompt-injection taint-fencing, adaptive compute routing, and reusable **skills** — all driven from the CLI and importable as a library ([`@phamvuhoang/otto-core`](./packages/core)).
+**Built as a real agent harness, not a `while`-loop:** native-OS sandboxing, per-run cost budgets, a git-tracked **evidence bundle** per run, a CI-runnable **eval/benchmark** harness, governed memory, a repo-local **safety policy** with prompt-injection taint-fencing, adaptive compute routing, reusable **skills**, and an opt-in, secrecy-filtered **public journal** (build-in-public to Threads, off by default) — all driven from the CLI and importable as a library ([`@phamvuhoang/otto-core`](./packages/core)).
 
 > ⚠️ **Security:** Otto runs Claude with `--permission-mode bypassPermissions`. The default `OTTO_RUNNER=sandbox` uses Claude Code's native OS sandbox (Seatbelt on macOS) to confine writes to the workspace; `OTTO_RUNNER=host` runs unsandboxed. Point it only at repositories, plans, and issues you trust — see **[SECURITY.md](./SECURITY.md)**.
 

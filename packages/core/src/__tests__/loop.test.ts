@@ -672,6 +672,16 @@ describe("runLoop", () => {
     expect(outcome.costUsd).toBeCloseTo(0.25);
   });
 
+  it("the journal hook is a no-op without a journal config (#67 P12)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+    await runLoop(loopOptions(dirs));
+    // No .otto/config.json journal block ⇒ the run-end hook does nothing:
+    // no .otto/journal dir, no extra stages beyond the gate implementer.
+    expect(existsSync(join(dirs.workspaceDir, ".otto", "journal"))).toBe(false);
+  });
+
   describe("end-of-run summary", () => {
     it("reports complete + iterations + cost on sentinel exit", async () => {
       const dirs = makeDirs();

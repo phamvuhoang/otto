@@ -114,6 +114,13 @@ export {
   type ContextReportDeps,
 } from "./context-report-cli.js";
 export {
+  formatPlanReport,
+  readTaskPlans,
+  runPlanReport,
+  type PlanReportDeps,
+  type TaskPlanScore,
+} from "./plan-report-cli.js";
+export {
   formatAuditReport,
   runMemory,
   type MemoryDeps,

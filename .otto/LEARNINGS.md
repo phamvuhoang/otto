@@ -698,6 +698,19 @@
   pass no `planScore` → `null`, so the A/B table is unaffected until plans are
   scored. Pinned by `eval.test.ts`. Adding a field to `EvalSignals` requires the
   test `signals()` helper default to include it (`planQualityRatio: null`).
+- **`otto-afk --plan-report` (#63 P8, slice 3) — `plan-report-cli.ts`.** Read-only
+  surface mirroring `--context-report`: pure/I-O split — `formatPlanReport(tasks)`
+  is PURE (renders a per-task scorecard via `formatPlanRubric`), `readTaskPlans(ws)`
+  does the I/O (scans `<ws>/.otto/tasks/`, for each subdir scores `spec.md` +
+  `plan.md` CONCATENATED — the rubric criteria span both files — skipping empty
+  dirs, `[]` on missing dir, never throws), `runPlanReport(deps)` glues them and
+  returns an exit code (1 when no plan). Flag wiring is the SAME 5-touch pattern as
+  every other early-exit flag: `CliFlags.planReport` field + `let planReport=false`
+  + `--plan-report` arm + include in the returned object + a help line in
+  `cli-help.ts`; then a `run-bin.ts` early-return (dynamic `import()` of
+  `plan-report-cli.js`, `if (code !== 0) process.exit(code)`, before workspace/arg
+  resolution). Exported from index.ts. Pinned by `plan-report-cli.test.ts` +
+  `cli-help.test.ts` (`parseFlags`) + `run-bin.test.ts` (exit-code propagation).
 
 
 ## Gotchas

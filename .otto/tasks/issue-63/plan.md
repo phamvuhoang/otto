@@ -20,10 +20,13 @@ wired it.
   scorer stays pure (the rubric reads a document, not the trajectory). Added a
   higher-is-better "Plan quality" column to `compareTrajectories`. Pinned by
   `eval.test.ts`.
-- [ ] **3. `otto-afk --plan-report` read-only surface.** A pure formatter that
-  reads the persisted `.otto/tasks/<task-key>/{spec,plan}.md`, scores them with the
-  rubric, and prints the scorecard (mirrors `--context-report`). Pinned by
-  `cli-help.test.ts` + a cli test.
+- [x] **3. `otto-afk --plan-report` read-only surface.** `plan-report-cli.ts`:
+  `readTaskPlans(workspaceDir)` scores every `.otto/tasks/<key>/` (spec+plan
+  concatenated) with the rubric; `formatPlanReport` (pure) renders a per-task
+  scorecard; `runPlanReport` prints it and returns an exit code (1 when no plan).
+  Flag wired in `cli-help.ts` + early-return in `run-bin.ts` (exit-code propagated,
+  mirroring `--context-report`). Pinned by `plan-report-cli.test.ts`,
+  `cli-help.test.ts`, `run-bin.test.ts`.
 - [ ] **4. The `plan` stage — template + registry.** Add a `plan` stage to
   `STAGES` with a `plan.md` template that emits a spec + plan in the proven shape
   (problem → decisions → scope guard → file map → task-by-task steps with

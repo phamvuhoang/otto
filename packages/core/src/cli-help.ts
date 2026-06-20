@@ -19,6 +19,9 @@ export type CliFlags = {
   /** `--context-report` toggle (default false; issue #62 P7). Prints the latest
    *  run's per-stage context composition + token slope, then exits. */
   contextReport: boolean;
+  /** `--plan-report` toggle (default false; issue #63 P8). Scores the authored
+   *  plans under `.otto/tasks/` with the plan-quality rubric, then exits. */
+  planReport: boolean;
   noKeepAlive: boolean;
   maxRetries?: number;
   detach: boolean;
@@ -167,6 +170,7 @@ export function parseFlags(
   let version = false;
   let printConfig = false;
   let contextReport = false;
+  let planReport = false;
   let noKeepAlive = false;
   let maxRetries: number | undefined;
   let expectingMaxRetries = false;
@@ -322,6 +326,7 @@ export function parseFlags(
     else if (a === "-V" || a === "--version") version = true;
     else if (a === "--print-config") printConfig = true;
     else if (a === "--context-report") contextReport = true;
+    else if (a === "--plan-report") planReport = true;
     else if (a === "--no-keep-alive") noKeepAlive = true;
     else if (a === "--max-retries") expectingMaxRetries = true;
     else if (a === "--detach") detach = true;
@@ -407,6 +412,7 @@ export function parseFlags(
     version,
     printConfig,
     contextReport,
+    planReport,
     noKeepAlive,
     maxRetries,
     detach,
@@ -483,6 +489,7 @@ Flags:
   -V, --version       print bin + core version and exit
   --print-config      print resolved config + a preflight check of run prerequisites, then exit
   --context-report    print the latest run's per-stage context composition + token slope (from .otto/runs/), then exit
+  --plan-report       score the authored plans (.otto/tasks/*/spec.md+plan.md) with the plan-quality rubric, then exit
   --no-keep-alive     skip OS wake-lock acquisition (default: acquire system-sleep inhibitor for loop lifetime)
   --max-retries <N>   per-stage retry budget on transient failure (default: 3; 0 disables retries)
   --detach            fork the loop into a background process, print pid + log path, and exit (parent returns 0)

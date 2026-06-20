@@ -142,6 +142,16 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     return;
   }
 
+  // --plan-report (issue #63 P8): a read-only surface scoring the authored plans
+  // under .otto/tasks/ with the plan-quality rubric. Like --context-report it
+  // prints and exits without running a stage.
+  if (flags.planReport) {
+    const { runPlanReport } = await import("./plan-report-cli.js");
+    const code = await runPlanReport();
+    if (code !== 0) process.exit(code);
+    return;
+  }
+
   const envMaxWait = process.env.OTTO_MAX_WAIT?.trim();
   const maxWaitMs =
     flags.maxWaitMs ?? (envMaxWait ? parseDurationMs(envMaxWait) : undefined);

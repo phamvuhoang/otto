@@ -1,0 +1,17 @@
+{
+  "id": "2026-06-20T13-00-00-000Z-63-3",
+  "content": "otto-afk --plan-report read-only surface (issue #63 P8, slice 3) — new plan-report-cli.ts, mirroring the --context-report surface. Pure/I-O split (same discipline as context-report-cli.ts): formatPlanReport(tasks: TaskPlanScore[]) is PURE — renders a 'Plan report' header + a 'Task <key>' + formatPlanRubric(score) scorecard per task. readTaskPlans(workspaceDir) does the I/O — readdirSync(<ws>/.otto/tasks, withFileTypes) for subdirs (sorted), for each reads spec.md + plan.md and scores them CONCATENATED with scorePlanQuality (the rubric criteria span both files, so a problem-in-spec + tasks-in-plan both get credited), skips a dir whose combined doc is empty, returns [] on a missing/unreadable .otto/tasks dir, never throws. runPlanReport(deps = {env,cwd,out,err}) resolves workspaceDir from OTTO_WORKSPACE ?? cwd, reads+scores, prints formatPlanReport, returns the process exit code (1 only when there are no task plans). Flag wiring is the standard 5-touch early-exit-flag pattern: in cli-help.ts add CliFlags.planReport boolean field + `let planReport = false` + `else if (a === '--plan-report') planReport = true` + include planReport in the returned flags object + a help line; then in run-bin.ts an early-return block (dynamic `await import('./plan-report-cli.js')`, `const code = await runPlanReport(); if (code !== 0) process.exit(code); return;`) placed right after the --context-report block, BEFORE workspace/token/agent resolution and positional-arg validation. Exported from index.ts (formatPlanReport, readTaskPlans, runPlanReport + types PlanReportDeps, TaskPlanScore). Pinned by plan-report-cli.test.ts (6 tests: formatPlanReport per-task scorecards; readTaskPlans sorts by key + concatenates spec+plan + skips empty + [] when none; runPlanReport exit 1 no plans / exit 0 with a plan), cli-help.test.ts (parseFlags default false / set true), run-bin.test.ts (exit-code propagation: no plan -> exit 1; plan present -> exit 0 no process.exit). Plan: .otto/tasks/issue-63/plan.md (this run = slice 3 of 7).",
+  "category": "convention",
+  "sourceRun": "2026-06-20T13-00-00-000Z-manual",
+  "taskKey": "issue-63",
+  "scope": [
+    "packages/core/src/plan-report-cli.ts",
+    "packages/core/src/cli-help.ts",
+    "packages/core/src/run-bin.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T13:00:00.000Z",
+  "useCount": 0
+}

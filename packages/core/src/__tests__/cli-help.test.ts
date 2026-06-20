@@ -465,6 +465,15 @@ describe("parseFlags --context-report", () => {
   });
 });
 
+describe("parseFlags --plan-report", () => {
+  it("defaults planReport to false", () => {
+    expect(parseFlags(["5"]).planReport).toBe(false);
+  });
+  it("sets planReport when the flag is present", () => {
+    expect(parseFlags(["--plan-report"]).planReport).toBe(true);
+  });
+});
+
 describe("printConfig routing", () => {
   it("shows the router off by default", () => {
     expect(configOutput({})).toMatch(/routing\s+off/);

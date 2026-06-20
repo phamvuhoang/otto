@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -378,6 +378,49 @@ describe("runBin --context-report", () => {
     }) as any);
 
     await expect(runBin(["--context-report"], cfg)).resolves.toBeUndefined();
+    expect(exit).not.toHaveBeenCalled();
+  });
+});
+
+describe("runBin --plan-report", () => {
+  const oldWorkspace = process.env.OTTO_WORKSPACE;
+  let workspace: string | undefined;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (workspace) rmSync(workspace, { recursive: true, force: true });
+    workspace = undefined;
+    if (oldWorkspace === undefined) delete process.env.OTTO_WORKSPACE;
+    else process.env.OTTO_WORKSPACE = oldWorkspace;
+  });
+
+  it("propagates exit 1 when there is no plan to report on", async () => {
+    workspace = makeWorkspace();
+    process.env.OTTO_WORKSPACE = workspace;
+    captureStdout();
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("exit");
+    }) as any);
+
+    await expect(runBin(["--plan-report"], cfg)).rejects.toThrow("exit");
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("exits 0 when an authored plan can be reported", async () => {
+    workspace = makeWorkspace();
+    process.env.OTTO_WORKSPACE = workspace;
+    mkdirSync(join(workspace, ".otto", "tasks", "issue-1"), { recursive: true });
+    writeFileSync(
+      join(workspace, ".otto", "tasks", "issue-1", "plan.md"),
+      "## Problem\nx\n## Tasks\n- [ ] 1. write a failing test. verify: `pnpm -r test`\n- [ ] 2. go"
+    );
+    captureStdout();
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("exit");
+    }) as any);
+
+    await expect(runBin(["--plan-report"], cfg)).resolves.toBeUndefined();
     expect(exit).not.toHaveBeenCalled();
   });
 });

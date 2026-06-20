@@ -661,6 +661,31 @@
   index.ts. Pinned by `context-budget.test.ts`. All six issue-#62 scope items now
   have pure substrate; the remaining P7 work is loop-wiring slices 4–8 to turn the
   substrate into measured savings.
+- **Plan-quality rubric (#63 P8, slice 1) — pure, INERT-on-the-loop
+  `plan-rubric.ts`.** P8 (spec & plan authoring) is burned down RUBRIC-FIRST, the
+  same "measure before optimizing" discipline as P7: you can't prove a `plan`
+  stage emits world-class plans, nor track the success metric "plan-completeness
+  rubric score ↑", without first a way to SCORE a plan. The rubric is a sibling to
+  `eval.ts`'s `scoreTrajectory` (pure scorer over recorded data) but scores a plan/
+  spec markdown DOCUMENT, not a run trajectory. `scorePlanQuality(doc)` checks 8
+  criteria — problem, decisions/assumptions, scopeGuard, fileMap, taskBreakdown,
+  testFirst, verifyCommands, successCriteria (the issue's explicit four + the
+  proven-shape essentials) — each a PURE deterministic predicate (header/keyword
+  heuristics in `PLAN_CRITERIA`, no tokenizer, no model). It judges STRUCTURAL
+  completeness (does the plan have the sections a good plan has), the orthogonal
+  question to the SEMANTIC quality a human/model judges at the checkpoint —
+  heuristic and labelled as such (mirrors P7's ceil(chars/4) honesty). Returns
+  `{results[], metCount, maxScore, ratio (0..1, 0 when no criteria), missing[]}`;
+  equal weights (YAGNI on weighting — the per-criterion breakdown lets a consumer
+  reweight later). `formatPlanRubric` renders a `plan quality: N/8 (P%)` scorecard
+  with a `[x]/[ ]` line per criterion + a `missing:` note. Detector edge: fileMap
+  matches a "File map/structure"/"Files"/"component map" HEADING OR ≥2 path-like
+  backticked tokens (`/`-or-source-extension, so `pnpm -r test` is NOT counted as
+  a path); verifyCommands needs `verify:` OR (a verify mention AND a command
+  token). Exported from index.ts. Wiring (capture as eval signal, `--plan-report`
+  surface, the `plan` stage + template, the human checkpoint) are later slices —
+  substrate only, cannot regress a run. Pinned by `plan-rubric.test.ts`. Plan:
+  `.otto/tasks/issue-63/{spec,plan}.md` (7 slices, this run = slice 1).
 
 
 ## Gotchas

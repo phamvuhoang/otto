@@ -237,6 +237,14 @@ export {
   type LabelledSignals,
 } from "./eval.js";
 export {
+  PLAN_CRITERIA,
+  formatPlanRubric,
+  scorePlanQuality,
+  type PlanCriterion,
+  type PlanCriterionResult,
+  type PlanRubricScore,
+} from "./plan-rubric.js";
+export {
   evaluateExpectation,
   parseBenchmarkSuite,
   parseBenchmarkTask,

@@ -20,7 +20,9 @@ import {
   SYM,
   SYM_OUT,
 } from "./stream-render.js";
-import { tokenUsageTotal } from "./tokens.js";
+import type { TokenUsage } from "./tokens.js";
+import { formatTokenUsage } from "./tokens.js";
+import { nextActionFor } from "./loop.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,8 +51,8 @@ export type RunView = {
   iterationsTotal: number;
   /** Cumulative USD cost from the manifest. */
   costUsd: number;
-  /** Total token count across all token usage fields. */
-  tokenUsage: number;
+  /** Full token usage breakdown from the manifest. */
+  tokenUsage: TokenUsage;
   /** Wall-clock duration in ms; null when un-finalized or timestamps unparseable, never NaN. */
   elapsedMs: number | null;
   /** Terminal exit reason string, or null while running. */
@@ -111,7 +113,7 @@ export function buildRunView(
     iterationsDone: manifest.completedIterations ?? 0,
     iterationsTotal: manifest.iterations,
     costUsd: manifest.costUsd,
-    tokenUsage: tokenUsageTotal(manifest.tokenUsage),
+    tokenUsage: manifest.tokenUsage,
     elapsedMs,
     exitReason,
     nextAction: manifest.nextAction ?? null,
@@ -233,7 +235,7 @@ export function formatLiveTree(view: RunView): string {
   // Progress line: iterations + cost
   const iterLine = `iter ${view.iterationsDone}/${view.iterationsTotal}`;
   const costLine = `$${view.costUsd.toFixed(2)}`;
-  const tokenLine = `${view.tokenUsage.toLocaleString()} tok`;
+  const tokenLine = formatTokenUsage(view.tokenUsage);
   let metricsLine = `${dim(iterLine)}  ${dim(costLine)}  ${dim(tokenLine)}`;
   if (view.elapsedMs != null) {
     metricsLine += `  ${dim(formatElapsed(view.elapsedMs))}`;
@@ -288,20 +290,3 @@ function formatElapsed(ms: number): string {
   return `${min}m${sec > 0 ? `${sec}s` : ""}`;
 }
 
-/**
- * Fallback next-action hint by reason, mirroring loop.ts NEXT_ACTION. Only
- * used when the manifest's `nextAction` field is absent (running view).
- */
-function nextActionFor(reason: string): string {
-  const MAP: Record<string, string> = {
-    complete: "review the diff, then open a PR",
-    done: "review the diff, then open a PR",
-    "done with failures":
-      "inspect the failed stage logs under `.otto-tmp/logs`, then re-run",
-    "stopped (budget)": "raise `--budget` and re-run to resume",
-    "halted (rate limit)": "re-run after the limit resets to resume",
-    aborted: "re-run to resume from the saved iteration",
-    "stopped (error)": "inspect the error above, then re-run",
-  };
-  return MAP[reason] ?? "re-run to resume";
-}

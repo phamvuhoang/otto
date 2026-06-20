@@ -51,6 +51,7 @@ export {
   type RunArtifact,
   type RunManifest,
   type SafetyEvent,
+  type SkillUsage,
   type StageRecord,
 } from "./run-report.js";
 export {

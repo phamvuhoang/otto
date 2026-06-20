@@ -159,6 +159,12 @@ describe("stage record I/O", () => {
     writeStageRecord(d, "rid", 0, { ...stageRecord, safetyEvents });
     expect(readStageRecords(d, "rid")[0].safetyEvents).toEqual(safetyEvents);
   });
+  it("round-trips skills used recorded on a stage record", () => {
+    const d = tmp();
+    const skillsUsed = [{ name: "release-flow", version: "1.0.0", reasons: ["scope match"] }];
+    writeStageRecord(d, "rid", 0, { ...stageRecord, skillsUsed });
+    expect(readStageRecords(d, "rid")[0].skillsUsed).toEqual(skillsUsed);
+  });
   it("returns [] when the run has no stage records", () => {
     expect(readStageRecords(tmp(), "nope")).toEqual([]);
   });

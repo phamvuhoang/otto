@@ -31,6 +31,8 @@ export type EvalSignals = {
   elapsedMs: number | null;
   /** Safety events recorded across the manifest and stage records (issue #43). */
   safetyEventCount: number;
+  /** Skills applied across the manifest and stage records (issue #44). */
+  skillUsageCount: number;
 };
 
 const SUCCESS_REASONS = new Set(["complete", "done"]);
@@ -58,6 +60,9 @@ export function scoreTrajectory(
     safetyEventCount:
       (manifest.safetyEvents?.length ?? 0) +
       stages.reduce((n, s) => n + (s.safetyEvents?.length ?? 0), 0),
+    skillUsageCount:
+      (manifest.skillsUsed?.length ?? 0) +
+      stages.reduce((n, s) => n + (s.skillsUsed?.length ?? 0), 0),
   };
 }
 
@@ -122,6 +127,9 @@ const COMPARE_COLUMNS: CompareColumn[] = [
   // detected/reported injections (good detection), so there is no honest
   // direction to mark best/worst.
   { header: "Safety events", cell: (s) => String(s.safetyEventCount) },
+  // Shown but NOT ranked: more skill reuse is usually good (less re-planning),
+  // but a config can succeed with zero skills, so there is no honest best/worst.
+  { header: "Skills used", cell: (s) => String(s.skillUsageCount) },
 ];
 
 /**

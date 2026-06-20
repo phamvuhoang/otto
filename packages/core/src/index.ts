@@ -353,3 +353,9 @@ export {
   type RunViewStage,
 } from "./run-view.js";
 export { runTail, type TailDeps } from "./tail.js";
+export {
+  appendAudit,
+  screenGate1,
+  type GateContext,
+  type GateResult,
+} from "./journal-gate.js";

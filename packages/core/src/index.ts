@@ -340,3 +340,8 @@ export {
   defaultLinearCliDeps,
   type LinearCliDeps,
 } from "./linear-cli.js";
+export {
+  parsePlanProgress,
+  type PlanProgress,
+  type PlanProgressItem,
+} from "./plan-progress.js";

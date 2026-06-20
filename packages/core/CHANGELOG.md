@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.14.0...otto-core-v0.15.0) (2026-06-20)
+
+
+### Features
+
+* **core:** context & token efficiency substrate ([#62](https://github.com/phamvuhoang/otto/issues/62) P7 slices 1–8) ([#69](https://github.com/phamvuhoang/otto/issues/69)) ([6bc94c0](https://github.com/phamvuhoang/otto/commit/6bc94c045bcf37761ea0d8be7300eef5c43b8d46))
+
 ## [0.14.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.13.0...otto-core-v0.14.0) (2026-06-20)
 
 

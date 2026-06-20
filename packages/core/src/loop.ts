@@ -482,9 +482,11 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   let runCostUsd = 0;
   let runTokenUsage = emptyTokenUsage();
   let cooldownFactor = 1;
-  // Repeated-failure escalation count for model routing (issue #66 P11). 0 here;
-  // slice 3 raises it from the policy's repeated-failure streak so a wedged run
-  // climbs to a stronger tier.
+  // Model-routing escalation (issue #66 P11): count consecutive iterations whose
+  // gate stage (the implementer) returned an error, then escalate the routed tier
+  // by `streak - 1` — the current tier gets one retry before the first bump, and
+  // a persistently wedged run climbs toward the strong tier (capped in routeModel).
+  let gateFailureStreak = 0;
   let modelEscalations = 0;
   const outcome = (): LoopOutcome => ({
     costUsd: runCostUsd,
@@ -964,6 +966,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             clearState(workspaceDir);
             return outcome();
           }
+          // Gate stage did not finish the work — track failures to escalate the
+          // model tier on a persistently wedged run (issue #66 P11).
+          gateFailureStreak = sr!.isError ? gateFailureStreak + 1 : 0;
+          modelEscalations = Math.max(0, gateFailureStreak - 1);
         }
         await keyboardControls.pauseIfRequested();
       }

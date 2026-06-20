@@ -474,6 +474,32 @@
   conflates blocked-violation with detected-injection, no honest direction).
   Pinned by `render.test.ts` / `stage-exec.test.ts` / `run-report.test.ts` /
   `eval.test.ts`.
+- **Operator experience (#45 P6) is read-only surfaces over existing substrate;
+  design in `docs/ARCHITECTURE.md` "Operator surfaces".** `otto-inspect latest`
+  already worked (#39). New: `otto-runs list` (`runs-cli.ts`: `summarizeManifest`
+  + `formatRunsList`), `otto-eval compare <a> <b>` (`runEvalCompare` in
+  `eval-run.ts` — the NON-paid path; `compare` short-circuits at the TOP of
+  `runEval` before any suite/model), and `--explain-routing` (`explainRouting`
+  formatter in `risk.ts`, threaded cli-help → run-bin → loop; only meaningful with
+  `--adaptive-router`, no-op note otherwise; `--print-config` gains a `routing`
+  line). Every bin is the `runInspect` shape (pure formatter + thin `run*(argv,
+  deps)`), introduces NO run-time behavior → cannot regress a loop. Pinned by
+  `runs-cli.test.ts` / `eval-run.test.ts` / `risk.test.ts` / `cli-help.test.ts`.
+- **Skills (#44 P5) — `skills.ts` + `skills-cli.ts`, INERT on the loop (no
+  auto-apply this PR); design in `docs/ARCHITECTURE.md` "Skill extraction &
+  reuse".** A skill is a DIRECTORY package `.otto/skills/<name>/` (skill.json +
+  instructions.md, the .md is the body source of truth), modelled on memory.ts —
+  directory-is-the-list, never-throw readers. **Validation gates reuse:**
+  `skillStatus` → unvalidated/validated/stale (from `validation.lastValidatedRun`
+  + `revalidateAfterDays`, mirrors `memoryStatus`); `selectSkills` treats ONLY
+  `validated` as eligible. Retrieval ranks by capability + scope-glob (`globMatch`)
+  + risk class (a constraint naming the `classifyRisk` class excludes the skill);
+  every `SkillMatch` carries `reasons[]` (the "why selected" metric).
+  `findSkillCandidates` groups successful runs by `<bin>::<mode>::<inputs>`,
+  suggests ≥2-seen (never auto-promotes). `SkillUsage`/`skillsUsed[]` +
+  `skillUsageCount` (unranked eval column) surface usage — INERT until auto-use.
+  Read-only `otto-skills` bin (`list`/`audit`/`why`/`candidates`) never runs tests
+  or mutates a package. Pinned by `skills.test.ts` / `skills-cli.test.ts`.
 
 
 ## Gotchas

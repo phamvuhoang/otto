@@ -464,6 +464,45 @@ Each child is scoped exactly like a single-issue run (its own `<promise>NO MORE 
 
 ---
 
+## Operator commands
+
+Read-only views over the evidence bundles under `.otto/runs/` (no model calls, never paid). All resolve the workspace from `OTTO_WORKSPACE` (default: cwd).
+
+```bash
+# One run's report: "what happened and why did Otto stop?". `latest` = most recent.
+otto-inspect [<run-id>|latest]
+
+# One row per run: id, bin, mode, status, iterations, cost, elapsed (newest first).
+otto-runs list
+
+# A/B two recorded runs side-by-side (succeeded / cost / tokens / elapsed / safety
+# events / skills used), marking best/worst per directional signal. `latest` works.
+otto-eval compare <run-a> <run-b>
+```
+
+### `--explain-routing`
+
+With `--adaptive-router` on, `--explain-routing` (or `OTTO_EXPLAIN_ROUTING=1`) prints the router's per-iteration reasoning to stderr — the change **class** + risk **level**, the signals that drove it, the chosen review **depth** + **lenses**, and the progress decision (`continue` / stop / escalate) with its reason. Without `--adaptive-router` there is no routing decision to explain, so the flag is a no-op (it says so once).
+
+```bash
+otto-afk --adaptive-router --explain-routing "./docs/plans/feature.md" 10
+```
+
+### `otto-skills` — repo-local skill packages
+
+A skill is a git-tracked directory package `.otto/skills/<name>/` — `skill.json` (capabilities, constraints, scope globs, validation provenance) + `instructions.md`. The bin is **read-only**: it never runs a skill's tests or applies a skill (the loop does not auto-apply skills).
+
+```bash
+otto-skills list                              # inventory + derived status (validated/unvalidated/stale)
+otto-skills audit                             # how many are usable; which need (re)validation
+otto-skills why <changed-path>...             # which skills retrieval would select for these files, and why
+otto-skills candidates                        # workflows that succeeded the same way >= 2x — worth extracting
+```
+
+A skill is **eligible** for reuse only once a successful run has validated it (`validation.lastValidatedRun`) and it is within its `revalidateAfterDays` window; otherwise `otto-skills why` flags it `skip` with the reason. Retrieval ranks by declared capability, scope-glob match against the changed files, and the change's risk class (a skill whose constraints forbid that class is excluded).
+
+---
+
 ## Stopping a run
 
 - **Natural stop:** implementer emits `<promise>NO MORE TASKS</promise>`.

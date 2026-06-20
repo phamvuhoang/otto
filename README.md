@@ -68,6 +68,8 @@ More than a `while`-loop around `claude`:
 - 🧾 **It leaves a paper trail.** Every run writes a durable **evidence bundle** to `.otto/runs/<run-id>/` — a manifest (inputs, runtime, iteration count, token/cost totals, exit reason, next action) plus one record per stage. `otto-inspect [latest]` renders it into a compact "what happened and why did Otto stop?" report, so you review the outcome instead of replaying `.otto-tmp/logs`.
 - 🗃️ **Its memory is governed, not a growing blob.** Underneath the flat `LEARNINGS.md`, Otto can keep structured memory records as one git-tracked JSON file each under `.otto/memory/<id>.json` — every record carrying provenance (source run, task key), scope (which files/modules it applies to), confidence, trust level, and a freshness policy (expiry / revalidate). Newer records supersede older ones. `otto-memory audit` reports stale, conflicting, and frequently-used entries _before_ they influence a run, and `otto-memory project` renders only the **active** records back into a bounded `LEARNINGS.md` — so prompt size from memory stays explainable instead of contaminating unrelated runs with stale assumptions.
 - 🛡️ **It governs what an unattended run may do.** A git-tracked `.otto/policy.json` declares repo-local safety rules — blocked commands, allowed write roots / network domains, secret patterns, high-risk globs, approval-required actions. Otto evaluates every host-shell / `@spill` command against the deny-list at the render boundary: a blocked command is _skipped_ — never executed — and recorded as a `blocked` safety event in the run's evidence bundle. Untrusted inputs it ingests (issue bodies, comments, external review docs) are fenced in a labelled `<untrusted>` block carrying a do-not-obey warning, so prompt-injection text can't pose as instructions. **The default empty policy restricts nothing**, so trusted local workflows are unchanged — a repo opts into governance by populating the file.
+- 🛠️ **It gives you an operator view.** A CLI-first cockpit over the evidence bundles: `otto-runs list` for a one-row-per-run summary (status, iterations, cost, elapsed), `otto-inspect [latest]` for one run's report, and `otto-eval compare <run-a> <run-b>` to A/B two past runs side-by-side **without re-paying for a run**. `--explain-routing` prints the adaptive router's per-iteration reasoning (change class, risk, chosen review depth) so a routing decision is never a black box.
+- 🧩 **It can turn repeated workflows into skills.** Stable, repeated procedures (release flow, test bootstrap, a migration pattern) can be promoted into git-tracked `.otto/skills/<name>/` packages — instructions + metadata + constraints + a last-validated run. `otto-skills candidates` suggests them from runs that succeeded the same way twice; `otto-skills why <changed-files>` shows which skills retrieval would pick and **why** (by capability, touched files, and change risk). A skill must be **validated before it is eligible**, and stale skills are flagged rather than reapplied.
 
 Beyond the build loop, two read/repair modes reuse all of the above:
 
@@ -116,6 +118,17 @@ otto-ghafk --watch --watch-interval 300 5
 # Inspect the most recent run's evidence bundle (what happened, why it stopped)
 otto-inspect latest
 
+# Operator view: list recent runs, then A/B two of them (free — no model call)
+otto-runs list
+otto-eval compare <run-a> <run-b>
+
+# See why the adaptive router chose each iteration's review depth
+otto-afk --adaptive-router --explain-routing "./docs/plans/feature.md" 10
+
+# Skills: suggest candidates from repeated runs; see why one would be selected
+otto-skills candidates
+otto-skills why packages/core/src/eval.ts
+
 # Audit governed memory: stale, conflicting, and frequently-used records
 otto-memory audit
 
@@ -138,7 +151,7 @@ Full flag reference and more verify / apply-review recipes: **[docs/CLI.md](./do
 
 Otto ships as two npm packages:
 
-- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool). `otto-inspect` renders a past run's evidence bundle; `otto-memory` audits the governed memory records; `otto-eval` benchmarks harness quality across configs (the [eval suite](./benchmarks)).
+- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool). The read-only operator bins: `otto-inspect` renders one run's evidence bundle, `otto-runs` lists recent runs, `otto-eval compare` A/Bs two of them (and `otto-eval` benchmarks harness quality across configs — the [eval suite](./benchmarks)), `otto-memory` audits the governed memory records, and `otto-skills` inventories repo-local skill packages.
 - **[`@phamvuhoang/otto-core`](./packages/core)** — the library: iteration loop, native-sandbox runner, template renderer, stage registry. Importable from any Node project.
 
 Each iteration runs a **stage chain**: a **gate** stage (implement / verify / apply-review, depending on the bin and flags) followed by a **reviewer**. Before each stage, Otto renders a prompt template — expanding `@include`, `@spill`, `` !?`cmd` ``, `` !`cmd` ``, and `{{ INPUTS }}` tags — and injects the workspace's `.otto/LEARNINGS.md`. If the gate emits the sentinel `<promise>NO MORE TASKS</promise>`, the loop exits before the reviewer runs.

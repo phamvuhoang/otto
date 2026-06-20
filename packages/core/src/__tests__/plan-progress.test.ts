@@ -15,10 +15,22 @@ describe("parsePlanProgress", () => {
     });
   });
 
-  it("never throws on any input", () => {
+  it("never throws on any input and returns zero-state", () => {
+    const zero = { checked: 0, total: 0, items: [] };
     expect(() => parsePlanProgress(null as unknown as string)).not.toThrow();
+    expect(parsePlanProgress(null as unknown as string)).toEqual(zero);
     expect(() => parsePlanProgress(undefined as unknown as string)).not.toThrow();
+    expect(parsePlanProgress(undefined as unknown as string)).toEqual(zero);
     expect(() => parsePlanProgress("   ")).not.toThrow();
+  });
+
+  it("successive calls on the same input return independent results", () => {
+    const md = "- [x] task one\n- [ ] task two";
+    const first = parsePlanProgress(md);
+    const second = parsePlanProgress(md);
+    expect(first).toEqual(second);
+    expect(first).not.toBe(second);
+    expect(first.items).not.toBe(second.items);
   });
 
   it("counts a single unchecked item", () => {

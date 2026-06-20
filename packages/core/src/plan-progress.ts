@@ -31,8 +31,6 @@ export type PlanProgress = {
 
 const CHECKBOX_LINE_RE = /^\s*[-*]\s+\[( |x|X)\]\s+(.*)$/gm;
 
-const EMPTY: PlanProgress = { checked: 0, total: 0, items: [] };
-
 /**
  * Parse GitHub task-list checkboxes from a plan markdown document.
  *
@@ -40,7 +38,8 @@ const EMPTY: PlanProgress = { checked: 0, total: 0, items: [] };
  * result is always a valid {@link PlanProgress}. Never throws.
  */
 export function parsePlanProgress(md: string): PlanProgress {
-  if (typeof md !== "string" || md.length === 0) return EMPTY;
+  if (typeof md !== "string" || md.length === 0)
+    return { checked: 0, total: 0, items: [] };
 
   const items: PlanProgressItem[] = [];
   let checked = 0;
@@ -58,6 +57,6 @@ export function parsePlanProgress(md: string): PlanProgress {
     items.push({ text, done });
   }
 
-  if (items.length === 0) return EMPTY;
+  if (items.length === 0) return { checked: 0, total: 0, items: [] };
   return { checked, total: items.length, items };
 }

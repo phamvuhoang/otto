@@ -26,6 +26,7 @@ import {
   type StageRecord,
 } from "./run-report.js";
 import { executeStage } from "./stage-exec.js";
+import { ConsoleUi, VerboseSink, type EventSink } from "./console-ui.js";
 import {
   clearState,
   matchesResume,
@@ -175,6 +176,10 @@ export type LoopOptions = {
   /** Switch to the fallback runtime on a limit instead of waiting for the reset.
    *  Default false — switching providers changes model behavior, so it is opt-in. */
   autoSwitchOnLimit?: boolean;
+  /** Restore the full in-run firehose (issue #65 P10). Default false → the quiet
+   *  ConsoleUi renders one terse line per meaningful action. The `--verbose` CLI
+   *  flag that sets this is wired in a later slice. */
+  verbose?: boolean;
 };
 
 export type LoopOutcome = {
@@ -295,7 +300,12 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     fallbackAgentId,
     fallbackAgentDisplayName,
     autoSwitchOnLimit = false,
+    verbose = false,
   } = opts;
+
+  // One in-run console sink per run (issue #65 P10): quiet ConsoleUi by default,
+  // the full firehose under --verbose. Threaded into every stage via executeStage.
+  const sink: EventSink = verbose ? new VerboseSink() : new ConsoleUi();
 
   // The runtime in effect right now. Starts at the resolved primary and is
   // reassigned in place when auto-switch fires on a limit, so every downstream
@@ -673,6 +683,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           ? `${dim("━━━")} ${bold(`iteration ${i}/${total}`)} ${dim("·")} ${bold(stage.name)} ${dim(`(stage ${s + 1}/${stages.length})`)} ${dim("·")} ${bold(activeAgentDisplayName)} ${dim("━━━")}`
           : `== iteration ${i}/${total} · ${stage.name} (stage ${s + 1}/${stages.length}) · ${activeAgentDisplayName} ==`;
         process.stderr.write(`\n${banner}\n`);
+        sink.setStage(i, stage.name);
 
         // Adaptive router: route this iteration's review depth by change risk,
         // selecting a per-iteration subset of the lens pool. Off → static pool.
@@ -736,6 +747,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             tokenMode,
             signal: activeSignal,
             agentId: activeAgentId,
+            sink,
           });
           accountStage(r);
           return r;

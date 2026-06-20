@@ -16,6 +16,7 @@ import {
   type PolicyViolation,
 } from "./safety-policy.js";
 import type { SafetyEvent } from "./run-report.js";
+import type { EventSink } from "./console-ui.js";
 import { USE_COLOR, dim } from "./stream-render.js";
 import type { Stage } from "./stages.js";
 import type { TokenMode } from "./tokens.js";
@@ -33,6 +34,8 @@ export type ExecuteStageOptions = {
   logLabel?: string;
   /** Active runtime id; suffixes the NDJSON log filename so logs are runtime-labelled. */
   agentId?: AgentRuntimeId;
+  /** In-run console sink (issue #65 P10), threaded to runStage. Absent → runner default. */
+  sink?: EventSink;
 };
 
 /** A policy violation found at a shell/@spill tag becomes a `blocked` trajectory
@@ -104,7 +107,7 @@ export async function executeStage(
         iteration,
         spillHostDir,
         stageLog,
-        { signal, runtime }
+        { signal, runtime, sink: opts.sink }
       );
       // Attribute the *final* prompt's window footprint by category (issue #62
       // P7). `prompt` is post-reduction, so the breakdown reflects what was sent.

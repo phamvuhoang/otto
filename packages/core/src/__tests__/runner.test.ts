@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { ConsoleUi, VerboseSink, type EventSink } from "../console-ui.js";
+import type { StreamJson } from "../stream-render.js";
 import {
   buildClaudeArgs,
   buildCodexArgs,
@@ -19,6 +21,57 @@ import {
   resultFromEvent,
   stageLogPath,
 } from "../runner.js";
+
+// The stream loop resolves `options.sink ?? new VerboseSink()` once and calls
+// `sink.onEvent(parsed)` per non-codex event (issue #65 P10). streamRuntime is
+// internal and spawns a child, so we assert the injected-sink contract it relies
+// on rather than re-spawning a process here.
+describe("runStage sink injection contract", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const resolveSink = (sink?: EventSink): EventSink => sink ?? new VerboseSink();
+
+  it("falls back to a VerboseSink when no sink is provided", () => {
+    expect(resolveSink()).toBeInstanceOf(VerboseSink);
+  });
+
+  it("uses the provided sink, forwarding each event to onEvent", () => {
+    const sink: EventSink = { setStage: vi.fn(), onEvent: vi.fn() };
+    const resolved = resolveSink(sink);
+    expect(resolved).toBe(sink);
+    const ev = { type: "result", is_error: false } as StreamJson;
+    resolved.onEvent(ev);
+    expect(sink.onEvent).toHaveBeenCalledWith(ev);
+  });
+
+  it("the default VerboseSink renders an assistant text block to stdout", () => {
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    resolveSink().onEvent({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "rendered" }] },
+    } as StreamJson);
+    expect(write.mock.calls.map((c) => String(c[0])).join("")).toMatch(
+      /rendered/
+    );
+  });
+
+  it("a ConsoleUi sink stays quiet on an assistant text block", () => {
+    const out = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    const err = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    resolveSink(new ConsoleUi()).onEvent({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "quiet" }] },
+    } as StreamJson);
+    expect(out).not.toHaveBeenCalled();
+    expect(err).not.toHaveBeenCalled();
+  });
+});
 
 describe("parseGraceMs", () => {
   it("returns the default when unset", () => {

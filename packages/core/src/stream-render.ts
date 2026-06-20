@@ -28,7 +28,7 @@ const cOut = (code: string, s: string): string =>
   USE_COLOR_STDOUT ? `\x1b[${code}m${s}\x1b[0m` : s;
 export const dim = (s: string): string => c("2", s);
 export const bold = (s: string): string => c("1", s);
-const cyan = (s: string): string => c("36", s);
+export const cyan = (s: string): string => c("36", s);
 export const green = (s: string): string => c("32", s);
 export const red = (s: string): string => c("31", s);
 export const boldOut = (s: string): string => cOut("1", s);

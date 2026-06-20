@@ -17,11 +17,10 @@ import type { Stage } from "./stages.js";
 import {
   boldOut,
   dim,
-  renderEvent,
   SYM_OUT,
   type StreamJson,
-  type ToolTrack,
 } from "./stream-render.js";
+import { VerboseSink, type EventSink } from "./console-ui.js";
 import {
   RateLimitError,
   isLimitResult,
@@ -33,6 +32,9 @@ export type RunStageOptions = {
   signal?: AbortSignal;
   /** Agent runtime to drive the stage with; defaults to the Claude adapter. */
   runtime?: AgentRuntime;
+  /** In-run console sink (issue #65 P10). Absent → a fresh VerboseSink, so a
+   *  sink-less run renders exactly as before. */
+  sink?: EventSink;
 };
 
 export type StageResult = {
@@ -603,7 +605,9 @@ function streamRuntime(
 
   return new Promise((resolve, reject) => {
     const logFd = openSync(logPath, "a");
-    const toolMap = new Map<string, ToolTrack>();
+    // Resolve the in-run console sink once. No sink → VerboseSink, so a run with
+    // no sink renders exactly as before (issue #65 P10).
+    const sink: EventSink = options.sink ?? new VerboseSink();
     const graceMs = parseGraceMs(process.env.OTTO_RESULT_GRACE_MS);
     const parseStreamEvent = runtime.createStreamParser?.();
 
@@ -708,7 +712,7 @@ function streamRuntime(
         return;
       }
       if (runtime.id === "codex") renderCodexEvent(parsed);
-      else renderEvent(parsed, toolMap);
+      else sink.onEvent(parsed);
 
       const runtimeReset = runtime.resetsAtFromEvent?.(parsed);
       if (runtimeReset != null) lastResetsAt = runtimeReset;

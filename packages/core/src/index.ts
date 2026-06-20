@@ -355,6 +355,12 @@ export {
   type PlanProgressItem,
 } from "./plan-progress.js";
 export {
+  parsePlanTasks,
+  planParallelGroups,
+  readPlanTasks,
+  type PlanTask,
+} from "./plan-tasks.js";
+export {
   buildRunView,
   formatDoneCard,
   formatLiveTree,

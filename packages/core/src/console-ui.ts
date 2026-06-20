@@ -19,6 +19,7 @@ import {
   red,
   renderEvent,
   SYM,
+  USE_COLOR,
   type StreamJson,
   type ToolTrack,
 } from "./stream-render.js";
@@ -33,6 +34,8 @@ export class VerboseSink implements EventSink {
   private readonly toolMap = new Map<string, ToolTrack>();
   setStage(): void {
     // No per-stage header in verbose mode — the loop's own banner stands in.
+    // Clear per-stage tool tracking to bound memory over long runs.
+    this.toolMap.clear();
   }
   onEvent(ev: StreamJson): void {
     renderEvent(ev, this.toolMap);
@@ -70,6 +73,8 @@ export class ConsoleUi implements EventSink {
   >();
 
   setStage(iteration: number, stage: string): void {
+    // Clear per-stage pending map to bound memory over long runs.
+    this.pending.clear();
     process.stderr.write(
       `${dim(`${SYM.rule}${SYM.rule} iter ${iteration} · ${stage} ${SYM.rule}${SYM.rule}`)}\n`
     );
@@ -142,7 +147,11 @@ export class ConsoleUi implements EventSink {
 
       if (tracked?.kind === "test") {
         const { ok, summary } = summarizeTests(text);
-        const label = ok ? green(SYM.check) : red(`${SYM.cross} FAIL`);
+        // In color mode SYM.cross is "✗", so we append " FAIL" for clarity.
+        // In no-color mode SYM.cross is already "FAIL", so we omit it to avoid "FAIL FAIL".
+        const label = ok
+          ? green(SYM.check)
+          : `${red(SYM.cross)}${USE_COLOR ? " FAIL" : ""}`;
         process.stderr.write(
           `${cyan(SYM.bullet)} tests: ${label}${summary ? " " + dim(summary) : ""}\n`
         );

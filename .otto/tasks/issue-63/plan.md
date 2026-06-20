@@ -27,12 +27,14 @@ wired it.
   Flag wired in `cli-help.ts` + early-return in `run-bin.ts` (exit-code propagated,
   mirroring `--context-report`). Pinned by `plan-report-cli.test.ts`,
   `cli-help.test.ts`, `run-bin.test.ts`.
-- [ ] **4. The `plan` stage — template + registry.** Add a `plan` stage to
-  `STAGES` with a `plan.md` template that emits a spec + plan in the proven shape
-  (problem → decisions → scope guard → file map → task-by-task steps with
-  failing-test-first and explicit verify commands), persisting them under
-  `.otto/tasks/<task-key>/`. Reuse the `superpowers.md` brainstorm philosophy;
-  upgrade the template, not the philosophy. Pinned by a render-contract test.
+- [x] **4. The `plan` stage — template + registry.** Added `STAGES.plan` →
+  `plan.md`, an authoring-only template (no implementation; writes only
+  `.otto/tasks/<task-key>/{spec,plan}.md`) that reuses the autonomous-brainstorm
+  philosophy and instructs the proven shape (problem → decisions → scope guard →
+  file map → task-by-task failing-test-first + explicit verify commands),
+  gate-compatible (emits `NO MORE TASKS` when already planned). Wiring it into a
+  chain is slice 5, so it is inert on real runs for now. Pinned by
+  `plan-stage.test.ts` (render-contract).
 - [ ] **5. Wire the `plan` stage into the chain (opt-in).** Make the `plan` stage
   run before the implementer behind a flag (`--plan` / `OTTO_PLAN`), so an
   autonomous run can author the plan first; default off until proven. Pinned by a

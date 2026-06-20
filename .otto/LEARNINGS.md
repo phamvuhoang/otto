@@ -711,6 +711,23 @@
   `plan-report-cli.js`, `if (code !== 0) process.exit(code)`, before workspace/arg
   resolution). Exported from index.ts. Pinned by `plan-report-cli.test.ts` +
   `cli-help.test.ts` (`parseFlags`) + `run-bin.test.ts` (exit-code propagation).
+- **The `plan` stage (#63 P8, slice 4) — `templates/plan.md` + `STAGES.plan`.**
+  P8's dedicated plan stage AUTHORS a spec+plan and stops — it does NOT implement
+  (that distinguishes it from the implementer's embedded `superpowers.md`
+  brainstorm→spec→plan→TDD flow). Template scopes hard: "Make NO source edits";
+  the only writes are `.otto/tasks/<task-key>/{spec,plan}.md`; it's gate-compatible
+  (emits `<promise>NO MORE TASKS</promise>` when both already exist). Its sections
+  mirror the slice-1 rubric criteria 1:1 (Problem / Decisions / Scope guard / File
+  map / per-task failing-test-first + `verify:` command / Testing notes + success
+  criteria), so a plan authored to the template scores well — DOGFOODING the
+  rubric. Slice 4 is registry+template ONLY; wiring into a chain (`main.ts`/
+  `gh-main.ts` or opt-in flag) is slice 5, so the stage is inert on real runs.
+  GOTCHA for the render-contract test: the template is INSTRUCTIONS, not a
+  populated plan, so do NOT assert `scorePlanQuality(renderedTemplate)` == max
+  (taskBreakdown needs ≥2 real `- [ ]` items, which an instruction file lacks) —
+  instead assert the template enumerates each criterion's section/keyword (one
+  check per `PLAN_CRITERIA` entry, so adding a criterion forces a template
+  update). Pinned by `plan-stage.test.ts`.
 
 
 ## Gotchas

@@ -1,0 +1,16 @@
+{
+  "id": "2026-06-20T13-30-00-000Z-63-4",
+  "content": "The `plan` stage (issue #63 P8, slice 4) — new templates/plan.md + STAGES.plan entry. P8's dedicated plan stage AUTHORS a world-class spec+plan and STOPS before writing code — it does NOT implement (that is what distinguishes it from the implementer stages, whose embedded superpowers.md fragment runs the full brainstorm->spec->plan->TDD flow). plan.md structure: {{ RESUME }} / <commits> (git log) / <learnings> (cat LEARNINGS.md) / <inputs> ({{ INPUTS }}) headers like every stage, then a '# PLAN (AUTHOR THE SPEC + PLAN — DO NOT IMPLEMENT)' body that scopes hard ('Make NO source edits'; only writes .otto/tasks/<task-key>/spec.md and plan.md), resolves the task key (issue-<n> for GitHub, slug for plan/PRD — same convention as superpowers.md section 0), is gate-compatible (emits <promise>NO MORE TASKS</promise> if both spec+plan already exist and cover the task), runs an autonomous brainstorm, then instructs the spec sections (## Problem, ## Decisions/Assumptions with question->answer->rationale, ## Scope guard / non-goals, ## File map with backticked paths, ## Testing notes + testable success criteria) and the plan as an ordered '- [ ]' checklist where every task names a failing-test-first step + an explicit `verify:` command, then a single docs(plan)/chore(plan) commit. The template's sections mirror the slice-1 PLAN_CRITERIA 1:1 so a plan authored to it scores well — dogfooding the rubric. STAGES.plan = { name: 'plan', template: 'plan.md', permissionMode: 'bypassPermissions' } placed first in the STAGES object (cosmetic; order there is not the chain). SLICE BOUNDARY: slice 4 is registry+template ONLY; wiring it into a chain (main.ts/gh-main.ts or an opt-in --plan flag) is slice 5, so the stage is INERT on real runs for now (no chain references it). GOTCHA for the render-contract test: the template is INSTRUCTIONS, not a populated plan, so do NOT assert scorePlanQuality(renderedTemplate) === maxScore — taskBreakdown needs >=2 real '- [ ]' items which an instruction file does not have; instead assert the template ENUMERATES each criterion's section/keyword, iterating PLAN_CRITERIA so adding a criterion forces a template update. Pinned by plan-stage.test.ts (3 tests: registry entry; authoring scope + persists spec/plan + keeps gate sentinel; enumerates every rubric criterion). templates/plan.md ships in the tarball automatically (package.json `files` includes templates/). Plan: .otto/tasks/issue-63/plan.md (this run = slice 4 of 7).",
+  "category": "convention",
+  "sourceRun": "2026-06-20T13-30-00-000Z-manual",
+  "taskKey": "issue-63",
+  "scope": [
+    "packages/core/templates/plan.md",
+    "packages/core/src/stages.ts"
+  ],
+  "confidence": 0.8,
+  "trust": "unverified",
+  "status": "active",
+  "createdAt": "2026-06-20T13:30:00.000Z",
+  "useCount": 0
+}

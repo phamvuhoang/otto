@@ -165,6 +165,23 @@ otto-ghafk --repo owner/name --watch --watch-interval 300 --detach --notify 20
 # or: export OTTO_GITHUB_REPOS=owner/name
 ```
 
+### 8. Speed up large issues with sub-agent fan-out (otto-afk only)
+
+When running `otto-afk` against a plan file (not in watch mode), Otto can split independent tasks into **parallel worktree sub-agents** and merge their commits back serially. Any conflict or failure falls back to the normal sequential loop — no half-merged state.
+
+```bash
+# First, let Otto author the plan and task graph — no source edits, then exit
+otto-afk --plan "./docs/ideas/my-feature.md"
+
+# Then fan the independent tasks out to parallel sub-agents
+otto-afk --plan --fan-out "./docs/ideas/my-feature.md" 20
+
+# Control how many sub-agents run concurrently (default: 3)
+otto-afk --fan-out --fan-out-concurrency 4 "./docs/plans/feature.md" 20
+```
+
+> **Note:** `--fan-out` is not available in `--watch` mode. For issue-driven watch runs (`otto-ghafk --watch`), Otto works sequentially per issue. Fan-out applies when you drive `otto-afk` directly against a plan file.
+
 ---
 
 ## Setting up Linear watch

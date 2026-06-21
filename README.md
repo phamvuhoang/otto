@@ -58,6 +58,155 @@ New to it? The **[QUICKSTART](./QUICKSTART.md)** walks zero-to-first-loop. No Gi
 
 ---
 
+## Setting up on a new machine
+
+Everything you need to go from a fresh PC to an autonomous agent watching your GitHub backlog.
+
+### 1. Install prerequisites
+
+```bash
+node --version   # must be 20+; install via https://nodejs.org or nvm
+
+# GitHub CLI (needed for otto-ghafk)
+brew install gh       # macOS
+# Windows/Linux: https://cli.github.com
+
+# Claude Code CLI
+npm i -g @anthropic-ai/claude-code
+```
+
+### 2. Authenticate
+
+```bash
+claude /login   # opens a browser — one-time per machine
+gh auth login   # choose: GitHub.com → HTTPS → Login with browser
+```
+
+### 3. Install Otto
+
+```bash
+npm i -g @phamvuhoang/otto
+
+otto-afk --version   # verify
+```
+
+### 4. Set your model (optional but recommended)
+
+Add to `~/.zshrc` or `~/.bashrc` so every session picks it up:
+
+```bash
+# Option A — pin one model everywhere
+export OTTO_MODEL=claude-sonnet-4-6
+
+# Option B — let Otto pick the cheapest tier per stage (recommended)
+export OTTO_MODEL_ROUTING=1
+export OTTO_TIER_CHEAP=claude-haiku-4-5-20251001
+export OTTO_TIER_MID=claude-sonnet-4-6
+export OTTO_TIER_STRONG=claude-opus-4-8
+```
+
+### 5. Label issues for Otto
+
+In your GitHub repo, create a label called **`otto`** (this is the default — Otto will only pick up issues carrying this label):
+
+```bash
+gh label create otto --color 0075ca --description "Picked up by Otto" --repo owner/name
+```
+
+To use a different label name, set `OTTO_WATCH_LABEL`:
+
+```bash
+export OTTO_WATCH_LABEL=ai-task   # Otto will watch for this label instead
+```
+
+### 6. Confirm everything resolves
+
+```bash
+cd ~/code/my-project
+otto-ghafk --print-config   # shows resolved model, runner, workspace, label — no charge
+```
+
+### 7. Start the watch daemon
+
+Otto polls for open issues with the `otto` label, picks one up, runs the full **brainstorm → spec → plan → TDD implement → review → fix → PR** pipeline, then idles until the next one arrives.
+
+**Foreground — see every step live:**
+
+```bash
+otto-ghafk \
+  --watch \
+  --watch-interval 300 \   # poll every 5 minutes
+  --review-panel \         # correctness + security + tests lenses + adversarial verify
+  --model-routing \        # cheapest model per stage, escalates on failure
+  --budget 20 \            # $20 hard ceiling for the whole session
+  --notify \               # OS toast when a run finishes or wedges
+  20                       # max 20 iterations per issue
+```
+
+**Background / fully AFK:**
+
+```bash
+otto-ghafk \
+  --watch --watch-interval 300 \
+  --detach --notify \
+  --review-panel --model-routing \
+  --budget 20 \
+  20
+
+otto-tail          # attach at any time to see the live status tree
+otto-runs list     # list all runs — status, cost, iterations, elapsed
+otto-inspect latest   # "what happened and why did Otto stop?"
+```
+
+**Scope to a specific repo:**
+
+```bash
+otto-ghafk --repo owner/name --watch --watch-interval 300 --detach --notify 20
+# or: export OTTO_GITHUB_REPOS=owner/name
+```
+
+---
+
+## Setting up Linear watch
+
+Shorter than GitHub — you just need a Linear personal API key instead of `gh`.
+
+### 1. Connect Linear
+
+```bash
+otto-linear-auth login   # paste your Linear personal API key when prompted
+                         # key lives at: linear.app → Settings → API → Personal API keys
+```
+
+### 2. Label issues for Otto
+
+Create a label called **`otto`** in your Linear workspace (Settings → Labels). Assign it to any issue you want Otto to pick up.
+
+To use a different label:
+
+```bash
+export OTTO_LINEAR_LABEL=ai-task   # overrides the default "otto"
+```
+
+### 3. Start the watch daemon
+
+```bash
+otto-linear-afk \
+  --watch --watch-interval 300 \
+  --detach --notify \
+  --review-panel --model-routing \
+  --budget 20 \
+  20
+
+# Optional: scope to a team or project
+otto-linear-afk --watch --watch-interval 300 20                       # all teams
+otto-linear-afk --project "Roadmap Q3" --watch --watch-interval 300 20   # one project
+```
+
+Everything else is identical to the GitHub workflow — `otto-tail`, `otto-runs list`, `otto-inspect latest` all work the same way.
+
+---
+
 ## Why Otto
 
 A naïve harness just loops `claude` until the iteration count runs out. Otto is the loop **plus the harness around it** — the parts that make an unattended run safe, affordable, and trustworthy:

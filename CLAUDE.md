@@ -4,10 +4,10 @@ Guidance for Claude Code working in this repo. Behavioral rules: [.claude/CLAUDE
 
 ## What this is
 
-Otto drives the Claude Code CLI against a target repo in an iterating implementer → reviewer loop, running `claude` directly on the host. pnpm monorepo, two ESM packages:
+Otto drives the Claude Code CLI (or Codex via `--agent codex`) against a target repo in an iterating implement → review loop. pnpm monorepo, two ESM packages:
 
-- `@phamvuhoang/otto-core` (`packages/core`) — library: loop driver, native-sandbox runner, template renderer, stage registry. TS → `dist/`.
-- `@phamvuhoang/otto` (`apps/cli`) — `otto-afk` (plan/PRD loop) + `otto-ghafk` (GitHub-issue loop) bins. Hand-written JS, no build. Depends on core via `workspace:^`.
+- `@phamvuhoang/otto-core` (`packages/core`) — library: loop driver, runner, template renderer, stage registry, memory, skills, model routing, fan-out, review panel, linear, journal. TS → `dist/`.
+- `@phamvuhoang/otto` (`apps/cli`) — loop bins: `otto-afk` (plan/PRD), `otto-ghafk` (GitHub issues), `otto-linear-afk` (Linear issues). Operator bins: `otto-inspect`, `otto-explain`, `otto-runs`, `otto-tail`, `otto-eval`, `otto-memory`, `otto-skills`. Hand-written JS, no build.
 
 ## Commands
 
@@ -17,85 +17,69 @@ Node ≥20, pnpm ≥9. From repo root:
 pnpm install
 pnpm -r build        # compile packages/core/dist (only core builds)
 pnpm -r typecheck
-pnpm -r test         # core: vitest; cli: none
-pnpm test            # root: node --test over scripts/*.test.mjs
+pnpm -r test         # core: vitest; root: node --test over scripts/*.test.mjs
 ```
 
-Verify = `pnpm -r typecheck && pnpm -r test && pnpm test`. Pre-commit hook runs prettier (lint-staged) + typecheck. Releases are automated via release-please ([RELEASING.md](RELEASING.md)) — **never hand-edit `version` fields or `.release-please-manifest.json`; use a `Release-As:` footer.**
-
-## Running the bins
-
-```bash
-otto-afk "<plan-and-prd>" <iterations>
-otto-ghafk <iterations>
-otto-afk --print-config     # resolve workspace/runner/sandbox config
-```
-
-Key env: `OTTO_WORKSPACE` (target repo, default cwd), `OTTO_RUNNER` (`sandbox` default = native OS sandbox confining writes to the workspace; `host` = unsandboxed), `OTTO_MODEL` (pass-through `--model`). Notable flags: `--budget <usd>`, `--cooldown <ms>`, `--review-panel`, `--watch`/`--watch-interval` (ghafk only), `--detach`, `--notify`, `--max-retries`. Full env/flag reference: README + `cli-help.ts`.
+Verify = `pnpm -r typecheck && pnpm -r test && pnpm test`. Pre-commit hook: prettier (lint-staged) + typecheck. Releases via release-please — **never hand-edit `version` fields or `.release-please-manifest.json`**.
 
 ## Architecture
 
-Core is ~18 files in `packages/core/src/` (+ `__tests__/` vitest). The loop spine:
+Loop spine (`packages/core/src/`):
 
-1. **`main.ts`/`gh-main.ts`** → **`run-bin.ts`** (`runBin`): parse flags (`cli-help.ts`), resolve dirs, call `runLoop`.
-2. **`loop.ts`** (`runLoop`): walks the stage chain each iteration. **First stage is the gate** — its result is checked for the sentinel `<promise>NO MORE TASKS</promise>`; on hit the loop exits. Tallies cost (`accountStage`); `--budget` halts at the ceiling, `--cooldown` paces with throttle backoff (`pacing.ts`).
-3. **`render.ts`** (`renderTemplate`): expands template tags (below) before each stage.
-4. **`stage-exec.ts`** (`executeStage`): wraps `runner.ts` `runStage` in `withRetries` (`retry.ts`). Single entry for `loop.ts` and `panel.ts`.
-5. **`runner.ts`** (`runStage`): writes the rendered prompt to `.otto-tmp/`, spawns `claude --print --output-format stream-json --permission-mode bypassPermissions` with `cwd = workspaceDir`; in sandbox mode writes a transient `--settings` confining writes. Streams NDJSON, returns the `result` payload.
-6. **`stages.ts`**: stages `implementer` / `ghafkImplementer` / `reviewer`, each a template + `permissionMode` (always `bypassPermissions`).
+1. **`*-main.ts`** → **`run-bin.ts`** (`runBin`): parse flags (`cli-help.ts`), resolve dirs, call `runLoop` or `runWatch`.
+2. **`loop.ts`** (`runLoop`): walks stage chain per iteration. **First stage is the gate** — sentinel `<promise>NO MORE TASKS</promise>` exits the loop. Wires model routing, fan-out, adaptive router, cost accounting, cooldown, signals.
+3. **`render.ts`** (`renderTemplate`): expands `@include` → `@spill` → `!?` → `!` → `{{ INPUTS }}` before each stage.
+4. **`stage-exec.ts`** (`executeStage`): resolves model tier via `resolveStageModel`, wraps `runStage` in `withRetries`.
+5. **`runner.ts`** (`runStage`): spawns `claude --print --output-format stream-json --permission-mode bypassPermissions`; sandbox mode writes a transient `--settings` confining writes. Returns the `result` payload.
+6. **`stages.ts`**: all stage definitions — `name`, `template`, `permissionMode`, `tier`. Current: `implementer`, `ghafkImplementer`, `ghafkIssueImplementer`, `linearImplementer`, `linearIssueImplementer`, `plan`, `verifier`, `applyReviewImplementer`, `reviewer`, `subImplementer`, `journalWrite`, `journalScreen`.
 
-Topology (gate = first stage; reviewer never gates):
+Topology (gate = index 0; reviewer never gates):
 
 ```
-otto-afk   → [implementer,      reviewer]   inputs = "<plan-and-prd>"
-otto-ghafk → [ghafkImplementer, reviewer]   inputs = ""
+otto-afk         → [implementer,        reviewer]   inputs = "<plan-and-prd>"
+otto-ghafk       → [ghafkImplementer,   reviewer]   inputs = ""
+otto-linear-afk  → [linearImplementer,  reviewer]   inputs = ""
 ```
 
-Support: `keepalive.ts` (wake-lock), `detach.ts` (background run), `notify.ts` (toast+bell), `stream-render.ts` (ANSI UI). `loop.ts` handles SIGINT→130 / SIGTERM→143 via `AbortController`. Internals: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+### Key systems
 
-### Review panel & watch mode
-
-- `--review-panel` (or `OTTO_REVIEW_LENSES`, default `correctness,security,tests`) replaces the reviewer with `runPanel` (`panel.ts`): read-only per-lens reviewers (`review-lens.md`) write findings → an adversarial verifier (`review-verify.md`) refutes each finding and writes `verdicts.md` (CONFIRMED/REJECTED, biased to reject when uncertain) → a synth stage (`review-synth.md`) fixes only CONFIRMED defects in one `fix(review):` commit. Each phase prints a styled outcome line (findings count / confirmed-rejected tally / committed-or-clean).
-- `--watch` (ghafk only) → `runWatch` (`watch.ts`): daemon polling open issues labelled `OTTO_WATCH_LABEL` (default `otto`); `--budget` spans the whole daemon lifetime.
+| System | Files | Notes |
+|---|---|---|
+| Review panel | `panel.ts` | `--review-panel`: lens readers → adversarial verifier → synth commits only CONFIRMED fixes |
+| Watch daemon | `watch.ts` | `--watch`: polls `OTTO_WATCH_LABEL`/`OTTO_LINEAR_LABEL` (default `otto`); ghafk + linear only; fan-out unavailable in watch mode |
+| Model routing | `model-tier.ts` | `--model-routing`: `cheap/mid/strong` tiers via `TierLadder`; escalates on failure; pin wins |
+| Fan-out | `fanout.ts`, `worktree.ts` | `--fan-out`: reads `.otto/tasks/<key>/tasks.json`, runs wave tasks as worktree sub-agents, cherry-picks serially; conflict → defers |
+| Memory | `memory.ts` | `.otto/memory/<id>.json` records; `otto-memory audit/project`; rendered into `LEARNINGS.md` injected every prompt |
+| Skills | `skills.ts` | `.otto/skills/`; `otto-skills candidates/why/list`; must be validated before use |
+| Safety | `safety-policy.ts`, `taint.ts` | `.otto/policy.json` (blocked cmds, write roots, net domains, secret patterns); untrusted inputs taint-fenced |
+| Evidence | `run-report.ts` | `.otto/runs/<run-id>/` per run; `otto-inspect`, `otto-explain`, `otto-runs`, `otto-tail` |
+| Journal | `journal.ts`, `journal-gate.ts`, `threads-api.ts` | End-of-run field note; triple secrecy gate; Threads publish; double opt-in to post |
+| Linear | `linear-api.ts`, `linear-main.ts` | `OTTO_LINEAR_API_KEY`; `otto-linear-auth login` |
+| Eval | `eval-run.ts`, `bench.ts` | `otto-eval compare/benchmarks`; A/B runs without re-paying |
 
 ### Template renderer (most likely to bite you)
 
-Templates in `packages/core/templates/`. Tags expand in this order: `@include` → `@spill` → `!?` → `!` → `{{ INPUTS }}`:
+Tags expand in order — `@include` → `@spill` → `!?` → `!` → `{{ INPUTS }}`:
 
-- `@include:<path>` — inline a file (no shell). Injects playbooks (`prompt.md`/`ghprompt.md`) into iteration templates (`afk.md`/`ghafk.md`).
-- `` @spill[?]:<name>=`cmd` `` — run cmd, write stdout to a spill file, substitute its workspace-relative path (agent `Read`s it). Keeps large output (HEAD patch, issue bodies) out of the prompt. `?` = fallback on non-zero exit.
-- `` !?`cmd|||fallback` `` — try-shell; non-zero exit → the literal fallback. Matches before plain `!`. **Prefer this for any command that may be absent on Windows `cmd.exe`.**
-- `` !`cmd` `` — plain shell (`cwd = workspaceDir`); failure aborts the iteration.
-- `{{ INPUTS }}` — the `inputs` string.
-
-Shell (`resolveShell()`): `/bin/bash` on Linux/macOS; Windows walks `$PATH` for `bash.exe`, else `cmd.exe`.
-
-### Scratch dir & learning loop
-
-- `<workspaceDir>/.otto-tmp/` (gitignored): rendered prompt `.run-*.md` + per-stage `spill-*/` (both cleaned in `finally`); NDJSON `logs/*.ndjson` (kept; `--detach` adds `detached-<pid>.log`).
-- `<workspaceDir>/.otto/LEARNINGS.md` (**git-tracked**, distinct from `.otto-tmp/`): durable memory injected into every stage via a `<learnings>` block; playbooks append conventions/gotchas/decisions/dead-ends within the work commit. Created lazily; absent-file safe via `!?`.
-
-### Credentials
-
-`claude` and `gh` read `~/.claude`, `~/.claude.json`, `~/.config/gh` natively. Run `claude /login` + `gh auth login` once.
+- `@include:<path>` — inline a file; no shell. Injects playbooks into iteration templates.
+- `` @spill[?]:<name>=`cmd` `` — run cmd, write stdout to spill file, substitute path into prompt. Keeps large output (patches, issue bodies) out of inline prompt.
+- `` !?`cmd|||fallback` `` — try-shell; non-zero → fallback. **Prefer over `!` for any command that may be absent on Windows.**
+- `` !`cmd` `` — plain shell (`cwd = workspaceDir`); failure aborts iteration.
+- `{{ INPUTS }}` — replaced with the `inputs` string.
 
 ## Conventions
 
 - **ESM only.** Relative imports in `packages/core/src/` end in `.js` (NodeNext).
-- **First stage is the gate.** Place gating stages at index 0; the sentinel is hardcoded in `loop.ts`.
-- **No build for `apps/cli`** — hand-written JS importing `@phamvuhoang/otto-core`. Keep the bin layer flat.
-- **Templates ship in the tarball** (`packages/core/package.json` `files`). New stage = (1) add to `STAGES`, (2) add `templates/<name>.md`, (3) wire it into the chain in `main.ts`/`gh-main.ts`.
-- **`permissionMode` is always `bypassPermissions`** — AFK requires it; blast radius bounded by the sandbox runner.
-- **Never hand-edit release version state** — release-please owns it (RELEASING.md).
+- **First stage is the gate.** Sentinel hardcoded in `loop.ts`; gating stages go at index 0.
+- **No build for `apps/cli`.** Hand-written JS; keep bin layer flat.
+- **New stage checklist:** (1) add to `STAGES` with `tier`, (2) add `templates/<name>.md`, (3) wire into chain in the relevant `*-main.ts`. Templates ship in the tarball.
+- **`permissionMode` is always `bypassPermissions`.** Blast radius bounded by the sandbox runner.
+- **Never hand-edit release version state.** release-please owns it.
 
 ## Orientation
 
-- `README.md` — user docs (install, setup, full env/flags, troubleshooting).
-- `RELEASING.md` — release flow, version policy, secrets, rollback.
-- `CONTRIBUTING.md` / `docs/ARCHITECTURE.md` — contributor guide / runtime internals.
-- `templates/prompt.md`, `ghprompt.md` — agent playbooks (edit to change feedback loops / task priority).
-- `templates/{afk,ghafk,review,review-lens,review-synth}.md` — iteration + reviewer templates.
-
-## Behavioral
-
-Apply [.claude/CLAUDE.md](.claude/CLAUDE.md): think first, simplest correct change, surgical edits, push back on over-engineering, state a brief plan + success criteria for non-trivial work.
+- `README.md` — user docs, all flags, env vars, use-case recipes.
+- `docs/ARCHITECTURE.md` — runtime internals for library extenders.
+- `packages/core/templates/prompt.md`, `ghprompt.md`, `linearprompt.md` — agent playbooks (edit to change feedback loops).
+- `packages/core/templates/{afk,ghafk,linearafk,review,review-lens,review-synth,subtask,journal-write,journal-screen}.md` — stage templates.
+- `.otto/policy.json` — repo-local safety governance. `.otto/config.json` — journal + branch config.

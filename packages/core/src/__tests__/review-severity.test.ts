@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  dedupeFindings,
   parseFindings,
   rankFindings,
   suppressLowValue,
@@ -67,5 +68,29 @@ describe("suppressLowValue", () => {
     const { kept, suppressed } = suppressLowValue(fs);
     expect(kept).toHaveLength(2);
     expect(suppressed).toBe(0);
+  });
+});
+
+describe("dedupeFindings", () => {
+  it("merges same file+overlapping range, keeps highest severity, unions lenses", () => {
+    const fs: Finding[] = [
+      { severity: "minor", file: "src/a.ts", line: "10-20", claim: "leaky", why: "w1", lens: "correctness" },
+      { severity: "major", file: "src/a.ts", line: "15", claim: "leaky", why: "w2", lens: "structural" },
+    ];
+    const out = dedupeFindings(fs);
+    expect(out).toHaveLength(1);
+    expect(out[0].severity).toBe("major");
+    expect(out[0].lens).toBe("correctness, structural");
+    expect(out[0].why).toContain("w1");
+    expect(out[0].why).toContain("w2");
+  });
+
+  it("keeps findings in different files or non-overlapping ranges separate", () => {
+    const fs: Finding[] = [
+      { severity: "minor", file: "src/a.ts", line: "10", claim: "x", why: "" },
+      { severity: "minor", file: "src/b.ts", line: "10", claim: "x", why: "" },
+      { severity: "minor", file: "src/a.ts", line: "99", claim: "x", why: "" },
+    ];
+    expect(dedupeFindings(fs)).toHaveLength(3);
   });
 });

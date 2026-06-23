@@ -72,3 +72,47 @@ export function suppressLowValue(findings: Finding[]): {
   const kept = findings.filter((f) => f.severity !== "nit");
   return { kept, suppressed: findings.length - kept.length };
 }
+
+function range(line?: string): [number, number] | null {
+  if (!line) return null;
+  const m = line.match(/^(\d+)(?:-(\d+))?$/);
+  if (!m) return null;
+  const lo = Number(m[1]);
+  return [lo, m[2] ? Number(m[2]) : lo];
+}
+
+function overlaps(a?: string, b?: string): boolean {
+  const ra = range(a);
+  const rb = range(b);
+  if (!ra || !rb) return a === b; // no parsable range → exact-string match
+  return ra[0] <= rb[1] && rb[0] <= ra[1];
+}
+
+const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, " ").trim();
+
+/** Merge findings pointing at the same place: same file, overlapping line range,
+ *  and the same normalized claim. Keeps the highest severity, unions the raising
+ *  lenses (comma-joined, de-duped, sorted), and concatenates distinct why-text. */
+export function dedupeFindings(findings: Finding[]): Finding[] {
+  const out: Finding[] = [];
+  for (const f of findings) {
+    const hit = out.find(
+      (g) =>
+        g.file === f.file &&
+        norm(g.claim) === norm(f.claim) &&
+        overlaps(g.line, f.line)
+    );
+    if (!hit) {
+      out.push({ ...f });
+      continue;
+    }
+    if (RANK[f.severity] < RANK[hit.severity]) hit.severity = f.severity;
+    const lenses = new Set(
+      [hit.lens, f.lens].filter(Boolean).flatMap((l) => l!.split(", "))
+    );
+    hit.lens = [...lenses].sort().join(", ") || undefined;
+    if (f.why && !hit.why.includes(f.why))
+      hit.why = hit.why ? `${hit.why}; ${f.why}` : f.why;
+  }
+  return out;
+}

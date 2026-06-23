@@ -412,7 +412,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     recIteration: number,
     stageName: string,
     sr: StageResult,
-    startedAt: string
+    startedAt: string,
+    reviewSeverity?: { blocker: number; major: number; minor: number; nit: number; suppressed: number }
   ): void => {
     stageLog.push({
       iteration: recIteration,
@@ -430,6 +431,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         apiErrorStatus: sr.apiErrorStatus,
         safetyEvents: sr.safetyEvents,
         contextBreakdown: sr.contextBreakdown,
+        ...(reviewSeverity ? { reviewSeverity } : {}),
         startedAt,
         finishedAt: nowIso(),
       });
@@ -824,8 +826,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               tierLadder,
               riskAssessment,
               onStage: accountStage,
-              recordStage: (stageName, subSr, startedAt) =>
-                recordStage(i, stageName, subSr, startedAt),
+              recordStage: (stageName, subSr, startedAt, reviewSeverity) =>
+                recordStage(i, stageName, subSr, startedAt, reviewSeverity),
             });
           }
           const r = await executeStage({

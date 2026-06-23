@@ -10,6 +10,7 @@ import type { RiskAssessment } from "./risk.js";
 import {
   dedupeFindings,
   parseFindings,
+  severityCounts,
   type Finding,
 } from "./review-severity.js";
 import type { StageResult } from "./runner.js";
@@ -171,8 +172,14 @@ export type RunPanelOptions = {
    * can write one evidence record per substage. The lens substages are named by
    * their lens (free text from OTTO_REVIEW_LENSES); verify/synth use their stage
    * names. `startedAt` is the ISO timestamp captured before the substage ran.
+   * `reviewSeverity` is passed only for the verify and synth substages.
    */
-  recordStage?: (stageName: string, sr: StageResult, startedAt: string) => void;
+  recordStage?: (
+    stageName: string,
+    sr: StageResult,
+    startedAt: string,
+    reviewSeverity?: { blocker: number; major: number; minor: number; nit: number; suppressed: number }
+  ) => void;
 };
 
 /** Tracked-only worktree dirtiness ("" = clean). Untracked files are ignored. */
@@ -310,6 +317,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     const { findings } = mergeLensFindings(
       results.map((r) => ({ lens: r.lens, text: r.sr.result }))
     );
+    const counts = severityCounts(findings);
     if (findings.length === 0) {
       // Nothing to verify or fix — return a synthetic clean result.
       outcomeLine("no findings — skipping verify + synth");
@@ -346,7 +354,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
       logLabel: "verify",
     });
     restoreIfMutated("verify");
-    recordStage?.(VERIFY_STAGE.name, verify, verifyStartedAt);
+    recordStage?.(VERIFY_STAGE.name, verify, verifyStartedAt, counts);
     const verdicts = readVerdicts(panelHostDir);
     if (verdicts.exists) {
       outcomeLine(
@@ -408,7 +416,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     } else {
       outcomeLine("clean — no fix needed");
     }
-    recordStage?.(SYNTH_STAGE.name, synth, synthStartedAt);
+    recordStage?.(SYNTH_STAGE.name, synth, synthStartedAt, counts);
     onStage?.(synth);
     return synth;
   } finally {

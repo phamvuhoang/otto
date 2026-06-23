@@ -90,6 +90,18 @@ function overlaps(a?: string, b?: string): boolean {
 
 const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, " ").trim();
 
+/** Tally findings by severity and count how many nits were suppressed by the
+ *  low-value suppression rule (i.e. how many nits would be dropped when a
+ *  blocker or major is present). */
+export function severityCounts(
+  findings: Finding[]
+): Record<Severity, number> & { suppressed: number } {
+  const counts = { blocker: 0, major: 0, minor: 0, nit: 0, suppressed: 0 };
+  for (const f of findings) counts[f.severity]++;
+  counts.suppressed = suppressLowValue(findings).suppressed;
+  return counts;
+}
+
 /** Merge findings pointing at the same place: same file, overlapping line range,
  *  and the same normalized claim. Keeps the highest severity, unions the raising
  *  lenses (comma-joined, de-duped, sorted), and concatenates distinct why-text. */

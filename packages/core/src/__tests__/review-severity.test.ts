@@ -3,6 +3,7 @@ import {
   dedupeFindings,
   parseFindings,
   rankFindings,
+  severityCounts,
   suppressLowValue,
   type Finding,
 } from "../review-severity.js";
@@ -68,6 +69,20 @@ describe("suppressLowValue", () => {
     const { kept, suppressed } = suppressLowValue(fs);
     expect(kept).toHaveLength(2);
     expect(suppressed).toBe(0);
+  });
+});
+
+describe("severityCounts", () => {
+  it("tallies by severity and reports suppressed nits", () => {
+    const fs: Finding[] = [
+      { severity: "blocker", file: "a", claim: "a", why: "" },
+      { severity: "nit", file: "b", claim: "b", why: "" },
+      { severity: "nit", file: "c", claim: "c", why: "" },
+    ];
+    const c = severityCounts(fs);
+    expect(c.blocker).toBe(1);
+    expect(c.nit).toBe(2);
+    expect(c.suppressed).toBe(2); // both nits suppressed because a blocker exists
   });
 });
 

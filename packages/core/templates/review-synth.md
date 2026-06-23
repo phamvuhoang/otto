@@ -19,10 +19,26 @@ An adversarial verifier already judged the lens findings and wrote `{{ FINDINGS_
 # ACTION
 
 1. Collect the `CONFIRMED` findings (already deduped and verified). If there are none, output `<review>OK</review>` and do **not** commit.
-2. Otherwise fix them in the working tree (only the latest commit's code — no unrelated changes), run the feedback loops:
+2. Otherwise apply confirmed findings **highest severity first** (blocker → major → minor).
+   **Suppress nits**: if any blocker or major is confirmed, skip nit-severity
+   findings entirely — do not spend a fix on them while real issues remain.
+
+   Fix them in the working tree (only the latest commit's code — no unrelated changes), run the feedback loops:
    - Frontend / Node: `pnpm run test`, `pnpm run typecheck`
    - Backend / Dotnet: `dotnet test`, `dotnet build`
-     then make a SINGLE commit: `git commit -am "fix(review): <short reason>"` (subject ≤72 chars, no `Co-Authored-By`, no file lists). If a finding reflects a durable, reusable learning (e.g. a recurring defect class), you may also append it tersely to `./.otto/LEARNINGS.md` so it rides in this same commit.
+
+   Then make a SINGLE commit, annotating the body with what you fixed:
+
+   ```
+   fix(review): <short summary>
+
+   Addressed:
+   - blocker | file:line | <claim>
+   - major   | file:line | <claim>
+   Suppressed N nit(s).
+   ```
+
+   (subject ≤72 chars, no `Co-Authored-By`, no file lists). If a finding reflects a durable, reusable learning (e.g. a recurring defect class), you may also append it tersely to `./.otto/LEARNINGS.md` so it rides in this same commit.
 
 # RULES
 

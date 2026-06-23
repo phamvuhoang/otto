@@ -37,12 +37,17 @@ Bias toward **REJECTED** when genuinely uncertain: this loop commits fixes with 
 
 # OUTPUT
 
-Write your verdicts to `{{ FINDINGS_DIR }}verdicts.md`, one finding per line, deduped:
+Write your verdicts to `{{ FINDINGS_DIR }}verdicts.md`, one finding per line, deduped.
 
-```
-CONFIRMED — <file>:<line> — <issue> — <one line: why it is real>
-REJECTED — <file>:<line> — <issue> — <one line: why not>
-```
+Write each verdict on its own line, carrying severity (you MAY **downgrade** a
+finding's severity if it is real but smaller than claimed):
+
+- `CONFIRMED <severity> | file:line | claim | why this is really a problem`
+- `REJECTED | file:line | claim | why this is not a real problem`
+
+`<severity>` is one of `blocker | major | minor | nit`. Stay biased toward
+REJECTED for anything you cannot substantiate — a false positive costs more than
+a missed nit.
 
 If the lenses produced no findings at all, write a single line: `none`.
 

@@ -759,7 +759,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         // routeModel can modulate the per-stage tier (security/cross-module up,
         // docs/test down). Computed when model routing is on, independent of the
         // review router. The single reviewer/implementer/plan/verify stages route
-        // through executeStage below; panel sub-agents stay on the default model.
+        // through executeStage below; panel lenses route per-lens (review-severity
+        // tiers) inside runPanel when modelRouting is on.
         const riskAssessment = modelRouting
           ? classifyRisk(
               resolveChangedPaths
@@ -815,6 +816,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               signal: activeSignal,
               agentId: activeAgentId,
               resumeNote,
+              changedPaths: resolveChangedPaths
+                ? resolveChangedPaths(workspaceDir)
+                : changedFilesSince(workspaceDir, iterStartSha),
+              adaptiveRouter,
+              modelRouting,
+              tierLadder,
+              riskAssessment,
               onStage: accountStage,
               recordStage: (stageName, subSr, startedAt) =>
                 recordStage(i, stageName, subSr, startedAt),

@@ -56,7 +56,11 @@ describe("runPanel", () => {
             ok("<verify>0 confirmed, 1 rejected</verify>", 0.2)
           );
         }
-        return Promise.resolve(ok(`finding for ${opts.vars.LENS}`, 0.1));
+        // Pipe wire-format finding so mergeLensFindings sees a real defect
+        // (otherwise the panel early-exits before verify + synth).
+        return Promise.resolve(
+          ok(`major | a.ts:1 | bug in ${opts.vars.LENS} | why |`, 0.1)
+        );
       }
     );
     const seen: number[] = [];
@@ -76,14 +80,13 @@ describe("runPanel", () => {
     const templates = mocks.executeStage.mock.calls.map(
       (c: [{ stage: { template: string } }]) => c[0].stage.template
     );
-    expect(templates).toEqual([
-      "review-lens.md",
-      "review-lens.md",
-      "review-lens.md",
+    // Lenses run concurrently; verify + synth follow once the batch completes.
+    expect(templates.filter((t) => t === "review-lens.md")).toHaveLength(3);
+    expect(templates.slice(-2)).toEqual([
       "review-verify.md",
       "review-synth.md",
     ]);
-    // verify + synth read the same findings dir the lenses wrote to.
+    // verify + synth read the same findings dir the merged findings were written to.
     const verifyCall = mocks.executeStage.mock.calls.find(
       (c: [{ stage: { template: string } }]) =>
         c[0].stage.template === "review-verify.md"
@@ -95,7 +98,7 @@ describe("runPanel", () => {
     expect(verifyCall[0].vars.FINDINGS_DIR).toBe(
       synthCall[0].vars.FINDINGS_DIR
     );
-    expect(mocks.sleep).toHaveBeenCalledTimes(4); // cooldown after each lens + after verify
+    expect(mocks.sleep).toHaveBeenCalledTimes(2); // one batch cooldown + after verify
     // onStage called for every sub-agent (3 lenses + verify + synth)
     expect(seen).toEqual([0.1, 0.1, 0.1, 0.2, 0.5]);
     expect(out.result).toBe("<review>OK</review>");
@@ -117,7 +120,9 @@ describe("runPanel", () => {
           );
           return Promise.resolve(ok("<verify>1 confirmed</verify>", 0.2));
         }
-        return Promise.resolve(ok(`finding for ${opts.vars.LENS}`, 0.1));
+        return Promise.resolve(
+          ok(`major | a.ts:1 | bug in ${opts.vars.LENS} | why |`, 0.1)
+        );
       }
     );
     const recorded: Array<{ stage: string; costUsd: number; startedAt: string }> =
@@ -147,8 +152,10 @@ describe("runPanel", () => {
     ).toBe(true);
   });
 
-  it("stops before remaining lenses + synth when onStage signals the budget is spent", async () => {
-    mocks.executeStage.mockResolvedValue(ok("finding", 0.4));
+  it("stops before verify + synth when onStage signals the budget is spent", async () => {
+    // Lenses run as one concurrent batch, so all of them execute; the budget
+    // stop is honored afterwards by skipping verify + synth.
+    mocks.executeStage.mockResolvedValue(ok("major | a.ts:1 | bug | why |", 0.4));
     const out = await runPanel({
       lenses: ["correctness", "security", "tests"],
       workspaceDir: ws,
@@ -156,11 +163,11 @@ describe("runPanel", () => {
       iteration: 1,
       maxRetries: 0,
       cooldownMs: 1000,
-      onStage: () => ({ stop: true, cooldownFactor: 1 }), // budget hit after lens 1
+      onStage: () => ({ stop: true, cooldownFactor: 1 }), // budget hit on the batch
     });
-    expect(mocks.executeStage).toHaveBeenCalledTimes(1); // no further lenses, no synth
-    expect(mocks.sleep).not.toHaveBeenCalled(); // stopped before the cooldown
-    expect(out.result).toBe("finding");
+    expect(mocks.executeStage).toHaveBeenCalledTimes(3); // 3 lenses, no verify, no synth
+    expect(mocks.sleep).not.toHaveBeenCalled(); // stopped before the batch cooldown
+    expect(out.result).toBe("major | a.ts:1 | bug | why |");
   });
 
   it("threads the resume note into panel sub-stage vars", async () => {
@@ -185,7 +192,9 @@ describe("runPanel", () => {
       (opts: { stage: { template: string } }) =>
         Promise.resolve(
           ok(
-            opts.stage.template === "review-verify.md" ? "verdicts" : "finding",
+            opts.stage.template === "review-verify.md"
+              ? "verdicts"
+              : "major | a.ts:1 | bug | why |",
             0.4
           )
         )
@@ -209,7 +218,7 @@ describe("runPanel", () => {
 
   it("skips synth when the verifier writes no verdicts.md (contract violation)", async () => {
     // No verify mock writes verdicts.md → the contract is unmet.
-    mocks.executeStage.mockResolvedValue(ok("finding"));
+    mocks.executeStage.mockResolvedValue(ok("major | a.ts:1 | bug | why |"));
     const out = await runPanel({
       lenses: ["correctness"],
       workspaceDir: ws,
@@ -223,7 +232,7 @@ describe("runPanel", () => {
       (c: [{ stage: { template: string } }]) => c[0].stage.template
     );
     expect(templates).toEqual(["review-lens.md", "review-verify.md"]); // synth skipped
-    expect(out.result).toBe("finding"); // returns the verify result, not a synth result
+    expect(out.result).toBe("major | a.ts:1 | bug | why |"); // verify result, not synth
     const err = (
       process.stderr.write as unknown as { mock: { calls: unknown[][] } }
     ).mock.calls
@@ -268,7 +277,7 @@ describe("runPanel", () => {
         if (opts.stage.template === "review-synth.md")
           // synth edits a tracked file but never commits.
           writeFileSync(join(ws, "f.txt"), "half-applied fix\n", "utf8");
-        return Promise.resolve(ok("finding"));
+        return Promise.resolve(ok("major | f.txt:1 | bug | why |"));
       }
     );
 
@@ -290,8 +299,10 @@ describe("runPanel", () => {
     expect(err).toContain("did not commit");
   });
 
-  it("applies the adaptive cooldown factor from onStage to the inter-lens sleep", async () => {
-    mocks.executeStage.mockResolvedValue(ok("finding", 0));
+  it("applies the adaptive cooldown factor from onStage to the post-batch sleep", async () => {
+    // Lenses run as one concurrent batch; the batch cooldown is paced by the
+    // most-throttled lens's factor. verify writes no verdicts → synth skipped.
+    mocks.executeStage.mockResolvedValue(ok("major | a.ts:1 | bug | why |", 0));
     await runPanel({
       lenses: ["correctness", "security"],
       workspaceDir: ws,

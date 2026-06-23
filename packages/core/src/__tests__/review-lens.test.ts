@@ -49,6 +49,15 @@ describe("structural lens (P14)", () => {
     expect(out).toMatch(/blocker.*major.*minor.*nit/i);
   });
 
+  it("OUTPUT section does not reintroduce the old dash-bullet format", () => {
+    // The # OUTPUT section must be consistent with the severity wire format.
+    // A model anchoring on # OUTPUT that sees the old dash-bullet format will
+    // emit findings that parseFindings silently drops → panel degrades to no-op.
+    const out = render("correctness");
+    // Old format was: `- <file>:<line> — <issue>` (dash-bullet, em-dash)
+    expect(out).not.toMatch(/- <file>:<line> — <issue>/);
+  });
+
   it("renders existing lenses without structural guidance leaking in", () => {
     const out = render("tests");
     expect(out).not.toMatch(/code judo/i);

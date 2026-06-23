@@ -50,7 +50,7 @@ Example:
 
 # OUTPUT
 
-List concrete findings for the **{{ LENS }}** lens only, each as `- <file>:<line> — <issue>`. Be terse. If nothing for this lens, output `none`.
+Emit each finding in the wire format above (`SEVERITY | file:line | claim | why | fix?`), one per line, for the **{{ LENS }}** lens only. Be terse. If you have no findings for this lens, output `none`.
 
 # RULES
 

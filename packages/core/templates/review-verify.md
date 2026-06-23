@@ -24,7 +24,7 @@ Read that file with `Read` (use `offset`/`limit` for large diffs) before judging
 
 # ADVERSARIAL VERIFICATION
 
-Review lenses (correctness / security / tests) each examined HEAD and wrote findings to `{{ FINDINGS_DIR }}` — `Read` every `findings-*.md` file there.
+Review lenses (correctness / security / tests / task-fit / structural) each examined HEAD and wrote findings to `{{ FINDINGS_DIR }}` — `Read` every `findings-*.md` file there.
 
 Your role is the **SKEPTIC**. The lenses are eager: many findings will be false positives, speculative, pre-existing, out of scope, or things this repo already accepts. Try to **REFUTE** each finding against the actual HEAD diff and the surrounding code before any of them earns a fix.
 

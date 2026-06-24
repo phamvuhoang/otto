@@ -1728,7 +1728,7 @@ describe("runLoop", () => {
 
       expect(mocks.runPanel).toHaveBeenCalledTimes(1);
       expect(mocks.runPanel).toHaveBeenCalledWith(
-        expect.objectContaining({ lenses: ["correctness", "security"] })
+        expect.objectContaining({ lenses: ["correctness", "tests"] })
       );
       expect(stderrText()).toContain("adaptive router: narrow-code");
     });

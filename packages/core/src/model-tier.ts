@@ -101,6 +101,21 @@ export function routeModel(opts: {
   return { tier, reasons };
 }
 
+/** Base model tier per review lens (P14). Structural/security reasoning gets the
+ *  strong tier; mechanical lenses run cheaper. Pin (OTTO_MODEL/OTTO_CLAUDE_MODEL)
+ *  and failure-escalation still take precedence in resolveStageModel/routeModel. */
+export const LENS_TIER: Record<string, ModelTier> = {
+  structural: "strong",
+  security: "strong",
+  correctness: "mid",
+  "task-fit": "mid",
+  tests: "cheap",
+};
+
+export function tierForLens(lens: string): ModelTier {
+  return LENS_TIER[lens] ?? "mid";
+}
+
 /** The model decision for one stage: the spec, the tier (when routed), and why. */
 export type StageModel = {
   spec: string | undefined;

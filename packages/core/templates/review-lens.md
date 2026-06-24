@@ -24,6 +24,8 @@ Read that file with `Read` (use `offset`/`limit` for large diffs) before reviewi
 
 # REVIEWER — {{ LENS }} lens
 
+@include:lens-guidance/{{LENS}}.md
+
 You review the most recent commit (HEAD) through ONE lens only: **{{ LENS }}**.
 
 - `correctness` — bugs, regressions, broken logic, unhandled edge cases.
@@ -33,9 +35,22 @@ You review the most recent commit (HEAD) through ONE lens only: **{{ LENS }}**.
 
 If `<head>` shows `(no commits)`, output `<lens>SKIP</lens>` and stop.
 
+## How to report findings
+
+Emit each finding on its own line, pipe-delimited:
+
+`SEVERITY | file:line | claim | why | fix?`
+
+- `SEVERITY` is one of `blocker | major | minor | nit`.
+- `file:line` may be `path` or `path:line` or `path:start-end`.
+- `fix` (a one-line remediation hint) is optional.
+
+Example:
+`major | packages/core/src/loop.ts:120-180 | gate+routing+cost in one block | three responsibilities, hard to scan | extract resolveGate()`
+
 # OUTPUT
 
-List concrete findings for the **{{ LENS }}** lens only, each as `- <file>:<line> — <issue>`. Be terse. If nothing for this lens, output `none`.
+Emit each finding in the wire format above (`SEVERITY | file:line | claim | why | fix?`), one per line, for the **{{ LENS }}** lens only. Be terse. If you have no findings for this lens, output `none`.
 
 # RULES
 

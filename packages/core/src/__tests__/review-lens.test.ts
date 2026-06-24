@@ -34,6 +34,36 @@ function render(lens: string): string {
   }
 }
 
+describe("structural lens (P14)", () => {
+  it("injects the seven structural standards for LENS=structural", () => {
+    const out = render("structural");
+    expect(out).toContain("# REVIEWER — structural lens");
+    expect(out).toMatch(/code judo|structural simplification/i);
+    expect(out).toMatch(/1,?000 lines/);
+    expect(out).toMatch(/spaghetti|ad-hoc conditional/i);
+  });
+
+  it("instructs every lens to emit the severity wire format", () => {
+    const out = render("correctness");
+    expect(out).toMatch(/SEVERITY \| file:line \| claim \| why \| fix/);
+    expect(out).toMatch(/blocker.*major.*minor.*nit/i);
+  });
+
+  it("OUTPUT section does not reintroduce the old dash-bullet format", () => {
+    // The # OUTPUT section must be consistent with the severity wire format.
+    // A model anchoring on # OUTPUT that sees the old dash-bullet format will
+    // emit findings that parseFindings silently drops → panel degrades to no-op.
+    const out = render("correctness");
+    // Old format was: `- <file>:<line> — <issue>` (dash-bullet, em-dash)
+    expect(out).not.toMatch(/- <file>:<line> — <issue>/);
+  });
+
+  it("renders existing lenses without structural guidance leaking in", () => {
+    const out = render("tests");
+    expect(out).not.toMatch(/code judo/i);
+  });
+});
+
 describe("review-lens task-fit lens", () => {
   it("ships a task-fit lens definition focused on solving the right problem", () => {
     const out = render("task-fit");

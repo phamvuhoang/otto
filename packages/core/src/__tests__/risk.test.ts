@@ -96,8 +96,8 @@ describe("selectLenses", () => {
     expect(selectLenses("panel", available)).toEqual(available);
   });
 
-  it("selects a capped subset for lenses depth", () => {
-    expect(selectLenses("lenses", available)).toEqual(["correctness", "security"]);
+  it("selects the medium subset for lenses depth (correctness, tests, task-fit only)", () => {
+    expect(selectLenses("lenses", available)).toEqual(["correctness", "tests"]);
   });
 
   it("never returns more than the available lenses", () => {
@@ -119,7 +119,7 @@ describe("routeReview", () => {
   it("routes a narrow code change to a lens subset", () => {
     const r = routeReview(["packages/core/src/eval.ts"], available);
     expect(r.depth).toBe("lenses");
-    expect(r.lenses).toEqual(["correctness", "security"]);
+    expect(r.lenses).toEqual(["correctness", "tests"]);
   });
 
   it("routes a security-sensitive change to the full panel", () => {

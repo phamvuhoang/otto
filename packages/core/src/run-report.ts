@@ -94,6 +94,8 @@ export type StageRecord = {
   skillsUsed?: SkillUsage[];
   /** Composition of this stage's rendered prompt (issue #62 P7); absent = not measured. */
   contextBreakdown?: ContextBreakdown;
+  /** Finding severity counts from the review panel (P14); absent = not a panel stage. */
+  reviewSeverity?: { blocker: number; major: number; minor: number; nit: number; suppressed: number };
   startedAt: string;
   finishedAt: string;
 };

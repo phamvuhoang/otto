@@ -24,7 +24,7 @@ Read that file with `Read` (use `offset`/`limit` for large diffs) before judging
 
 # ADVERSARIAL VERIFICATION
 
-Review lenses (correctness / security / tests) each examined HEAD and wrote findings to `{{ FINDINGS_DIR }}` — `Read` every `findings-*.md` file there.
+Review lenses (correctness / security / tests / task-fit / structural) each examined HEAD and wrote findings to `{{ FINDINGS_DIR }}` — `Read` every `findings-*.md` file there.
 
 Your role is the **SKEPTIC**. The lenses are eager: many findings will be false positives, speculative, pre-existing, out of scope, or things this repo already accepts. Try to **REFUTE** each finding against the actual HEAD diff and the surrounding code before any of them earns a fix.
 
@@ -37,12 +37,17 @@ Bias toward **REJECTED** when genuinely uncertain: this loop commits fixes with 
 
 # OUTPUT
 
-Write your verdicts to `{{ FINDINGS_DIR }}verdicts.md`, one finding per line, deduped:
+Write your verdicts to `{{ FINDINGS_DIR }}verdicts.md`, one finding per line, deduped.
 
-```
-CONFIRMED — <file>:<line> — <issue> — <one line: why it is real>
-REJECTED — <file>:<line> — <issue> — <one line: why not>
-```
+Write each verdict on its own line, carrying severity (you MAY **downgrade** a
+finding's severity if it is real but smaller than claimed):
+
+- `CONFIRMED <severity> | file:line | claim | why this is really a problem`
+- `REJECTED | file:line | claim | why this is not a real problem`
+
+`<severity>` is one of `blocker | major | minor | nit`. Stay biased toward
+REJECTED for anything you cannot substantiate — a false positive costs more than
+a missed nit.
 
 If the lenses produced no findings at all, write a single line: `none`.
 

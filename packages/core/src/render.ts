@@ -85,9 +85,13 @@ export function renderTemplate(
 
   // Expand @include directives recursively until no directives remain.
   // Each pass resolves relative paths against the including file's directory.
+  // vars are substituted into the path so @include:lens-guidance/{{ LENS }}.md works.
   function expandIncludes(text: string, fromDir: string): string {
     const expanded = text.replace(INCLUDE_TAG, (_match, rel: string) => {
-      const target = isAbsolute(rel) ? rel : resolve(fromDir, rel);
+      const resolvedRel = rel.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (m, k: string) =>
+        Object.prototype.hasOwnProperty.call(vars, k) ? vars[k] : m
+      );
+      const target = isAbsolute(resolvedRel) ? resolvedRel : resolve(fromDir, resolvedRel);
       const content = readFileSync(target, "utf8").replace(/\r?\n$/, "");
       // Recurse so includes within included files are resolved relative to
       // the included file's own directory.

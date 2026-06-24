@@ -126,22 +126,22 @@ export function reviewDepthForLevel(level: RiskLevel): ReviewDepth {
   }
 }
 
-/** Lenses to run at a given review depth, drawn from the available pool. */
-const LENSES_DEPTH_CAP = 2;
-
 /**
  * Choose which review lenses run at a {@link ReviewDepth}, drawn (in order) from
- * the available pool: `single` → none (a plain single reviewer), `lenses` → a
- * capped medium subset, `panel` → the full pool. Pure.
+ * the available pool: `single` → none (a plain single reviewer), `lenses` → the
+ * medium subset (correctness, tests, task-fit — excludes security and structural),
+ * `panel` → the full pool including structural. Pure.
  */
 export function selectLenses(depth: ReviewDepth, available: string[]): string[] {
   switch (depth) {
     case "single":
       return [];
-    case "lenses":
-      return available.slice(0, LENSES_DEPTH_CAP);
+    case "lenses": {
+      const medium = ["correctness", "tests", "task-fit"];
+      return available.filter((l) => medium.includes(l));
+    }
     case "panel":
-      return available;
+      return [...available];
   }
 }
 

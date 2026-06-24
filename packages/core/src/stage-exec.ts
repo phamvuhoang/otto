@@ -1,5 +1,5 @@
 import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname, join, posix } from "node:path";
+import { dirname, join, posix, relative } from "node:path";
 import { DEFAULT_AGENT, type AgentRuntimeId } from "./agent-runtime.js";
 import { analyzeContext } from "./context-report.js";
 import { applyPromptReduction } from "./prompt-reduction.js";
@@ -13,10 +13,7 @@ import {
   stageLogPath,
   type StageResult,
 } from "./runner.js";
-import {
-  readSafetyPolicy,
-  type PolicyViolation,
-} from "./safety-policy.js";
+import { readSafetyPolicy, type PolicyViolation } from "./safety-policy.js";
 import type { SafetyEvent } from "./run-report.js";
 import type { EventSink } from "./console-ui.js";
 import { USE_COLOR, dim } from "./stream-render.js";
@@ -150,6 +147,7 @@ export async function executeStage(
       // P7). `prompt` is post-reduction, so the breakdown reflects what was sent.
       return {
         ...result,
+        logPath: relative(workspaceDir, stageLog),
         contextBreakdown: analyzeContext(prompt),
         ...(model.tier
           ? {

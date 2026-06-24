@@ -26,6 +26,7 @@ const tpl = (name: string) =>
 const CONTRACT_SECTIONS = [
   "## Verdict",
   "## Task Source",
+  "## What You Can Now Do",
   "## What Changed",
   "## Evidence",
   "## Human Acceptance Checklist",
@@ -36,7 +37,7 @@ const CONTRACT_SECTIONS = [
 // a non-engineer can verify the run; the engineer-detail sections (Task Source,
 // Evidence, …) sit below a visible divider.
 const LAYPERSON_SECTIONS = [
-  "## What Changed",
+  "## What You Can Now Do",
   "## Why",
   "## How To Verify",
   "## What To Watch",
@@ -80,7 +81,10 @@ describe("quality report contract fragment", () => {
       expect(out.indexOf(section)).toBeGreaterThan(dividerAt);
     }
     // Verdict stays first of all; the layperson summary follows it.
-    expect(out.indexOf("## Verdict")).toBeLessThan(out.indexOf("## What Changed"));
+    expect(out.indexOf("## Verdict")).toBeLessThan(
+      out.indexOf("## What You Can Now Do")
+    );
+    expect(out.indexOf("## What Changed")).toBeGreaterThan(dividerAt);
   });
 
   it("asks for plain-language verification steps and uncertainty (P9 #64)", () => {

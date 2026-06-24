@@ -8,7 +8,7 @@
  * verdict; triggers no re-plan itself (loop wiring is a follow-up).
  */
 
-import type { PlanRubricScore } from "./plan-rubric.js";
+import type { PlanDepthScore, PlanRubricScore } from "./plan-rubric.js";
 
 /**
  * Default ratio a plan must reach to clear the gate. 0.75 = three-quarters of the
@@ -16,6 +16,7 @@ import type { PlanRubricScore } from "./plan-rubric.js";
  * thin plan (no scope guard, no tasks, no verify) does not.
  */
 export const DEFAULT_PLAN_QUALITY_THRESHOLD = 0.75;
+export const DEFAULT_PLAN_DEPTH_THRESHOLD = 1;
 
 export type PlanGateVerdict = {
   passed: boolean;
@@ -27,6 +28,12 @@ export type PlanGateVerdict = {
   missing: string[];
   /** Criteria still needed to reach the threshold; 0 when passed. */
   shortfall: number;
+  /** Optional depth-gate ratio when a caller supplies the P13 depth score. */
+  depthRatio?: number;
+  /** Depth threshold applied, when present. */
+  depthThreshold?: number;
+  /** Depth criteria missing, when present. */
+  depthMissing?: string[];
 };
 
 /**
@@ -36,17 +43,30 @@ export type PlanGateVerdict = {
  */
 export function assessPlanGate(
   score: PlanRubricScore,
-  opts: { threshold?: number } = {}
+  opts: {
+    threshold?: number;
+    depth?: PlanDepthScore;
+    depthThreshold?: number;
+  } = {}
 ): PlanGateVerdict {
   const threshold = opts.threshold ?? DEFAULT_PLAN_QUALITY_THRESHOLD;
-  const passed = score.ratio >= threshold;
+  const depthThreshold = opts.depthThreshold ?? DEFAULT_PLAN_DEPTH_THRESHOLD;
+  const depthPassed = opts.depth ? opts.depth.ratio >= depthThreshold : true;
+  const passed = score.ratio >= threshold && depthPassed;
   const needed = Math.ceil(threshold * score.maxScore) - score.metCount;
   return {
     passed,
     ratio: score.ratio,
     threshold,
     missing: score.missing,
-    shortfall: passed ? 0 : Math.max(0, needed),
+    shortfall: score.ratio >= threshold ? 0 : Math.max(0, needed),
+    ...(opts.depth
+      ? {
+          depthRatio: opts.depth.ratio,
+          depthThreshold,
+          depthMissing: opts.depth.missing,
+        }
+      : {}),
   };
 }
 
@@ -61,8 +81,20 @@ export function formatPlanGate(v: PlanGateVerdict): string {
     `plan gate: ${v.passed ? "PASS" : "FAIL"} ` +
     `(${pct.format(v.ratio * 100)}% vs ${pct.format(v.threshold * 100)}% threshold)`;
   if (v.passed) return head;
-  return (
-    head +
-    `\n  re-plan to add ${v.shortfall} more: ${v.missing.join(", ") || "—"}`
-  );
+  const lines = [head];
+  if (v.shortfall > 0) {
+    lines.push(
+      `  re-plan to add ${v.shortfall} more: ${v.missing.join(", ") || "—"}`
+    );
+  }
+  if (
+    v.depthRatio != null &&
+    v.depthThreshold != null &&
+    v.depthRatio < v.depthThreshold
+  ) {
+    lines.push(
+      `  deepen plan: ${pct.format(v.depthRatio * 100)}% vs ${pct.format(v.depthThreshold * 100)}% depth threshold; missing ${v.depthMissing?.join(", ") || "—"}`
+    );
+  }
+  return lines.join("\n");
 }

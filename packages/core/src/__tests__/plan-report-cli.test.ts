@@ -9,7 +9,7 @@ import {
   runPlanReport,
   type TaskPlanScore,
 } from "../plan-report-cli.js";
-import { scorePlanQuality } from "../plan-rubric.js";
+import { scorePlanDepth, scorePlanQuality } from "../plan-rubric.js";
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), "otto-plan-report-"));
@@ -38,10 +38,10 @@ const COMPLETE = [
   "- `packages/core/src/a.ts`",
   "- `packages/core/src/b.ts`",
   "## Tasks",
-  "- [ ] 1. Write a failing test, then implement. verify: `pnpm -r test`",
-  "- [ ] 2. Wire it. verify: `pnpm -r typecheck`",
+  "- [ ] 1. Write a failing test in packages/core/src/a.test.ts, then implement. verify: `pnpm -r test`",
+  "- [ ] 2. Write a failing test in packages/core/src/b.test.ts, then wire it. verify: `pnpm -r typecheck`",
   "## Success criteria",
-  "Done when: testable. Testing notes: vitest.",
+  "Done when: the test command passes and reviewers can check the expected result.",
 ].join("\n");
 
 function deps(cwd: string) {
@@ -62,8 +62,16 @@ function deps(cwd: string) {
 describe("formatPlanReport", () => {
   it("renders a scorecard per task", () => {
     const tasks: TaskPlanScore[] = [
-      { taskKey: "issue-1", score: scorePlanQuality(COMPLETE) },
-      { taskKey: "issue-2", score: scorePlanQuality("# thin\njust do it") },
+      {
+        taskKey: "issue-1",
+        score: scorePlanQuality(COMPLETE),
+        depth: scorePlanDepth(COMPLETE),
+      },
+      {
+        taskKey: "issue-2",
+        score: scorePlanQuality("# thin\njust do it"),
+        depth: scorePlanDepth("# thin\njust do it"),
+      },
     ];
     const out = formatPlanReport(tasks);
     expect(out).toContain("Plan report");
@@ -71,6 +79,7 @@ describe("formatPlanReport", () => {
     expect(out).toContain("Task issue-2");
     expect(out).toMatch(/8\/8/);
     expect(out).toMatch(/0\/8/);
+    expect(out).toMatch(/plan depth/);
     // the gate flags each task PASS/FAIL (slice 7): the complete plan passes,
     // the thin one fails.
     expect(out).toMatch(/plan gate: PASS/);
@@ -93,10 +102,12 @@ describe("readTaskPlans", () => {
     // Split COMPLETE's content across the two files.
     writeTask(ws, "issue-1", {
       spec: "## Problem\nbroken\n## Scope guard\nNon-goals: x",
-      plan: "## Tasks\n- [ ] 1. write a failing test. verify: `pnpm -r test`\n- [ ] 2. go",
+      plan: "## Tasks\n- [ ] 1. write a failing test in packages/core/src/a.test.ts. verify: `pnpm -r test`\n- [ ] 2. go",
     });
     const scored = readTaskPlans(ws);
-    const ids = scored[0].score.results.filter((r) => r.met).map((r) => r.criterion);
+    const ids = scored[0].score.results
+      .filter((r) => r.met)
+      .map((r) => r.criterion);
     expect(ids).toContain("problem"); // from spec
     expect(ids).toContain("taskBreakdown"); // from plan
     expect(ids).toContain("scopeGuard");

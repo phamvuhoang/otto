@@ -65,7 +65,14 @@ vi.mock("../stream-render.js", () => ({
   greenOut: (s: string) => s,
   boldOut: (s: string) => s,
   dimOut: (s: string) => s,
-  SYM: { bullet: "*", cont: "  >", check: "ok", cross: "FAIL", rule: "=", ellip: "..." },
+  SYM: {
+    bullet: "*",
+    cont: "  >",
+    check: "ok",
+    cross: "FAIL",
+    rule: "=",
+    ellip: "...",
+  },
   SYM_OUT: { bullet: "*" },
 }));
 
@@ -104,6 +111,13 @@ function makeDirs(): LoopDirs {
   writeFileSync(
     join(packageDir, "templates", stage.template),
     "run {{ INPUTS }}",
+    "utf8"
+  );
+  // The P15 emit-time report-rubric gate may invoke this stage directly when an
+  // emitted report fails the legibility rubric; its template must resolve.
+  writeFileSync(
+    join(packageDir, "templates", "report-rewrite.md"),
+    "rewrite {{ MISSING }}",
     "utf8"
   );
 
@@ -702,9 +716,7 @@ describe("runLoop", () => {
     const dirs = makeDirs();
     roots.push(dirs.root);
     mocks.runStage.mockResolvedValue(ok(sentinel));
-    await runLoop(
-      loopOptions(dirs, { fanOut: true, fanOutConcurrency: 3 })
-    );
+    await runLoop(loopOptions(dirs, { fanOut: true, fanOutConcurrency: 3 }));
     // No .otto/tasks/<key>/tasks.json exists → fan-out is a no-op and the gate
     // implementer stage still runs (graceful degradation invariant).
     const implCalls = mocks.runStage.mock.calls.filter(
@@ -852,7 +864,11 @@ describe("runLoop", () => {
       mocks.runPanel
         .mockImplementationOnce((opts: PanelOpts) => {
           // First attempt records a lens substage, then a later substage limits.
-          opts.recordStage("correctness", ok("lens"), "2026-01-01T00:00:00.000Z");
+          opts.recordStage(
+            "correctness",
+            ok("lens"),
+            "2026-01-01T00:00:00.000Z"
+          );
           throw new RateLimitError(
             "session limit",
             Math.floor(Date.now() / 1000)
@@ -860,7 +876,11 @@ describe("runLoop", () => {
         })
         .mockImplementationOnce((opts: PanelOpts) => {
           const sr = ok("<review>OK</review>");
-          opts.recordStage("correctness", ok("lens"), "2026-01-01T00:00:01.000Z");
+          opts.recordStage(
+            "correctness",
+            ok("lens"),
+            "2026-01-01T00:00:01.000Z"
+          );
           opts.recordStage("review-synth", sr, "2026-01-01T00:00:02.000Z");
           return sr;
         });
@@ -919,15 +939,15 @@ describe("runLoop", () => {
     it("persists an emitted quality report into the bundle and links it (P9 #64)", async () => {
       const dirs = makeDirs();
       roots.push(dirs.root);
-      const report = "# Otto quality report\n\n## Verdict\n\nNeeds human review\n";
+      const report =
+        "# Otto quality report\n\n## Verdict\n\nNeeds human review\n";
       // The gate stage emits the report AND the completion sentinel (the real
       // ghafk implementer does both on the finishing iteration).
       mocks.runStage.mockResolvedValue(ok(`${report}\n${sentinel}`));
       await runLoop(loopOptions(dirs, { maxRetries: 0 }));
 
-      const { runsDir, readManifest, readRunReport } = await import(
-        "../run-report.js"
-      );
+      const { runsDir, readManifest, readRunReport } =
+        await import("../run-report.js");
       const ids = (await import("node:fs")).readdirSync(
         runsDir(dirs.workspaceDir)
       );
@@ -938,21 +958,94 @@ describe("runLoop", () => {
       expect(manifest?.artifacts.some((a) => a.kind === "report")).toBe(true);
     });
 
-    it("persists no report when no stage emits one (P9 #64)", async () => {
+    it("persists a harness fallback report when no stage emits one (P15 #85)", async () => {
       const dirs = makeDirs();
       roots.push(dirs.root);
       mocks.runStage.mockResolvedValue(ok(sentinel)); // gate completes, no marker
       await runLoop(loopOptions(dirs, { maxRetries: 0 }));
 
-      const { runsDir, readManifest, readRunReport } = await import(
-        "../run-report.js"
-      );
+      const { runsDir, readManifest, readRunReport } =
+        await import("../run-report.js");
       const ids = (await import("node:fs")).readdirSync(
         runsDir(dirs.workspaceDir)
       );
-      expect(readRunReport(dirs.workspaceDir, ids[0])).toBeNull();
+      const report = readRunReport(dirs.workspaceDir, ids[0]);
+      expect(report).toContain("# Otto quality report");
+      expect(report).toContain("## What You Can Now Do");
+      expect(report).toContain("## Automated Evidence");
       const manifest = readManifest(dirs.workspaceDir, ids[0]);
-      expect(manifest?.artifacts.some((a) => a.kind === "report")).toBe(false);
+      expect(manifest?.artifacts.some((a) => a.kind === "report")).toBe(true);
+    });
+
+    it("runs the report-rewrite stage once when the emitted report fails the rubric (P15)", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      // Gate emits a report that is MISSING the layperson sections (fails the
+      // rubric) plus the sentinel. The rewrite stage emits a complete report.
+      const badReport = "# Otto quality report\n\n## Verdict\n\nAccepted\n";
+      const goodReport = [
+        "# Otto quality report",
+        "## Verdict",
+        "Accepted",
+        "## What You Can Now Do",
+        "Ship it.",
+        "## Why",
+        "Because.",
+        "## How To Verify",
+        "1. Run it.",
+        "## What To Watch",
+        "Nothing.",
+        "## What I Was Unsure About",
+        "Nothing.",
+        "_Engineer detail below — a non-engineer can stop reading here._",
+      ].join("\n\n");
+      mocks.runStage.mockImplementation((s) => {
+        if (s.name === "report-rewrite") return Promise.resolve(ok(goodReport));
+        return Promise.resolve(ok(`${badReport}\n${sentinel}`));
+      });
+      await runLoop(loopOptions(dirs, { maxRetries: 0 }));
+
+      const rewriteCalls = mocks.runStage.mock.calls.filter(
+        (c) => (c[0] as Stage).name === "report-rewrite"
+      );
+      expect(rewriteCalls).toHaveLength(1);
+
+      const { runsDir, readRunReport } = await import("../run-report.js");
+      const ids = (await import("node:fs")).readdirSync(
+        runsDir(dirs.workspaceDir)
+      );
+      const report = readRunReport(dirs.workspaceDir, ids[0]);
+      // The persisted report reflects the rewrite stage's complete output.
+      expect(report).toContain("## What You Can Now Do");
+      expect(report).toContain("Ship it.");
+    });
+
+    it("does not run the report-rewrite stage when the emitted report passes the rubric (P15)", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+      const goodReport = [
+        "# Otto quality report",
+        "## Verdict",
+        "Accepted",
+        "## What You Can Now Do",
+        "Ship it.",
+        "## Why",
+        "Because.",
+        "## How To Verify",
+        "1. Run it.",
+        "## What To Watch",
+        "Nothing.",
+        "## What I Was Unsure About",
+        "Nothing.",
+        "_Engineer detail below — a non-engineer can stop reading here._",
+      ].join("\n\n");
+      mocks.runStage.mockResolvedValue(ok(`${goodReport}\n${sentinel}`));
+      await runLoop(loopOptions(dirs, { maxRetries: 0 }));
+
+      const rewriteCalls = mocks.runStage.mock.calls.filter(
+        (c) => (c[0] as Stage).name === "report-rewrite"
+      );
+      expect(rewriteCalls).toHaveLength(0);
     });
 
     it("flags failures in the done summary when a stage failed", async () => {
@@ -1503,7 +1596,9 @@ describe("runLoop", () => {
     );
 
     const { runsDir, readManifest } = await import("../run-report.js");
-    const ids = (await import("node:fs")).readdirSync(runsDir(dirs.workspaceDir));
+    const ids = (await import("node:fs")).readdirSync(
+      runsDir(dirs.workspaceDir)
+    );
     expect(ids).toHaveLength(1);
     const manifest = readManifest(dirs.workspaceDir, ids[0]);
     expect(manifest).toMatchObject({
@@ -1530,7 +1625,9 @@ describe("runLoop", () => {
     // never the sentinel, so both stages run in the single iteration.
     mocks.runStage.mockResolvedValue(ok("keep going", 0.1));
 
-    await runLoop(loopOptions(dirs, { stages: [stage, reviewer], iterations: 1 }));
+    await runLoop(
+      loopOptions(dirs, { stages: [stage, reviewer], iterations: 1 })
+    );
 
     const { runsDir, readStageRecords } = await import("../run-report.js");
     const ids = (await import("node:fs")).readdirSync(
@@ -1561,7 +1658,9 @@ describe("runLoop", () => {
     );
     mocks.runStage.mockResolvedValue(ok(sentinel));
 
-    await runLoop(loopOptions(dirs, { stages: [stage, reviewer], iterations: 1 }));
+    await runLoop(
+      loopOptions(dirs, { stages: [stage, reviewer], iterations: 1 })
+    );
 
     const { runsDir, readStageRecords } = await import("../run-report.js");
     const ids = (await import("node:fs")).readdirSync(
@@ -1710,7 +1809,9 @@ describe("runLoop", () => {
     function routerOptions(dirs: LoopDirs, changedPaths: string[]) {
       // Implementer (gate) does NOT emit the sentinel, so the reviewer runs.
       mocks.runStage.mockImplementation((s: Stage) =>
-        Promise.resolve(s.name === "implementer" ? ok("did work") : ok("reviewed"))
+        Promise.resolve(
+          s.name === "implementer" ? ok("did work") : ok("reviewed")
+        )
       );
       mocks.runPanel.mockResolvedValue(ok("paneled"));
       return loopOptions(dirs, {
@@ -1752,14 +1853,18 @@ describe("runLoop", () => {
       expect(mocks.runPanel).not.toHaveBeenCalled();
       // implementer + single reviewer both went through runStage.
       expect(mocks.runStage).toHaveBeenCalledTimes(2);
-      expect(stderrText()).toContain("adaptive router: docs-only → single reviewer");
+      expect(stderrText()).toContain(
+        "adaptive router: docs-only → single reviewer"
+      );
     });
 
     it("leaves the static review path untouched when the flag is off", async () => {
       const dirs = makeDirs();
       roots.push(dirs.root);
       mocks.runStage.mockImplementation((s: Stage) =>
-        Promise.resolve(s.name === "implementer" ? ok("did work") : ok("reviewed"))
+        Promise.resolve(
+          s.name === "implementer" ? ok("did work") : ok("reviewed")
+        )
       );
       mocks.runPanel.mockResolvedValue(ok("paneled"));
       // No adaptiveRouter: a low-risk path must NOT downgrade the configured panel.
@@ -1798,7 +1903,9 @@ describe("runLoop", () => {
       const dirs = makeDirs();
       roots.push(dirs.root);
       mocks.runStage.mockResolvedValue(ok("still working"));
-      await runLoop(loopOptions(dirs, { iterations: 3, resolveChangedPaths: () => [] }));
+      await runLoop(
+        loopOptions(dirs, { iterations: 3, resolveChangedPaths: () => [] })
+      );
       expect(mocks.runStage).toHaveBeenCalledTimes(3); // ran every iteration
       expect(stderrText()).not.toContain("stop-low-progress");
     });
@@ -1819,6 +1926,105 @@ describe("runLoop", () => {
       );
       expect(mocks.runStage).toHaveBeenCalledTimes(3); // ran every iteration
       expect(stderrText()).not.toContain("stop-low-progress");
+    });
+  });
+
+  describe("plan mode gate (P13)", () => {
+    // A deliberately thin plan: no rubric criteria and no depth criteria met.
+    // scorePlanQuality → 0/8 (0% < 75% threshold) → gate FAILS.
+    const thinPlan = "# A plan\n\nNo structure here.\n";
+
+    // A rich plan that satisfies all rubric criteria and all depth criteria.
+    // Each task must name a failing test + test file + verify command to pass
+    // the depth criterion taskTestAndVerify.
+    const richPlan = [
+      "## Problem statement",
+      "",
+      "We need to fix the scoring logic. Assumptions: X, Y. Decisions: use vitest.",
+      "",
+      "## Scope guard",
+      "",
+      "Non-goals: we won't refactor the CLI.",
+      "",
+      "## Files",
+      "",
+      "- `packages/core/src/plan-rubric.ts`",
+      "- `packages/core/src/__tests__/plan-rubric.test.ts`",
+      "",
+      "## Tasks",
+      "",
+      "1. Write failing test — test-first, pinned by `packages/core/src/__tests__/plan-rubric.test.ts`",
+      "   verify: `pnpm vitest run`",
+      "2. Implement the fix — write failing test pinned by `packages/core/src/__tests__/plan-rubric.test.ts`",
+      "   verify: `pnpm vitest run`",
+      "",
+      "## Success criteria",
+      "",
+      "Done when all tests pass and `pnpm vitest run` exits 0. Acceptance: run command above.",
+      "Testable success: assert score.ratio > 0.75.",
+    ].join("\n");
+
+    it("plan mode re-plans once on a thin plan, then pauses", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+
+      // Write a thin plan so assessPlanGate returns passed: false.
+      mkdirSync(join(dirs.workspaceDir, ".otto", "tasks", "task-1"), {
+        recursive: true,
+      });
+      writeFileSync(
+        join(dirs.workspaceDir, ".otto", "tasks", "task-1", "plan.md"),
+        thinPlan,
+        "utf8"
+      );
+
+      // Gate stage always emits the sentinel (plan "done") on every call.
+      mocks.runStage.mockResolvedValue(ok(sentinel));
+
+      await runLoop(loopOptions(dirs, { mode: "plan", iterations: 3 }));
+
+      // The gate stage (index 0) must have run TWICE:
+      // - first pass: gate fails → replan (s -= 1; continue → re-runs stage 0)
+      // - second pass: gate fails again (replan already used) → pause
+      expect(mocks.runStage).toHaveBeenCalledTimes(2);
+
+      // The run must terminate with the paused-needs-human summary.
+      expect(stdoutText()).toContain("paused (needs human)");
+
+      // Stderr must mention the gate failure and the pause decision.
+      const err = stderrText();
+      expect(err).toContain("plan gate: FAIL");
+      expect(err).toContain(
+        "plan gate still failed after one re-plan — pausing for human review"
+      );
+    });
+
+    it("plan mode passes the gate on the first try for a rich plan", async () => {
+      const dirs = makeDirs();
+      roots.push(dirs.root);
+
+      mkdirSync(join(dirs.workspaceDir, ".otto", "tasks", "task-1"), {
+        recursive: true,
+      });
+      writeFileSync(
+        join(dirs.workspaceDir, ".otto", "tasks", "task-1", "plan.md"),
+        richPlan,
+        "utf8"
+      );
+
+      mocks.runStage.mockResolvedValue(ok(sentinel));
+
+      await runLoop(loopOptions(dirs, { mode: "plan", iterations: 3 }));
+
+      // Gate runs exactly ONCE — plan passes on the first check.
+      expect(mocks.runStage).toHaveBeenCalledTimes(1);
+
+      // Run completes normally (no pause).
+      expect(stdoutText()).toContain("Otto complete");
+      expect(stdoutText()).not.toContain("paused (needs human)");
+
+      // Stderr shows the gate PASS.
+      expect(stderrText()).toContain("plan gate: PASS");
     });
   });
 });

@@ -25,6 +25,7 @@ import { getAgentRuntime, stageLogPath, type StageResult } from "./runner.js";
 import {
   allocateRunId,
   hasRunReport,
+  readStageRecords,
   removeStageRecords,
   writeManifest,
   writeRunReport,
@@ -33,6 +34,12 @@ import {
   type RunManifest,
   type StageRecord,
 } from "./run-report.js";
+import {
+  DEFAULT_REPORT_LEGIBILITY_THRESHOLD,
+  extractRunReport,
+  finalizeReportText,
+} from "./report-finalize.js";
+import { scoreReportLegibility } from "./report-rubric.js";
 import { executeStage } from "./stage-exec.js";
 import { ConsoleUi, VerboseSink, type EventSink } from "./console-ui.js";
 import {
@@ -56,6 +63,18 @@ import {
 import type { Stage } from "./stages.js";
 import { maybeJournal } from "./journal.js";
 import {
+  detectScopeDrift,
+  formatPlanDepthRubric,
+  scorePlanDepth,
+  scorePlanQuality,
+} from "./plan-rubric.js";
+import { assessPlanGate, formatPlanGate } from "./plan-gate.js";
+import { latestTaskPlanDocument } from "./plan-artifacts.js";
+import {
+  formatCheckpointPrompt,
+  resolvePlanCheckpoint,
+} from "./plan-checkpoint.js";
+import {
   addTokenUsage,
   emptyTokenUsage,
   formatTokenUsage,
@@ -69,6 +88,17 @@ export { nextActionFor };
 // The agent emits this literal when there is no more work; the same string is
 // mirrored in the playbook templates (prompt.md / ghprompt.md) that instruct it.
 const SENTINEL = "<promise>NO MORE TASKS</promise>";
+
+// Bounded one-shot report-rewrite stage (P15 #85). Invoked directly outside the
+// main chain when an emitted quality report fails the emit-time legibility
+// rubric, mirroring panel.ts's locally-defined stage consts. Latched to one
+// rewrite per run via reportRewriteUsed.
+const REPORT_REWRITE_STAGE: Stage = {
+  name: "report-rewrite",
+  template: "report-rewrite.md",
+  permissionMode: "bypassPermissions",
+  tier: "mid",
+};
 
 const RATE_LIMIT_BUFFER_MS = 30_000;
 const RATE_LIMIT_FALLBACK_MS = 15 * 60_000;
@@ -347,6 +377,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   const switchFromId: AgentRuntimeId = agentId;
 
   const nowIso = () => new Date().toISOString();
+  const runStartSha = headSha(workspaceDir);
   if (fresh) clearState(workspaceDir);
   const prior = fresh ? null : readState(workspaceDir);
   const resuming = matchesResume(prior, { bin, mode, inputs });
@@ -413,7 +444,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     stageName: string,
     sr: StageResult,
     startedAt: string,
-    reviewSeverity?: { blocker: number; major: number; minor: number; nit: number; suppressed: number }
+    reviewSeverity?: {
+      blocker: number;
+      major: number;
+      minor: number;
+      nit: number;
+      suppressed: number;
+    }
   ): void => {
     stageLog.push({
       iteration: recIteration,
@@ -421,20 +458,26 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       isError: sr.isError,
     });
     try {
-      const name = writeStageRecord(workspaceDir, runId, recordedStageFiles.length, {
-        iteration: recIteration,
-        stage: stageName,
-        runtimeId: sr.runtimeId ?? activeAgentId,
-        costUsd: sr.costUsd,
-        usage: sr.usage,
-        isError: sr.isError,
-        apiErrorStatus: sr.apiErrorStatus,
-        safetyEvents: sr.safetyEvents,
-        contextBreakdown: sr.contextBreakdown,
-        ...(reviewSeverity ? { reviewSeverity } : {}),
-        startedAt,
-        finishedAt: nowIso(),
-      });
+      const name = writeStageRecord(
+        workspaceDir,
+        runId,
+        recordedStageFiles.length,
+        {
+          iteration: recIteration,
+          stage: stageName,
+          runtimeId: sr.runtimeId ?? activeAgentId,
+          costUsd: sr.costUsd,
+          usage: sr.usage,
+          isError: sr.isError,
+          apiErrorStatus: sr.apiErrorStatus,
+          logPath: sr.logPath,
+          safetyEvents: sr.safetyEvents,
+          contextBreakdown: sr.contextBreakdown,
+          ...(reviewSeverity ? { reviewSeverity } : {}),
+          startedAt,
+          finishedAt: nowIso(),
+        }
+      );
       recordedStageFiles.push(name);
     } catch {
       // Best-effort: never fail a run because a stage record could not be written.
@@ -489,10 +532,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
   let completedIterations = 0;
   let sentinelHit = false;
-  // Most recent emitted quality report (P9 #64), kept so finalize can persist it
+  // Most recent emitted quality report, kept so finalize can enrich + persist it
   // to the bundle for `otto-explain`. Captured by content marker; null until a
-  // stage emits one (afk/plan-mode never does).
+  // stage emits one; when absent, finalize falls back to a harness-authored
+  // evidence-first report.
   let lastReportText: string | null = null;
+  let planReplanUsed = false;
+  let reportRewriteUsed = false;
   let runCostUsd = 0;
   let runTokenUsage = emptyTokenUsage();
   let cooldownFactor = 1;
@@ -575,9 +621,59 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // covered without threading the manifest through each return site.
   const finalizeManifest = (reason: string, completed: number): void => {
     try {
-      // Persist the emitted report before the manifest, so collectArtifacts can
-      // detect and link it (best-effort; absent when no stage emitted one).
-      if (lastReportText) writeRunReport(workspaceDir, runId, lastReportText);
+      const changedFiles = changedFilesSince(workspaceDir, runStartSha);
+      const planDoc = latestTaskPlanDocument(workspaceDir);
+      const inputText = inputs || "";
+      // Conservative plan↔run match (P15 review): full spec/plan path matches and
+      // the exact issue-key form are specific. The bare task-key match is
+      // boundary-guarded (whole token, not an arbitrary substring) so a short or
+      // stale key can't accidentally match an unrelated run's inputs and attach a
+      // misleading scope-drift note.
+      const keyIsWholeToken = (hay: string, key: string): boolean => {
+        if (!key) return false;
+        const boundary = (c: string) => c === "" || !/[A-Za-z0-9_-]/.test(c);
+        for (let idx = hay.indexOf(key); idx >= 0; idx = hay.indexOf(key, idx + 1)) {
+          const before = idx === 0 ? "" : hay[idx - 1];
+          const after = hay[idx + key.length] ?? "";
+          if (boundary(before) && boundary(after)) return true;
+        }
+        return false;
+      };
+      const planMatchesRun =
+        planDoc != null &&
+        (keyIsWholeToken(inputText, planDoc.taskKey) ||
+          inputText.includes(planDoc.specPath) ||
+          inputText.includes(planDoc.planPath) ||
+          planDoc.taskKey === `issue-${inputText}`);
+      const scopeDrift =
+        planDoc && planMatchesRun
+          ? detectScopeDrift(planDoc.doc, changedFiles)
+          : null;
+      const manifestForReport: RunManifest = {
+        runId,
+        bin,
+        mode,
+        inputs,
+        runtime: { id: activeAgentId, displayName: activeAgentDisplayName },
+        branchStrategy,
+        iterations: total,
+        completedIterations: completed,
+        costUsd: runCostUsd,
+        tokenUsage: runTokenUsage,
+        exitReason: reason,
+        nextAction: nextActionFor(reason),
+        artifacts: [],
+        startedAt: manifestStartedAt,
+        finishedAt: nowIso(),
+      };
+      const report = finalizeReportText(lastReportText, {
+        manifest: manifestForReport,
+        stages: readStageRecords(workspaceDir, runId),
+        headSha: headSha(workspaceDir),
+        changedFiles,
+        scopeDrift,
+      });
+      writeRunReport(workspaceDir, runId, report);
       writeManifest(workspaceDir, {
         runId,
         bin,
@@ -629,7 +725,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       startedAt: manifestStartedAt,
       finishedAt: nowTs,
     };
-    const view = buildRunView(manifestSnap, stageLog as unknown as StageRecord[]);
+    const view = buildRunView(
+      manifestSnap,
+      stageLog as unknown as StageRecord[]
+    );
     let out = formatDoneCard(view) + "\n";
     // Runtime label + optional token usage: keeps the greppable "runtime: <id>"
     // in stdout (tests check for it) and the token count assertion.
@@ -681,6 +780,74 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       startedAt: prior?.startedAt ?? nowIso(),
       updatedAt: nowIso(),
     });
+
+  const resolveCheckpointDecision = async (prompt: string) => {
+    let close: (() => void) | undefined;
+    return resolvePlanCheckpoint(prompt, {
+      interactive:
+        Boolean(process.stdin.isTTY) &&
+        Boolean(process.stdout.isTTY) &&
+        !externalSignal,
+      out: (msg) => process.stderr.write(`${msg}\n`),
+      readLine: async () => {
+        const { createInterface } = await import("node:readline/promises");
+        const rl = createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+        close = () => rl.close();
+        try {
+          return await rl.question("");
+        } finally {
+          close?.();
+        }
+      },
+    });
+  };
+
+  const handlePlanCompletion = async (): Promise<
+    "accept" | "replan" | "pause"
+  > => {
+    if (mode !== "plan") return "accept";
+    const planDoc = latestTaskPlanDocument(workspaceDir);
+    if (!planDoc) return "accept";
+    const score = scorePlanQuality(planDoc.doc);
+    const depth = scorePlanDepth(planDoc.doc);
+    const gate = assessPlanGate(score, { depth });
+    process.stderr.write(`${formatPlanGate(gate)}\n`);
+    if (!gate.passed) {
+      process.stderr.write(`${formatPlanDepthRubric(depth)}\n`);
+      if (!planReplanUsed) {
+        planReplanUsed = true;
+        resumeNote = [
+          "The authored plan failed Otto's semantic plan gate. Re-plan once before stopping.",
+          formatPlanGate(gate),
+          formatPlanDepthRubric(depth),
+          `Rewrite ${planDoc.specPath} and ${planDoc.planPath}; keep the same task key unless the original key was wrong.`,
+        ].join("\n\n");
+        process.stderr.write(
+          `${dim("plan gate failed — re-running the plan stage once with the shortfall")}\n`
+        );
+        return "replan";
+      }
+      process.stderr.write(
+        `${dim("plan gate still failed after one re-plan — pausing for human review")}\n`
+      );
+      return "pause";
+    }
+    const prompt = [
+      formatCheckpointPrompt({
+        taskKey: planDoc.taskKey,
+        planPath: planDoc.planPath,
+        score,
+      }),
+      formatPlanDepthRubric(depth),
+      formatPlanGate(gate),
+    ].join("\n");
+    keyboardControls?.cleanup();
+    const decision = await resolveCheckpointDecision(prompt);
+    return decision === "approve" ? "accept" : "pause";
+  };
 
   if (resuming && prior!.status === "waiting-rate-limit") {
     const waitMs = computeWaitMs(
@@ -735,7 +902,9 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             signal: activeSignal,
             onSubAgent: accountStage,
           });
-          const landed = fr.outcomes.filter((o) => o.status === "landed").length;
+          const landed = fr.outcomes.filter(
+            (o) => o.status === "landed"
+          ).length;
           process.stderr.write(
             `${dim(SYM.cont)} ${greenOut(String(landed))} landed, ${fr.deferred.length} deferred ${dim("(deferred tasks continue in the sequential loop)")}\n`
           );
@@ -801,7 +970,9 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         }
 
         const usePanel =
-          effectiveLenses && effectiveLenses.length > 0 && stage.name === "reviewer";
+          effectiveLenses &&
+          effectiveLenses.length > 0 &&
+          stage.name === "reviewer";
 
         let sr: StageResult;
         const runOnce = async (): Promise<StageResult> => {
@@ -848,10 +1019,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           });
           accountStage(r);
           if (explainRouting && modelRouting && r.routedTier) {
-            const note =
-              r.modelSource === "route"
-                ? ""
-                : ` [${r.modelSource}]`;
+            const note = r.modelSource === "route" ? "" : ` [${r.modelSource}]`;
             process.stderr.write(
               `${dim(`↳ model route: ${stage.name} → ${r.routedTier} (${r.routedModel ?? "default"})${note}`)}\n`
             );
@@ -895,7 +1063,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               // Mirror the accounting rollback for evidence records: drop the
               // failed attempt's inline panel substage records so the retry
               // re-records into the same seqs instead of duplicating them.
-              const discardedRecords = recordedStageFiles.splice(recordSnapshot);
+              const discardedRecords =
+                recordedStageFiles.splice(recordSnapshot);
               if (discardedRecords.length > 0) {
                 removeStageRecords(workspaceDir, runId, discardedRecords);
                 stageLog.splice(recordSnapshot);
@@ -1012,12 +1181,66 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         if (!usePanel) recordStage(i, stage.name, sr!, stageStartedAt);
 
         // Persist the most recent emitted quality report so otto-explain can
-        // re-render this run for a non-engineer (P9 #64). Keyed on the report's
-        // content marker — the implementer emits it; afk/plan-mode emits none.
-        if (sr!.result && hasRunReport(sr!.result)) lastReportText = sr!.result;
+        // re-render this run for a non-engineer. Keyed on the report's content
+        // marker, then trimmed to the report body so the sentinel/log chatter is
+        // not stored in report.md.
+        if (sr!.result && hasRunReport(sr!.result)) {
+          lastReportText = extractRunReport(sr!.result);
+          // Emit-time report rubric gate (P15 #85): when the captured
+          // model-emitted report fails the legibility rubric, run a dedicated
+          // lightweight rewrite stage ONCE to regenerate a compliant report,
+          // then accept whatever it returns. Latched to one rewrite per run
+          // (mirrors the P13 re-plan latch). Only the model-emitted branch is
+          // hooked, so the harness fallback report never triggers it.
+          if (lastReportText && !reportRewriteUsed) {
+            const score = scoreReportLegibility(lastReportText);
+            if (score.ratio < DEFAULT_REPORT_LEGIBILITY_THRESHOLD) {
+              reportRewriteUsed = true;
+              process.stderr.write(
+                `${dim(`report gate: FAIL — rewriting once (missing ${score.missing.join(", ")})`)}\n`
+              );
+              const rwStartedAt = nowIso();
+              const rw = await executeStage({
+                stage: REPORT_REWRITE_STAGE,
+                vars: {
+                  RESUME: resumeNote,
+                  REPORT: lastReportText,
+                  MISSING: score.missing.join(", "),
+                },
+                workspaceDir,
+                packageDir,
+                iteration: i,
+                maxRetries,
+                tokenMode,
+                signal: activeSignal,
+                agentId: activeAgentId,
+                sink,
+                modelRouting,
+                tierLadder,
+                riskAssessment,
+                escalations: modelEscalations,
+              });
+              accountStage(rw);
+              recordStage(i, REPORT_REWRITE_STAGE.name, rw, rwStartedAt);
+              if (rw.result && hasRunReport(rw.result)) {
+                lastReportText = extractRunReport(rw.result) ?? lastReportText;
+              }
+            }
+          }
+        }
 
         if (s === 0) {
           if (sr!.result.includes(SENTINEL)) {
+            const planDecision = await handlePlanCompletion();
+            if (planDecision === "replan") {
+              s -= 1;
+              continue;
+            }
+            if (planDecision === "pause") {
+              summarize("paused (needs human)", i);
+              persist(i, "interrupted");
+              return outcome();
+            }
             sentinelHit = true;
             completedIterations = i;
             summarize("complete", i);
@@ -1049,7 +1272,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           findingSignatures: [],
           cumulativeCostUsd: runCostUsd,
         };
-        stalledIterations = iterChanged.length === 0 ? stalledIterations + 1 : 0;
+        stalledIterations =
+          iterChanged.length === 0 ? stalledIterations + 1 : 0;
         const signals = deriveProgress(cur, prevObservation);
         prevObservation = cur;
         const decision = decide(signals, {

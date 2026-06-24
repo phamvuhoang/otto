@@ -22,7 +22,7 @@
 
 export type ReportCriterion =
   | "verdict"
-  | "whatChanged"
+  | "whatYouCanNowDo"
   | "why"
   | "howToVerify"
   | "whatToWatch"
@@ -50,9 +50,9 @@ export const REPORT_CRITERIA: ReadonlyArray<CriterionDef> = [
     detect: (d) => /(?:^|\n)#{1,6}\s+Verdict\b/i.test(d),
   },
   {
-    criterion: "whatChanged",
-    label: "What Changed section",
-    detect: (d) => /(?:^|\n)#{1,6}\s+What Changed\b/i.test(d),
+    criterion: "whatYouCanNowDo",
+    label: "What You Can Now Do section",
+    detect: (d) => /(?:^|\n)#{1,6}\s+What You Can Now Do\b/i.test(d),
   },
   {
     criterion: "why",
@@ -140,9 +140,7 @@ export function formatReportRubric(score: ReportRubricScore): string {
   const header =
     `report legibility: ${score.metCount}/${score.maxScore} ` +
     `(${pct.format(score.ratio * 100)}%)`;
-  const lines = score.results.map(
-    (r) => `  [${r.met ? "x" : " "}] ${r.label}`
-  );
+  const lines = score.results.map((r) => `  [${r.met ? "x" : " "}] ${r.label}`);
   const tail =
     score.missing.length > 0 ? [`  missing: ${score.missing.join(", ")}`] : [];
   return [header, ...lines, ...tail].join("\n");

@@ -15,12 +15,7 @@ import { resolveModelSelection } from "./model-tier.js";
 import type { ContextBreakdown } from "./context-report.js";
 import type { SafetyEvent } from "./run-report.js";
 import type { Stage } from "./stages.js";
-import {
-  boldOut,
-  dim,
-  SYM_OUT,
-  type StreamJson,
-} from "./stream-render.js";
+import { boldOut, dim, SYM_OUT, type StreamJson } from "./stream-render.js";
 import { VerboseSink, type EventSink } from "./console-ui.js";
 import {
   RateLimitError,
@@ -52,6 +47,8 @@ export type StageResult = {
   isError: boolean;
   apiErrorStatus: string | null;
   usage: TokenUsage;
+  /** Workspace-relative NDJSON log path for this stage, when known. */
+  logPath?: string;
   /** The agent runtime that produced this result (Claude's stream-json shape today). */
   runtimeId: AgentRuntimeId;
   /** Safety events emitted while rendering/running this stage (issue #43 P4);

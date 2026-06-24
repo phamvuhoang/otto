@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.3](https://github.com/phamvuhoang/otto/compare/otto-v0.8.2...otto-v0.8.3) (2026-06-24)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @phamvuhoang/otto-core bumped to 0.21.0
+
 ## [0.8.2](https://github.com/phamvuhoang/otto/compare/otto-v0.8.1...otto-v0.8.2) (2026-06-20)
 
 

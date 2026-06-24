@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.20.0...otto-core-v0.21.0) (2026-06-24)
+
+
+### Features
+
+* **review:** structural code-quality lens + severity-ranked cost-routed panel (P14) ([#95](https://github.com/phamvuhoang/otto/issues/95)) ([00c294d](https://github.com/phamvuhoang/otto/commit/00c294dc639584787b029ee1319dfd4674891cb8))
+
 ## [0.20.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.19.0...otto-core-v0.20.0) (2026-06-20)
 
 

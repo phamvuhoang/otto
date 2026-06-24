@@ -21,7 +21,7 @@ test("review depth routes by change risk through the public surface", () => {
   assert.deepEqual(routeReview(["README.md"], LENSES).lenses, []);
   assert.deepEqual(routeReview(["src/util.ts"], LENSES).lenses, [
     "correctness",
-    "security",
+    "tests",
   ]);
   assert.deepEqual(routeReview(["src/auth.ts"], LENSES).lenses, LENSES);
   // no visible diff → conservative full panel.

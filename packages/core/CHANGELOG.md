@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.28.0...otto-core-v0.28.1) (2026-06-25)
+
+
+### Bug Fixes
+
+* **templates:** cap recent-commit context to subjects; deterministic template smoke ([#162](https://github.com/phamvuhoang/otto/issues/162)) ([52405db](https://github.com/phamvuhoang/otto/commit/52405db3a0318da094b14512349258fccbfac1d6))
+
 ## [0.28.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.27.0...otto-core-v0.28.0) (2026-06-25)
 
 

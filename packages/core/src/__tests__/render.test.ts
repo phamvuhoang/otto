@@ -106,6 +106,47 @@ describe("renderTemplate safety policy at the shell boundary", () => {
   });
 });
 
+describe("renderTemplate @spill context-compression hook (P20)", () => {
+  it("writes the hook's returned text and passes the captured output through", () => {
+    const dir = mkdtempSync(join(tmpdir(), "otto-spill-comp-"));
+    const tpl = join(dir, "t.md");
+    const spillHostDir = join(dir, "spill");
+    writeFileSync(tpl, "body at @spill:issue.json=`echo BIG-ORIGINAL`", "utf8");
+    const seen: Array<[string, string]> = [];
+    const out = renderTemplate(
+      tpl,
+      {},
+      {
+        spillHostDir,
+        spillRefPath: ".otto-tmp/spill",
+        compressSpill: (name, content) => {
+          seen.push([name, content.trim()]);
+          return "COMPRESSED";
+        },
+      }
+    );
+    expect(out).toBe("body at ./.otto-tmp/spill/issue.json");
+    expect(seen).toEqual([["issue.json", "BIG-ORIGINAL"]]);
+    // The file the agent reads holds the compressed text, not the original.
+    expect(readFileSync(join(spillHostDir, "issue.json"), "utf8")).toBe(
+      "COMPRESSED"
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("absent hook writes spill output verbatim (today's behavior)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "otto-spill-plain-"));
+    const tpl = join(dir, "t.md");
+    const spillHostDir = join(dir, "spill");
+    writeFileSync(tpl, "@spill:body=`echo hello`", "utf8");
+    renderTemplate(tpl, {}, { spillHostDir, spillRefPath: ".otto-tmp/spill" });
+    expect(readFileSync(join(spillHostDir, "body"), "utf8").trim()).toBe(
+      "hello"
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("renderTemplate @include", () => {
   it("resolves nested @include chains, each hop relative to its own file", () => {
     const dir = mkdtempSync(join(tmpdir(), "otto-include-"));

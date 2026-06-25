@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { compressContent } from "../context-compressor.js";
+import { compressContent, compressContentSync } from "../context-compressor.js";
 import {
   HEADROOM_VERSION,
   createHeadroomCompressor,
+  createHeadroomSyncCompressor,
   headroomToolDefinition,
   type HeadroomRunner,
 } from "../headroom-adapter.js";
@@ -60,6 +61,33 @@ describe("createHeadroomCompressor", () => {
     );
     expect(out.degraded).toBe(true);
     expect(out.note).toBe("exit 1");
+  });
+});
+
+describe("createHeadroomSyncCompressor", () => {
+  it("probes availability once at construction and proxies the runner", () => {
+    const c = createHeadroomSyncCompressor(runner());
+    expect(c.name).toBe("headroom");
+    expect(c.version).toBe(HEADROOM_VERSION);
+    expect(c.available).toBe(true);
+    expect(
+      c.compress({ key: "k", category: "command-log", text: "abcdefgh" })
+    ).toEqual({
+      ok: true,
+      text: "abcde",
+    });
+  });
+
+  it("an unavailable runner yields available:false and degrades via compressContentSync", () => {
+    const c = createHeadroomSyncCompressor(runner({ available: () => false }));
+    expect(c.available).toBe(false);
+    const out = compressContentSync(
+      c,
+      { key: "k", category: "issue-body", text: "x".repeat(400) },
+      null
+    );
+    expect(out.degraded).toBe(true);
+    expect(out.text).toBe("x".repeat(400));
   });
 });
 

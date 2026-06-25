@@ -72,6 +72,22 @@ export type ContextCompressor = {
   ) => Promise<{ text: string; ok: boolean; note?: string }>;
 };
 
+/**
+ * A synchronous compressor for the sync render/`@spill` path. `available` is a
+ * value (probed once when the compressor is built) rather than a call, since the
+ * sync render boundary cannot await an availability check.
+ */
+export type SyncContextCompressor = {
+  name: string;
+  version: string;
+  available: boolean;
+  compress: (input: CompressInput) => {
+    text: string;
+    ok: boolean;
+    note?: string;
+  };
+};
+
 /** The measured outcome of one compression (or a degraded passthrough). */
 export type CompressOutput = {
   /** The text to actually use downstream (compressed, or original if degraded). */
@@ -158,19 +174,75 @@ export function runRetrievalStore(
   };
 }
 
+/** One compression attempt's raw result, before measurement/decision. */
+type RawResult = { text: string; ok: boolean; note?: string };
+
 /**
- * Compress one piece of content reversibly and measure it. The single entry
- * point both the live loop and the benchmark use:
+ * Turn a raw compression attempt into a measured {@link CompressOutput}, shared
+ * by the async ({@link compressContent}) and sync ({@link compressContentSync})
+ * entry points so their decision logic never drifts. `result === null` means the
+ * compressor was unavailable (degraded passthrough). A result that did not shrink
+ * the token estimate is discarded in favor of the original. Pure except for the
+ * injected `store` (only invoked on a real reduction).
+ */
+function assembleOutput(
+  input: CompressInput,
+  version: string,
+  result: RawResult | null,
+  store: RetrievalStore | null,
+  latencyMs: number
+): CompressOutput {
+  const tokensBefore = estimateTokens(input.text.length);
+  const passthrough = (degraded: boolean, note?: string): CompressOutput => ({
+    text: input.text,
+    tokensBefore,
+    tokensAfter: tokensBefore,
+    tokensSaved: 0,
+    latencyMs,
+    compressorVersion: version,
+    degraded,
+    ...(note ? { note } : {}),
+  });
+
+  if (result === null) {
+    return passthrough(
+      true,
+      `compressor "${version}" unavailable — kept original`
+    );
+  }
+  const tokensAfter = estimateTokens(result.text.length);
+  if (!result.ok || tokensAfter >= tokensBefore) {
+    return passthrough(
+      !result.ok,
+      result.note ??
+        (result.ok ? "no token reduction — kept original" : undefined)
+    );
+  }
+  const retrievalHandle = store ? store(input.key, input.text) : undefined;
+  return {
+    text: result.text,
+    tokensBefore,
+    tokensAfter,
+    tokensSaved: tokensBefore - tokensAfter,
+    ...(retrievalHandle ? { retrievalHandle } : {}),
+    latencyMs,
+    compressorVersion: version,
+    degraded: false,
+    ...(result.note ? { note: result.note } : {}),
+  };
+}
+
+/**
+ * Compress one piece of content reversibly and measure it (async — for adapters
+ * that shell out / call a local MCP server). The single entry point both a live
+ * async caller and the benchmark use:
  *
- * - off (`compressor` null) → returns the original verbatim, zero savings, no
- *   handle, not degraded;
- * - compressor unavailable or `ok: false` → degraded passthrough (original kept,
- *   `degraded: true`, a `note`), never throws;
- * - success → stores the original via `store`, returns the compressed text plus
- *   the measured tokens-before/after, savings, retrieval handle, and latency.
+ * - off (`compressor` null) → original verbatim, zero savings, not degraded;
+ * - compressor unavailable / throws / `ok: false` → degraded passthrough
+ *   (original kept), never throws;
+ * - success → stores the original via `store`, returns compressed text + measured
+ *   tokens-before/after, savings, retrieval handle, and latency.
  *
- * A "compression" that did not actually shrink the token estimate is discarded
- * in favor of the original (no point paying a retrieval indirection for nothing).
  * `now` is injected for deterministic latency in tests.
  */
 export async function compressContent(
@@ -180,19 +252,14 @@ export async function compressContent(
   deps: { now?: () => number } = {}
 ): Promise<CompressOutput> {
   const now = deps.now ?? Date.now;
-  const tokensBefore = estimateTokens(input.text.length);
-  const passthrough = (degraded: boolean, note?: string): CompressOutput => ({
-    text: input.text,
-    tokensBefore,
-    tokensAfter: tokensBefore,
-    tokensSaved: 0,
-    latencyMs: 0,
-    compressorVersion: compressor?.version ?? "off",
-    degraded,
-    ...(note ? { note } : {}),
-  });
-
-  if (!compressor) return passthrough(false);
+  if (!compressor)
+    return assembleOutput(
+      input,
+      "off",
+      { ok: true, text: input.text },
+      null,
+      0
+    );
 
   const start = now();
   let available: boolean;
@@ -201,45 +268,77 @@ export async function compressContent(
   } catch {
     available = false;
   }
-  if (!available) {
-    return passthrough(
-      true,
-      `compressor "${compressor.name}" unavailable — kept original`
+  if (!available) return assembleOutput(input, compressor.name, null, store, 0);
+
+  try {
+    const result = await compressor.compress(input);
+    return assembleOutput(
+      input,
+      compressor.version,
+      result,
+      store,
+      Math.max(0, now() - start)
+    );
+  } catch (e) {
+    return assembleOutput(
+      input,
+      compressor.version,
+      {
+        ok: false,
+        text: input.text,
+        note: `compressor error: ${(e as Error).message ?? e}`,
+      },
+      store,
+      Math.max(0, now() - start)
     );
   }
+}
 
-  let result: { text: string; ok: boolean; note?: string };
+/**
+ * Synchronous compression for the sync render/`@spill` path, where `renderTemplate`
+ * cannot await. Same reversible measurement and degrade rules as
+ * {@link compressContent}; backed by a {@link SyncContextCompressor} (the Headroom
+ * command runner is itself synchronous). `compressor === null` → original verbatim.
+ */
+export function compressContentSync(
+  compressor: SyncContextCompressor | null,
+  input: CompressInput,
+  store: RetrievalStore | null,
+  now: () => number = Date.now
+): CompressOutput {
+  if (!compressor)
+    return assembleOutput(
+      input,
+      "off",
+      { ok: true, text: input.text },
+      null,
+      0
+    );
+  if (!compressor.available)
+    return assembleOutput(input, compressor.name, null, store, 0);
+  const start = now();
   try {
-    result = await compressor.compress(input);
+    const result = compressor.compress(input);
+    return assembleOutput(
+      input,
+      compressor.version,
+      result,
+      store,
+      Math.max(0, now() - start)
+    );
   } catch (e) {
-    return passthrough(true, `compressor error: ${(e as Error).message ?? e}`);
+    return assembleOutput(
+      input,
+      compressor.version,
+      {
+        ok: false,
+        text: input.text,
+        note: `compressor error: ${(e as Error).message ?? e}`,
+      },
+      store,
+      Math.max(0, now() - start)
+    );
   }
-  const latencyMs = Math.max(0, now() - start);
-
-  const tokensAfter = estimateTokens(result.text.length);
-  if (!result.ok || tokensAfter >= tokensBefore) {
-    return {
-      ...passthrough(
-        !result.ok,
-        result.note ??
-          (result.ok ? "no token reduction — kept original" : undefined)
-      ),
-      latencyMs,
-    };
-  }
-
-  const retrievalHandle = store ? store(input.key, input.text) : undefined;
-  return {
-    text: result.text,
-    tokensBefore,
-    tokensAfter,
-    tokensSaved: tokensBefore - tokensAfter,
-    ...(retrievalHandle ? { retrievalHandle } : {}),
-    latencyMs,
-    compressorVersion: compressor.version,
-    degraded: false,
-    ...(result.note ? { note: result.note } : {}),
-  };
 }
 
 /**

@@ -23,6 +23,13 @@ import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { cleanScratch } from "./scratch.js";
 import { getAgentRuntime, stageLogPath, type StageResult } from "./runner.js";
 import {
+  runRetrievalStore,
+  type CompressorMode,
+  type RetrievalStore,
+  type SyncContextCompressor,
+} from "./context-compressor.js";
+import { createHeadroomSyncCompressor } from "./headroom-adapter.js";
+import {
   allocateRunId,
   hasRunReport,
   readStageRecords,
@@ -231,6 +238,11 @@ export type LoopOptions = {
    *  ConsoleUi renders one terse line per meaningful action. The `--verbose` CLI
    *  flag that sets this is wired in a later slice. */
   verbose?: boolean;
+  /** Opt-in context compressor (issue #112 P20). "headroom" routes @spill output
+   *  through the Headroom adapter (reversible, measured); "off" (default) leaves
+   *  spill output verbatim. A requested-but-unavailable compressor warns once and
+   *  continues uncompressed — never a broken run. */
+  contextCompressor?: CompressorMode;
 };
 
 export type LoopOutcome = {
@@ -356,6 +368,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     fallbackAgentDisplayName,
     autoSwitchOnLimit = false,
     verbose = false,
+    contextCompressor = "off",
   } = opts;
 
   // One in-run console sink per run (issue #65 P10): quiet ConsoleUi by default,
@@ -427,6 +440,21 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     startedAt: manifestStartedAt,
   });
 
+  // Context compressor (issue #112 P20): built once per run, off by default.
+  // A requested-but-unavailable compressor warns once here and continues
+  // uncompressed (degrade clean) rather than failing the run or emitting a
+  // degraded record at every spill.
+  const compressorMode: CompressorMode = contextCompressor;
+  let compressor: SyncContextCompressor | null =
+    compressorMode === "headroom" ? createHeadroomSyncCompressor() : null;
+  if (compressor && !compressor.available) {
+    process.stderr.write(
+      `${dim("note: --context-compressor headroom requested but `headroom` is unavailable — continuing without compression")}\n`
+    );
+    compressor = null;
+  }
+  const retrievalStore: RetrievalStore = runRetrievalStore(workspaceDir, runId);
+
   // Per-stage evidence records: `stageSeq` is a monotonic counter that orders
   // them under the bundle's `stages/` dir. Recording is best-effort — a bundle
   // write must never break the run. The panel records its own substages via the
@@ -473,6 +501,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           logPath: sr.logPath,
           safetyEvents: sr.safetyEvents,
           contextBreakdown: sr.contextBreakdown,
+          ...(sr.toolsUsed ? { toolsUsed: sr.toolsUsed } : {}),
           ...(reviewSeverity ? { reviewSeverity } : {}),
           startedAt,
           finishedAt: nowIso(),
@@ -632,7 +661,11 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       const keyIsWholeToken = (hay: string, key: string): boolean => {
         if (!key) return false;
         const boundary = (c: string) => c === "" || !/[A-Za-z0-9_-]/.test(c);
-        for (let idx = hay.indexOf(key); idx >= 0; idx = hay.indexOf(key, idx + 1)) {
+        for (
+          let idx = hay.indexOf(key);
+          idx >= 0;
+          idx = hay.indexOf(key, idx + 1)
+        ) {
           const before = idx === 0 ? "" : hay[idx - 1];
           const after = hay[idx + key.length] ?? "";
           if (boundary(before) && boundary(after)) return true;
@@ -1016,6 +1049,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             tierLadder,
             riskAssessment,
             escalations: modelEscalations,
+            compressor,
+            retrievalStore,
           });
           accountStage(r);
           if (explainRouting && modelRouting && r.routedTier) {

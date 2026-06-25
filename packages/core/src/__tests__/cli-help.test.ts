@@ -86,6 +86,30 @@ describe("parseFlags --issue", () => {
   });
 });
 
+describe("parseFlags --context-compressor", () => {
+  it("defaults to undefined (resolves to off downstream)", () => {
+    expect(parseFlags(["5"]).contextCompressor).toBeUndefined();
+  });
+  it("accepts off and headroom", () => {
+    expect(
+      parseFlags(["--context-compressor", "headroom", "5"]).contextCompressor
+    ).toBe("headroom");
+    expect(
+      parseFlags(["--context-compressor", "off", "5"]).contextCompressor
+    ).toBe("off");
+  });
+  it("rejects an unknown value", () => {
+    expect(() => parseFlags(["--context-compressor", "gzip", "5"])).toThrow(
+      /context-compressor must be/
+    );
+  });
+  it("printConfig shows the resolved compressor", () => {
+    expect(configOutput({ contextCompressor: "headroom" })).toContain(
+      "context compressor    headroom"
+    );
+  });
+});
+
 describe("parseFlags --include-sub-issues", () => {
   it("defaults to false", () => {
     expect(parseFlags(["3"]).includeSubIssues).toBe(false);
@@ -210,7 +234,9 @@ describe("printConfig fallback", () => {
       fallbackSource: "flag",
       autoSwitchOnLimit: true,
     });
-    expect(out).toMatch(/fallback\s+codex \(Codex CLI, flag\) · auto-switch on/);
+    expect(out).toMatch(
+      /fallback\s+codex \(Codex CLI, flag\) · auto-switch on/
+    );
   });
 
   it("warns when auto-switch is on but no fallback agent is set", () => {
@@ -220,7 +246,8 @@ describe("printConfig fallback", () => {
 
   it("reports an invalid fallback selection without throwing", () => {
     const out = configOutput({
-      fallbackError: 'OTTO_FALLBACK_AGENT must be one of claude|codex, got: "gpt"',
+      fallbackError:
+        'OTTO_FALLBACK_AGENT must be one of claude|codex, got: "gpt"',
     });
     expect(out).toMatch(/fallback\s+invalid/);
   });
@@ -238,7 +265,9 @@ describe("printConfig runtime", () => {
   });
 
   it("reports an invalid runtime selection without throwing", () => {
-    const out = configOutput({ agentError: 'OTTO_AGENT must be one of claude|codex, got: "gpt"' });
+    const out = configOutput({
+      agentError: 'OTTO_AGENT must be one of claude|codex, got: "gpt"',
+    });
     expect(out).toMatch(/runtime\s+invalid/);
   });
 
@@ -250,7 +279,10 @@ describe("printConfig runtime", () => {
     process.env.OTTO_MODEL = "opus";
     process.env.OTTO_CODEX_MODEL = "gpt-5";
     try {
-      const out = configOutput({ agentId: "codex", agentDisplayName: "Codex CLI" });
+      const out = configOutput({
+        agentId: "codex",
+        agentDisplayName: "Codex CLI",
+      });
       expect(out).toMatch(/model\s+gpt-5 \(OTTO_CODEX_MODEL\)/);
     } finally {
       if (prev.OTTO_MODEL == null) delete process.env.OTTO_MODEL;
@@ -270,8 +302,13 @@ describe("printConfig runtime", () => {
     delete process.env.OTTO_CODEX_MODEL;
     delete process.env.OTTO_CLAUDE_MODEL;
     try {
-      const out = configOutput({ agentId: "codex", agentDisplayName: "Codex CLI" });
-      expect(out).toMatch(/model\s+codex CLI default \(OTTO_CODEX_MODEL \/ OTTO_MODEL unset\)/);
+      const out = configOutput({
+        agentId: "codex",
+        agentDisplayName: "Codex CLI",
+      });
+      expect(out).toMatch(
+        /model\s+codex CLI default \(OTTO_CODEX_MODEL \/ OTTO_MODEL unset\)/
+      );
     } finally {
       for (const [k, v] of Object.entries(prev)) {
         if (v == null) delete process.env[k];
@@ -289,7 +326,10 @@ describe("printConfig runtime", () => {
     expect(claudeOut).toMatch(/[✓✗] claude CLI/);
     expect(claudeOut).not.toMatch(/[✓✗] codex CLI/);
 
-    const codexOut = configOutput({ agentId: "codex", agentDisplayName: "Codex CLI" });
+    const codexOut = configOutput({
+      agentId: "codex",
+      agentDisplayName: "Codex CLI",
+    });
     expect(codexOut).toMatch(/[✓✗] codex CLI/);
     expect(codexOut).toMatch(/[✓✗] codex auth/);
     expect(codexOut).not.toMatch(/[✓✗] claude CLI/);
@@ -490,7 +530,9 @@ describe("printConfig routing", () => {
   });
   it("flags --explain-routing as ineffective without the router", () => {
     const out = configOutput({ adaptiveRouter: false, explainRouting: true });
-    expect(out).toMatch(/routing\s+off \(--explain-routing needs --adaptive-router\)/);
+    expect(out).toMatch(
+      /routing\s+off \(--explain-routing needs --adaptive-router\)/
+    );
   });
   it("shows model routing off by default", () => {
     expect(configOutput({})).toMatch(/model routing\s+off/);
@@ -500,7 +542,9 @@ describe("printConfig routing", () => {
       modelRouting: true,
       tierLadder: { cheap: "haiku", mid: "sonnet", strong: "opus" },
     });
-    expect(out).toMatch(/model routing\s+on \(cheap=haiku, mid=sonnet, strong=opus\)/);
+    expect(out).toMatch(
+      /model routing\s+on \(cheap=haiku, mid=sonnet, strong=opus\)/
+    );
   });
 });
 
@@ -525,7 +569,9 @@ describe("parseFlags --fan-out", () => {
     expect(f.fanOutConcurrency).toBe(4);
   });
   it("rejects a non-positive fan-out concurrency", () => {
-    expect(() => parseFlags(["--fan-out-concurrency", "0"])).toThrow(/positive integer/);
+    expect(() => parseFlags(["--fan-out-concurrency", "0"])).toThrow(
+      /positive integer/
+    );
   });
   it("shows fan-out in print-config", () => {
     expect(configOutput({ fanOut: true, fanOutConcurrency: 4 })).toMatch(

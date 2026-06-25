@@ -2,6 +2,13 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join, posix, relative } from "node:path";
 import { DEFAULT_AGENT, type AgentRuntimeId } from "./agent-runtime.js";
 import { analyzeContext } from "./context-report.js";
+import {
+  compressContentSync,
+  compressionToolUsage,
+  type CompressionCategory,
+  type RetrievalStore,
+  type SyncContextCompressor,
+} from "./context-compressor.js";
 import { applyPromptReduction } from "./prompt-reduction.js";
 import { renderTemplate } from "./render.js";
 import { resolveStageModel, type TierLadder } from "./model-tier.js";
@@ -14,7 +21,7 @@ import {
   type StageResult,
 } from "./runner.js";
 import { readSafetyPolicy, type PolicyViolation } from "./safety-policy.js";
-import type { SafetyEvent } from "./run-report.js";
+import type { SafetyEvent, ToolUsage } from "./run-report.js";
 import type { EventSink } from "./console-ui.js";
 import { USE_COLOR, dim } from "./stream-render.js";
 import type { Stage } from "./stages.js";
@@ -46,7 +53,28 @@ export type ExecuteStageOptions = {
   /** Extra sandbox write roots (issue #66 P11): a fan-out sub-agent passes its
    *  parent repo so `git commit` from the worktree reaches the shared `.git`. */
   sandboxWriteRoots?: string[];
+  /** Context compressor for @spill output (issue #112 P20); absent/null ⇒ no
+   *  compression (today's behavior). Synchronous to fit the sync render path. */
+  compressor?: SyncContextCompressor | null;
+  /** Where compressed-spill originals are retained (the run's retrieval store);
+   *  required for the compressor to store reversible originals. */
+  retrievalStore?: RetrievalStore;
 };
+
+/** Map a spill filename to its compression category for evidence attribution. */
+function spillCategory(name: string): CompressionCategory {
+  const n = name.toLowerCase();
+  if (n.includes("issue")) return "issue-body";
+  if (
+    n.includes("diff") ||
+    n.includes("patch") ||
+    n.includes("log") ||
+    n.includes("commit")
+  ) {
+    return "command-log";
+  }
+  return "read-artifact";
+}
 
 /** Fallback ladder when routing is requested without one — every tier resolves
  *  to the runtime default (issue #66 P11). The real ladder comes from run-bin. */
@@ -97,8 +125,27 @@ export async function executeStage(
   return withRetries(
     async () => {
       // Fresh per attempt: a retried render (flaky shell tag) re-reports its
-      // violations, so the surviving attempt's events are the ones recorded.
+      // violations + compressions, so the surviving attempt's evidence is what
+      // gets recorded.
       const violations: PolicyViolation[] = [];
+      const toolsUsed: ToolUsage[] = [];
+      const compressSpill =
+        opts.compressor && opts.retrievalStore
+          ? (name: string, content: string): string => {
+              const category = spillCategory(name);
+              const out = compressContentSync(
+                opts.compressor!,
+                {
+                  key: `${iteration}-${label}-${name}`,
+                  category,
+                  text: content,
+                },
+                opts.retrievalStore ?? null
+              );
+              toolsUsed.push(compressionToolUsage(out, category, stage.name));
+              return out.text;
+            }
+          : undefined;
       let prompt = renderTemplate(
         join(packageDir, "templates", stage.template),
         vars,
@@ -108,6 +155,7 @@ export async function executeStage(
           spillRefPath,
           policy,
           onPolicyViolation: (v) => violations.push(v),
+          ...(compressSpill ? { compressSpill } : {}),
         }
       );
       if (tokenMode === "reduce") {
@@ -159,6 +207,7 @@ export async function executeStage(
         ...(violations.length > 0
           ? { safetyEvents: violations.map(violationToSafetyEvent) }
           : {}),
+        ...(toolsUsed.length > 0 ? { toolsUsed } : {}),
       };
     },
     {

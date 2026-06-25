@@ -271,7 +271,26 @@ Beyond the build loop, two read/repair modes reuse all of the above:
 
 ## Use cases
 
-Recipes grouped by what you're trying to do. The trailing number on the loop bins is the **max iteration count**; a run also stops early when the agent emits `<promise>NO MORE TASKS</promise>`.
+The trailing number on the loop bins is the **max iteration count**; a run also stops early when the agent emits `<promise>NO MORE TASKS</promise>`.
+
+### Real-world scenarios
+
+Start here — concrete end-to-end jobs people actually run. Each maps to the feature recipes below.
+
+| You want to…                                                                 | Run this                                                                                                                                                        |
+| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Clear my GitHub backlog overnight, cheaply, with merge-confident reviews** | `otto-ghafk --detach --notify --model-routing --review-panel 30`                                                                                                |
+| **Turn a rough idea into a spec, then a reviewed, tested feature**           | `otto-afk --plan "./docs/ideas/x.md"` → review the plan → `otto-afk --review-panel "./docs/ideas/x.md ./.otto/tasks/x/plan.md" 20`                              |
+| **Ship one specific issue (and its sub-issues) and stop**                    | `otto-ghafk --issue 42 --include-sub-issues 20`                                                                                                                 |
+| **Land a big feature faster by parallelizing independent tasks**             | `otto-afk --plan --fan-out "./docs/ideas/x.md" 20`                                                                                                              |
+| **Bring in the Superpowers TDD skill and have Otto actually use it**         | `otto-skills sources add sp ./vendor/superpowers --type local && otto-skills sync && otto-skills validate tdd` → `otto-afk --use-skills "./docs/plans/x.md" 10` |
+| **Hand an unattended run to a non-engineer to accept or reject**             | run any loop, then `otto-explain latest`                                                                                                                        |
+| **Audit what actually landed without changing anything**                     | `otto-afk --verify "./docs/plans/x.md ./docs/prd/x.md"`                                                                                                         |
+| **Fix the findings of an external code review, one at a time**               | `otto-afk --apply-review ./code-review.md 20`                                                                                                                   |
+| **Keep a repo's backlog moving on its own**                                  | `otto-ghafk --watch --watch-interval 300 5`                                                                                                                     |
+| **Run the whole thing on Codex instead of Claude**                           | `otto-afk --agent codex "./docs/plans/x.md" 10`                                                                                                                 |
+
+The recipes below are grouped by capability — reach for them to compose your own scenario.
 
 ### 1. Ship work autonomously
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.21.0...otto-core-v0.22.0) (2026-06-25)
+
+
+### Features
+
+* **core:** outcome-first reports + semantic plan gate (P15 [#85](https://github.com/phamvuhoang/otto/issues/85), P13 [#86](https://github.com/phamvuhoang/otto/issues/86)) ([#106](https://github.com/phamvuhoang/otto/issues/106)) ([faabe10](https://github.com/phamvuhoang/otto/commit/faabe10f72c72087386e2cf372aaa04d6306a782))
+
 ## [0.21.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.20.0...otto-core-v0.21.0) (2026-06-24)
 
 

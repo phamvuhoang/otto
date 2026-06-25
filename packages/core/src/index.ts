@@ -107,6 +107,7 @@ export {
   type SafetyEvent,
   type SkillUsage,
   type StageRecord,
+  type ToolUsage,
 } from "./run-report.js";
 export { formatRunReport, runInspect, type InspectDeps } from "./inspect.js";
 export {
@@ -212,6 +213,34 @@ export {
   wrapUntrusted,
   type TaintSource,
 } from "./taint.js";
+export {
+  authorizeToolInvocation,
+  parseTool,
+  readToolConfig,
+  readTools,
+  selectToolsForStage,
+  toolEnabledForStage,
+  toolPath,
+  toolsDir,
+  type ToolAuthorization,
+  type ToolConfig,
+  type ToolDefinition,
+  type ToolInvocation,
+  type ToolKind,
+  type ToolOverride,
+  type ToolResult,
+  type ToolSelection,
+} from "./tools.js";
+export {
+  auditTools,
+  auditToolPolicyConflicts,
+  formatToolsAudit,
+  formatToolsList,
+  formatToolsWhy,
+  runTools,
+  type ToolAuditFinding,
+  type ToolsDeps,
+} from "./tools-cli.js";
 export {
   findSkillCandidates,
   globMatch,

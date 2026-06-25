@@ -65,6 +65,32 @@ export type SkillUsage = {
 };
 
 /**
+ * An external tool invoked during a run (issue #111 P19), parallel to
+ * {@link SkillUsage}: which tool/kind, in which stage, and the levers the
+ * evidence model needs — estimated tokens saved (for compressors), a retrieval
+ * handle when the output is a reversible transform, and the selection reasons.
+ *
+ * INERT this slice: the type and the optional `toolsUsed` fields exist, but no
+ * bin/loop populates them yet — tools are surfaced read-only via `otto-tools`
+ * and never invoked by a stage this PR. The field is ready for the P20 Headroom
+ * adapter; a recorded trajectory simply carries none today.
+ */
+export type ToolUsage = {
+  /** The tool registry name invoked. */
+  name: string;
+  /** The tool's adapter kind (command/mcp/http/proxy/sdk). */
+  kind: string;
+  /** The stage that invoked it, when stage-scoped. */
+  stage?: string;
+  /** Estimated tokens saved by this invocation, if relevant. */
+  tokensSaved?: number;
+  /** Durable handle to retrieve reversible output, if any. */
+  retrievalHandle?: string;
+  /** Why the tool was selected/used (so a run report can explain the choice). */
+  reasons?: string[];
+};
+
+/**
  * A named pointer to a file Otto produced during a run (rendered prompt, NDJSON
  * log, diff summary, …). Paths are workspace-relative so the bundle is portable.
  */
@@ -92,10 +118,18 @@ export type StageRecord = {
   safetyEvents?: SafetyEvent[];
   /** Skills applied while this stage ran (issue #44, INERT); absent = none. */
   skillsUsed?: SkillUsage[];
+  /** External tools invoked while this stage ran (issue #111, INERT); absent = none. */
+  toolsUsed?: ToolUsage[];
   /** Composition of this stage's rendered prompt (issue #62 P7); absent = not measured. */
   contextBreakdown?: ContextBreakdown;
   /** Finding severity counts from the review panel (P14); absent = not a panel stage. */
-  reviewSeverity?: { blocker: number; major: number; minor: number; nit: number; suppressed: number };
+  reviewSeverity?: {
+    blocker: number;
+    major: number;
+    minor: number;
+    nit: number;
+    suppressed: number;
+  };
   startedAt: string;
   finishedAt: string;
 };
@@ -129,6 +163,8 @@ export type RunManifest = {
   safetyEvents?: SafetyEvent[];
   /** Skills applied during the run (issue #44, INERT); absent = none. */
   skillsUsed?: SkillUsage[];
+  /** External tools invoked during the run (issue #111, INERT); absent = none. */
+  toolsUsed?: ToolUsage[];
   startedAt: string;
   finishedAt?: string;
 };

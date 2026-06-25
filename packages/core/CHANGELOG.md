@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.25.0...otto-core-v0.26.0) (2026-06-25)
+
+
+### Features
+
+* **skills:** P17 skill compatibility & validation gate ([#152](https://github.com/phamvuhoang/otto/issues/152)) ([8c3cded](https://github.com/phamvuhoang/otto/commit/8c3cded4e3b8f89cf369d1249948c39159528c0c))
+
 ## [0.25.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.24.0...otto-core-v0.25.0) (2026-06-25)
 
 

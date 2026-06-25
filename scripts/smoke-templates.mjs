@@ -1,12 +1,27 @@
-// Render the real shipped templates against this repo. Verifies @spill paths,
-// inlined sections, and that prompts stay small.
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+// Render the real shipped templates and verify @spill paths, inlined sections,
+// and that prompts stay small. Shell/`git` tags render against a tiny throwaway
+// git fixture — NOT this repo — so the size budget measures each template's
+// intrinsic footprint, not how verbose this repo's recent commit messages are
+// (review.md/afk.md inline `git log -n 3 --format=%B`, which is unbounded).
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { renderTemplate } from "../packages/core/dist/render.js";
 
 const repo = process.cwd();
 const tplDir = join(repo, "packages", "core", "templates");
+
+// Deterministic git fixture: one tiny commit, so `git log`/`git show`/`git
+// rev-parse` in the templates produce small, repeatable output.
+const gitFixture = mkdtempSync(join(tmpdir(), "otto-smoke-git-"));
+const git = (args) => execFileSync("git", args, { cwd: gitFixture });
+git(["init", "-q"]);
+git(["config", "user.email", "smoke@otto.test"]);
+git(["config", "user.name", "smoke"]);
+writeFileSync(join(gitFixture, "README.md"), "# smoke fixture\n");
+git(["add", "."]);
+git(["commit", "-q", "-m", "fixture commit"]);
 
 const cases = [
   { name: "afk.md", inputs: "tracer bullet: hello world" },
@@ -34,7 +49,7 @@ for (const { name, inputs } of cases) {
     const out = renderTemplate(
       join(tplDir, name),
       { INPUTS: inputs },
-      { cwd: repo, spillHostDir, spillRefPath }
+      { cwd: gitFixture, spillHostDir, spillRefPath }
     );
     const tokensApprox = Math.round(out.length / 4);
     process.stdout.write(
@@ -80,6 +95,8 @@ for (const { name, inputs } of cases) {
     rmSync(work, { recursive: true, force: true });
   }
 }
+
+rmSync(gitFixture, { recursive: true, force: true });
 
 if (failures) {
   process.stderr.write(`\n${failures} failure(s)\n`);

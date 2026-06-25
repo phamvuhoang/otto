@@ -1,6 +1,6 @@
 <commits>
 
-!?`git log -n 5 --format="%H%n%ad%n%B---" --date=short|||No commits found`
+!?`git log -n 5 --format="%H%n%ad%n%s---" --date=short|||No commits found`
 
 </commits>
 

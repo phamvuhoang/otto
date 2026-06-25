@@ -2,7 +2,7 @@
 
 <commits>
 
-!?`git log -n 15 --format="%H%n%ad%n%B---" --date=short|||No commits found`
+!?`git log -n 15 --format="%H%n%ad%n%s---" --date=short|||No commits found`
 
 </commits>
 
@@ -51,7 +51,7 @@ Write your report to `.otto-tmp/verify-report.md` using the `Write` tool (this p
 
 # CROSS-RUN QUALITY SUMMARY (READ-ONLY)
 
-Beyond *this* run, give the maintainer a quality rollup **across** runs so they can
+Beyond _this_ run, give the maintainer a quality rollup **across** runs so they can
 spot recurring output-quality failures without reading every NDJSON log. `Read`
 `./.otto/verdicts.md` (the git-tracked human-verdict trail). If it is absent, skip
 this section. Otherwise append a short `## Cross-Run Quality Summary` block to the

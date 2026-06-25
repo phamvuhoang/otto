@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.26.0...otto-core-v0.27.0) (2026-06-25)
+
+
+### Features
+
+* **skills:** P18 runtime skill activation & routing ([#154](https://github.com/phamvuhoang/otto/issues/154)) ([c9d318f](https://github.com/phamvuhoang/otto/commit/c9d318fd0163cc08471821ff393624020cf1f1ec))
+
 ## [0.26.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.25.0...otto-core-v0.26.0) (2026-06-25)
 
 

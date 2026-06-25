@@ -400,6 +400,13 @@ otto-skills candidates                          # workflows that succeeded the s
 otto-skills why packages/core/src/eval.ts       # which skills retrieval would pick, and why
 otto-skills list                                # inventory + validated/unvalidated/stale status
 
+# Skills: import external skill packs (Superpowers, PM-Skills) as pinned, inert sources (P16)
+otto-skills sources add sp ./vendor/superpowers --type local   # register a source (git|local|archive)
+otto-skills sync --dry-run                       # deterministic preview: add/update/unchanged/conflict
+otto-skills sync                                 # import as trust=unverified skills + write skills.lock.json
+otto-skills audit --external                     # unpinned refs, missing licenses, dup names, stale copies
+# Imported skills are inert: unverified + unvalidated, so the loop never auto-applies them.
+
 # Tools: register external tools/MCP/services under repo-local, policy-scoped authority (P19)
 otto-tools list                                 # registered .otto/tools/<name>.json adapters
 otto-tools why review                           # which tools the review stage may use, and why

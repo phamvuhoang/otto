@@ -32,6 +32,26 @@ import type { RunManifest } from "./run-report.js";
 export type SkillTrust = "trusted" | "unverified" | "deprecated";
 
 /**
+ * Where an imported skill came from (issue #110 P16). Present only on skills
+ * pulled in from an external source registry; absent on repo-authored skills.
+ * The source registry writes this so `otto-skills list`/`audit` can show
+ * provenance and a later sync can detect drift, without granting the skill any
+ * runtime authority (an imported skill is always `trust: "unverified"`).
+ */
+export type ImportedSkillProvenance = {
+  /** Configured source name in `.otto/skills/sources.json`. */
+  source: string;
+  /** Path of the skill package within the source tree. */
+  upstreamPath: string;
+  /** Resolved upstream ref (sha/tag) the source was pinned to, if any. */
+  upstreamRef?: string;
+  /** Content checksum of the imported package, for drift detection. */
+  checksum: string;
+  /** Declared upstream license, if discoverable. */
+  license?: string;
+};
+
+/**
  * Validation provenance: the successful run that last proved the skill works.
  * "Require validation before a skill is used automatically" (the issue) is
  * enforced by retrieval filtering on the DERIVED {@link skillStatus}, which is
@@ -73,6 +93,8 @@ export type Skill = {
   useCount: number;
   /** Sliding revalidation window in days; past it a validated skill goes stale. */
   revalidateAfterDays?: number;
+  /** Set when the skill was imported from an external source (issue #110 P16). */
+  provenance?: ImportedSkillProvenance;
 };
 
 const TRUSTS: ReadonlySet<string> = new Set([
@@ -136,6 +158,24 @@ function stringRecord(raw: unknown): Record<string, string> {
   return out;
 }
 
+function parseProvenance(raw: unknown): ImportedSkillProvenance | undefined {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+    return undefined;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.source !== "string" || typeof o.upstreamPath !== "string") {
+    return undefined;
+  }
+  if (typeof o.checksum !== "string") return undefined;
+  const p: ImportedSkillProvenance = {
+    source: o.source,
+    upstreamPath: o.upstreamPath,
+    checksum: o.checksum,
+  };
+  if (typeof o.upstreamRef === "string") p.upstreamRef = o.upstreamRef;
+  if (typeof o.license === "string") p.license = o.license;
+  return p;
+}
+
 function parseValidation(raw: unknown): SkillValidation {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
   const o = raw as Record<string, unknown>;
@@ -157,7 +197,8 @@ function parseValidation(raw: unknown): SkillValidation {
  * {@link readSkill} overrides it with the `instructions.md` body when present.
  */
 export function parseSkill(raw: unknown): Skill | null {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+    return null;
   const o = raw as Record<string, unknown>;
   if (typeof o.name !== "string" || o.name.length === 0) return null;
   return {
@@ -184,6 +225,10 @@ export function parseSkill(raw: unknown): Skill | null {
     Number.isFinite(o.revalidateAfterDays)
       ? { revalidateAfterDays: o.revalidateAfterDays }
       : {}),
+    ...((): { provenance?: ImportedSkillProvenance } => {
+      const p = parseProvenance(o.provenance);
+      return p ? { provenance: p } : {};
+    })(),
   };
 }
 
@@ -251,10 +296,7 @@ export function writeSkill(workspaceDir: string, skill: Skill): void {
   const dir = skillDir(workspaceDir, skill.name);
   mkdirSync(dir, { recursive: true });
   const { instructions, ...meta } = skill;
-  writeFileSync(
-    join(dir, MANIFEST_FILE),
-    JSON.stringify(meta, null, 2) + "\n"
-  );
+  writeFileSync(join(dir, MANIFEST_FILE), JSON.stringify(meta, null, 2) + "\n");
   writeFileSync(join(dir, INSTRUCTIONS_FILE), instructions);
 }
 
@@ -292,7 +334,10 @@ export function skillStatus(skill: Skill, now: Date = new Date()): SkillStatus {
   if (!skill.validation.lastValidatedRun) return "unvalidated";
   if (skill.revalidateAfterDays !== undefined) {
     const since = epoch(skill.validation.lastValidatedAt);
-    if (since !== null && now.getTime() - since > skill.revalidateAfterDays * DAY_MS) {
+    if (
+      since !== null &&
+      now.getTime() - since > skill.revalidateAfterDays * DAY_MS
+    ) {
       return "stale";
     }
   }
@@ -382,7 +427,9 @@ export function selectSkills(
     const status = skillStatus(skill, ctx.now);
     if (status !== "validated") {
       eligible = false;
-      reasons.push(`not eligible: ${status} (validation required before auto-use)`);
+      reasons.push(
+        `not eligible: ${status} (validation required before auto-use)`
+      );
     }
 
     if (assessment) {
@@ -391,7 +438,9 @@ export function selectSkills(
       );
       if (forbidden) {
         eligible = false;
-        reasons.push(`excluded by constraint for risk class "${assessment.class}"`);
+        reasons.push(
+          `excluded by constraint for risk class "${assessment.class}"`
+        );
       }
     }
 
@@ -474,7 +523,9 @@ export function findSkillCandidates(
   for (const r of runs) {
     if (r.exitReason == null || !SUCCESS_REASONS.has(r.exitReason)) continue;
     const signature = `${r.bin}::${r.mode}::${r.inputs}`;
-    (groups.get(signature) ?? groups.set(signature, []).get(signature)!).push(r);
+    (groups.get(signature) ?? groups.set(signature, []).get(signature)!).push(
+      r
+    );
   }
 
   const candidates: SkillCandidate[] = [];

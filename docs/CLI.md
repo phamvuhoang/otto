@@ -507,6 +507,18 @@ A skill is **eligible** for reuse only once a successful run has validated it (`
 
 **Runtime activation (`--use-skills`, P18).** Validation makes a skill _eligible_; activation actually injects it. Opt in per run with `--use-skills`, `OTTO_USE_SKILLS=1`, or `.otto/config.json` `"skills": { "enabled": true, "plan": true, "review": false, … }` (per-stage-family overrides). When active, each live stage routes the installed skills — only `afk-safe` (any stage) or `stage-scoped` skills whose stages match the running family, never `blocked`/`interactive-only`/drifted — ranks them by scope-glob match against the iteration's changed files, and appends a **bounded, attributed `<available-skills>` block** (capped per-stage char budget, source/ref/checksum labelled, with a standing note that repo policy + stage contracts outrank skills and conflicts must be reported). The selected skills are recorded as `skillsUsed[]` on each stage record and the run manifest, surfaced by `otto-inspect`, `otto-explain`, and `otto-eval`. Off by default: a run that does not opt in renders byte-for-byte as before. Preview the routing for a stage with `otto-skills why --stage <stage> [--changed <path>...]`.
 
+### `otto-extensions` — curated extension profiles
+
+Bundle the skill/tool/config primitives into one opinionated starting point for a common job, materialized as **normal, inspectable** `.otto/` config (not hidden behavior).
+
+```bash
+otto-extensions list                         # coding-superpowers | pm-planning | context-saver | security-review
+otto-extensions init <profile> --dry-run     # preview every file it would write
+otto-extensions init <profile>               # write sources.json / tools/*.json / config.json / policy.json
+```
+
+`init` registers pinned skill sources (still imported `unverified` — validate before use), writes tool adapters (still policy-scoped), deep-merges activation config, and union-merges policy (never relaxes an existing rule). It is idempotent and writes only files you could write by hand, so `git diff .otto/` shows exactly what changed and `git checkout .otto/` rolls it back. Full per-profile detail, the **compatibility matrix**, and update/lock/rollback guidance: **[EXTENSIONS.md](./EXTENSIONS.md)**.
+
 ---
 
 ## Stopping a run

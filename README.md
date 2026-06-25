@@ -406,6 +406,14 @@ otto-skills sync --dry-run                       # deterministic preview: add/up
 otto-skills sync                                 # import as trust=unverified skills + write skills.lock.json
 otto-skills audit --external                     # unpinned refs, missing licenses, dup names, stale copies
 # Imported skills are inert: unverified + unvalidated, so the loop never auto-applies them.
+
+# Tools: register external tools/MCP/services under repo-local, policy-scoped authority (P19)
+otto-tools list                                 # registered .otto/tools/<name>.json adapters
+otto-tools why review                           # which tools the review stage may use, and why
+otto-tools audit                                # unreachable, missing health check, policy conflicts
+otto-tools health                               # run each tool's health-check command
+# Authority = intersection of the tool's declared scope and .otto/policy.json; personal
+# MCP/plugin config is never inherited into a run. No .otto/tools/ ⇒ unchanged behavior.
 ```
 
 ### 6. Verify & repair (read-only / surgical)
@@ -495,7 +503,7 @@ Full flag reference and more recipes: **[docs/CLI.md](./docs/CLI.md)**.
 
 Otto ships as two npm packages:
 
-- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool). The read-only operator bins: `otto-inspect` renders one run's evidence bundle, `otto-explain` re-renders any run in plain language for a non-engineer, `otto-runs` lists recent runs, `otto-tail` attaches to a running loop for a live status tree, `otto-eval compare` A/Bs two of them (and `otto-eval` benchmarks harness quality across configs — the [eval suite](./benchmarks)), `otto-memory` audits the governed memory records, and `otto-skills` inventories repo-local skill packages.
+- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool). The read-only operator bins: `otto-inspect` renders one run's evidence bundle, `otto-explain` re-renders any run in plain language for a non-engineer, `otto-runs` lists recent runs, `otto-tail` attaches to a running loop for a live status tree, `otto-eval compare` A/Bs two of them (and `otto-eval` benchmarks harness quality across configs — the [eval suite](./benchmarks)), `otto-memory` audits the governed memory records, `otto-skills` inventories repo-local skill packages, and `otto-tools` inspects the repo-local external-tool authority registry.
 - **[`@phamvuhoang/otto-core`](./packages/core)** — the library: iteration loop, native-sandbox runner, template renderer, stage registry. Importable from any Node project.
 
 Each iteration runs a **stage chain**: a **gate** stage (implement / verify / apply-review, depending on the bin and flags) followed by a **reviewer**. Before each stage, Otto renders a prompt template — expanding `@include`, `@spill`, `` !?`cmd` ``, `` !`cmd` ``, and `{{ INPUTS }}` tags — and injects the workspace's `.otto/LEARNINGS.md`. If the gate emits the sentinel `<promise>NO MORE TASKS</promise>`, the loop exits before the reviewer runs.

@@ -53,9 +53,17 @@ export function formatPlainReport(
   facts.push("— Run facts ————————————————————————————");
   facts.push(`  What ran:    ${manifest.bin} (${manifest.mode} mode)`);
   facts.push(`  Asked to do: ${manifest.inputs || "(no inputs)"}`);
-  facts.push(`  Effort:      ${completed} iterations · $${manifest.costUsd.toFixed(2)}`);
+  facts.push(
+    `  Effort:      ${completed} iterations · $${manifest.costUsd.toFixed(2)}`
+  );
   if (manifest.exitReason) {
     facts.push(`  Outcome:     ${manifest.exitReason}`);
+  }
+  if (manifest.skillsUsed && manifest.skillsUsed.length > 0) {
+    const names = [...new Set(manifest.skillsUsed.map((u) => u.name))];
+    facts.push(
+      `  Skills used: ${names.join(", ")} (validated guidance that shaped the work)`
+    );
   }
 
   const lines: string[] = [];

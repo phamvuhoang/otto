@@ -7,11 +7,13 @@ import { formatSkillsReport, formatWhy, runSkills } from "../skills-cli.js";
 import { writeManifest, type RunManifest } from "../run-report.js";
 import {
   readSkill,
+  recordStaticValidation,
   recordValidation,
   selectSkills,
   writeSkill,
   type Skill,
 } from "../skills.js";
+import { skillChecksum } from "../skill-validation.js";
 import { emptyTokenUsage } from "../tokens.js";
 
 function tmp(): string {
@@ -256,5 +258,86 @@ describe("runSkills", () => {
     const help = deps(tmp());
     expect(await runSkills(["--help"], help.d)).toBe(0);
     expect(help.lines.join("\n")).toMatch(/usage: otto-skills/i);
+  });
+});
+
+describe("otto-skills why --stage (P18 routing)", () => {
+  function deps2(cwd: string) {
+    const lines: string[] = [];
+    const errs: string[] = [];
+    return {
+      d: {
+        env: { OTTO_WORKSPACE: cwd } as NodeJS.ProcessEnv,
+        cwd,
+        out: (m: string) => lines.push(m),
+        err: (m: string) => errs.push(m),
+      },
+      lines,
+      errs,
+    };
+  }
+
+  it("explains which validated skills route to a stage and why", async () => {
+    const ws = tmp();
+    writeSkill(
+      ws,
+      recordStaticValidation(
+        skill({
+          name: "tdd",
+          capabilities: ["tdd"],
+          instructions: "Test first.",
+        }),
+        {
+          compatibility: "afk-safe",
+          stages: [],
+          checksum: skillChecksum("Test first."),
+        }
+      )
+    );
+    writeSkill(
+      ws,
+      recordStaticValidation(
+        skill({ name: "planner", instructions: "Plan." }),
+        {
+          compatibility: "stage-scoped",
+          stages: ["plan"],
+          checksum: skillChecksum("Plan."),
+        }
+      )
+    );
+    const { d, lines } = deps2(ws);
+    expect(await runSkills(["why", "--stage", "implementer"], d)).toBe(0);
+    const out = lines.join("\n");
+    expect(out).toMatch(/implement/);
+    expect(out).toContain("tdd");
+    // The plan-only skill is not eligible on an implement stage.
+    expect(out).toMatch(/planner/);
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("accepts --changed paths for scope scoring", async () => {
+    const ws = tmp();
+    writeSkill(
+      ws,
+      recordStaticValidation(
+        skill({ name: "core", scope: ["packages/core/**"], instructions: "x" }),
+        { compatibility: "afk-safe", stages: [], checksum: skillChecksum("x") }
+      )
+    );
+    const { d, lines } = deps2(ws);
+    expect(
+      await runSkills(
+        [
+          "why",
+          "--stage",
+          "implementer",
+          "--changed",
+          "packages/core/src/a.ts",
+        ],
+        d
+      )
+    ).toBe(0);
+    expect(lines.join("\n")).toMatch(/scope matches/);
+    rmSync(ws, { recursive: true, force: true });
   });
 });

@@ -81,6 +81,37 @@ describe("formatRunReport", () => {
     expect(out).toContain(".otto/review-followups.md");
   });
 
+  it("surfaces injected skills per stage and in a run-level section (P18)", () => {
+    const withSkill: StageRecord = {
+      ...implStage,
+      skillsUsed: [
+        {
+          name: "tdd",
+          version: "1.0.0",
+          source: "superpowers",
+          ref: "abc1234",
+          stage: "implementer",
+          reasons: ["afk-safe (usable on any stage)"],
+        },
+      ],
+    };
+    const manifest: RunManifest = {
+      ...finalized,
+      skillsUsed: [
+        {
+          name: "tdd",
+          version: "1.0.0",
+          source: "superpowers",
+          stage: "implementer",
+        },
+      ],
+    };
+    const out = formatRunReport(manifest, [withSkill, reviewerStage]);
+    expect(out).toMatch(/skills/i);
+    expect(out).toContain("tdd");
+    expect(out).toContain("superpowers");
+  });
+
   it("marks an un-finalized manifest instead of inventing an exit reason", () => {
     const initial: RunManifest = {
       ...finalized,

@@ -557,6 +557,15 @@ describe("parseFlags --model-routing", () => {
   });
 });
 
+describe("parseFlags --use-skills", () => {
+  it("defaults useSkills to false", () => {
+    expect(parseFlags(["5"]).useSkills).toBe(false);
+  });
+  it("sets useSkills when the flag is present", () => {
+    expect(parseFlags(["--use-skills", "5"]).useSkills).toBe(true);
+  });
+});
+
 describe("parseFlags --fan-out", () => {
   it("defaults fanOut off and concurrency 3", () => {
     const f = parseFlags(["5"]);

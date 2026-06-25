@@ -21,6 +21,7 @@ import {
   validateSkill,
   type SkillValidationReport,
 } from "./skill-validation.js";
+import { routeSkillsForStage, type SkillRouteResult } from "./skill-routing.js";
 import {
   findSkillCandidates,
   readSkill,
@@ -57,6 +58,7 @@ const defaultDeps: SkillsDeps = {
 const USAGE =
   "Usage: otto-skills <list|audit|candidates>\n" +
   "       otto-skills why <changed-path>...\n" +
+  "       otto-skills why --stage <stage> [--changed <path>...]\n" +
   "       otto-skills validate <skill> [--source <name>]\n" +
   "       otto-skills sources <list|add|remove> ...\n" +
   "       otto-skills sync [--dry-run]\n" +
@@ -142,6 +144,34 @@ export function formatWhy(matches: SkillMatch[]): string {
     );
     for (const r of m.reasons) lines.push(`    · ${r}`);
   }
+  return lines.join("\n");
+}
+
+/**
+ * Render the stage-routing explanation (issue #140 P18): which validated skills
+ * would be injected into `stageName` and why, plus the char-budget accounting —
+ * so a user can reproduce the runtime selection from the CLI alone. Pure.
+ */
+export function formatWhyStage(
+  stageName: string,
+  result: SkillRouteResult
+): string {
+  const lines: string[] = [
+    `Stage '${stageName}' (family: ${result.family ?? "unknown"}) — skill routing:`,
+  ];
+  if (result.verdicts.length === 0) {
+    lines.push("  No skills installed.");
+    return lines.join("\n");
+  }
+  for (const v of result.verdicts) {
+    const tag = v.selected ? "selected" : v.eligible ? "eligible" : "skip";
+    lines.push(`- ${v.name}  [${tag}]  score ${v.score}`);
+    for (const r of v.reasons) lines.push(`    · ${r}`);
+  }
+  lines.push("");
+  lines.push(
+    `budget: ${result.usedChars}/${result.budgetChars} chars used by ${result.selected.length} selected skill(s)`
+  );
   return lines.join("\n");
 }
 
@@ -294,9 +324,28 @@ export async function runSkills(
   const skills = readSkills(workspaceDir);
 
   if (arg === "why") {
-    const paths = argv.slice(1);
+    const rest = argv.slice(1);
+    const stage = flagValue(rest, "--stage");
+    if (stage) {
+      // P18: route validated skills for a concrete stage (with optional --changed
+      // paths for scope scoring), explaining the runtime selection.
+      const changedIdx = rest.indexOf("--changed");
+      const changed =
+        changedIdx >= 0
+          ? rest.slice(changedIdx + 1).filter((a) => !a.startsWith("--"))
+          : [];
+      const result = routeSkillsForStage(skills, {
+        stageName: stage,
+        changedPaths: changed,
+      });
+      deps.out(formatWhyStage(stage, result));
+      return 0;
+    }
+    const paths = rest;
     if (paths.length === 0) {
-      deps.err(`why needs at least one changed path.\n${USAGE}`);
+      deps.err(
+        `why needs at least one changed path (or --stage <stage>).\n${USAGE}`
+      );
       return 1;
     }
     deps.out(formatWhy(selectSkills(skills, { changedPaths: paths })));

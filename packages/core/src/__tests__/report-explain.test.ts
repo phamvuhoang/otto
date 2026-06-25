@@ -71,6 +71,23 @@ describe("formatPlainReport", () => {
     expect(out).toContain("complete");
   });
 
+  it("names the skills that guided the run in plain language (P18)", () => {
+    const withSkills = {
+      ...manifest,
+      skillsUsed: [
+        {
+          name: "tdd",
+          version: "1.0.0",
+          source: "superpowers",
+          stage: "implementer",
+        },
+      ],
+    };
+    const out = formatPlainReport(withSkills, REPORT);
+    expect(out).toMatch(/skill/i);
+    expect(out).toContain("tdd");
+  });
+
   it("explains the absence when no report was persisted", () => {
     const out = formatPlainReport(manifest, null);
     expect(out).toMatch(

@@ -39,6 +39,7 @@ import {
   writeStageRecord,
   type RunArtifact,
   type RunManifest,
+  type SkillUsage,
   type StageRecord,
 } from "./run-report.js";
 import {
@@ -47,6 +48,14 @@ import {
   finalizeReportText,
 } from "./report-finalize.js";
 import { scoreReportLegibility } from "./report-rubric.js";
+import { stageEnabled, type SkillActivation } from "./skill-activation.js";
+import {
+  formatSkillInjection,
+  routeSkillsForStage,
+  stageFamily,
+  toSkillUsages,
+} from "./skill-routing.js";
+import { readSkills, type Skill } from "./skills.js";
 import { executeStage } from "./stage-exec.js";
 import { ConsoleUi, VerboseSink, type EventSink } from "./console-ui.js";
 import {
@@ -203,6 +212,10 @@ export type LoopOptions = {
   modelRouting?: boolean;
   /** tier → model ladder consulted when `modelRouting` resolves a tier. */
   tierLadder?: TierLadder;
+  /** Opt-in runtime skill activation (issue #114 P18): inject validated,
+   *  stage-scoped skill guidance into live stages. When off/undefined, no skill
+   *  is selected or injected and the run is byte-for-byte unchanged. */
+  skillActivation?: SkillActivation;
   /** Opt-in sub-agent fan-out (issue #66 P11): on the first iteration, run the
    *  independent tasks of a `.otto/tasks/<key>/tasks.json` as isolated worktree
    *  sub-agents before the sequential loop. No valid tasks.json → no-op. */
@@ -354,6 +367,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     explainRouting = false,
     modelRouting = false,
     tierLadder,
+    skillActivation,
     fanOut = false,
     fanOutConcurrency = 3,
     resolveChangedPaths,
@@ -502,6 +516,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           safetyEvents: sr.safetyEvents,
           contextBreakdown: sr.contextBreakdown,
           ...(sr.toolsUsed ? { toolsUsed: sr.toolsUsed } : {}),
+          ...(sr.skillsUsed ? { skillsUsed: sr.skillsUsed } : {}),
           ...(reviewSeverity ? { reviewSeverity } : {}),
           startedAt,
           finishedAt: nowIso(),
@@ -511,6 +526,34 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     } catch {
       // Best-effort: never fail a run because a stage record could not be written.
     }
+  };
+
+  // Runtime skill activation (issue #114 P18). Off by default: when activation is
+  // disabled, `injectSkills` short-circuits to an empty block + no evidence, so a
+  // non-opted-in run renders exactly as before. The installed skills are read once,
+  // lazily, only when a run actually activates them.
+  const skillsActive = skillActivation?.enabled === true;
+  let installedSkills: Skill[] | null = null;
+  /** All skills injected across the run, aggregated onto the manifest. */
+  const runSkillsUsed: SkillUsage[] = [];
+  const injectSkills = (
+    stageName: string,
+    changedPaths: string[]
+  ): { block: string; usages: SkillUsage[] } => {
+    if (!skillsActive) return { block: "", usages: [] };
+    const family = stageFamily(stageName);
+    if (!family || !stageEnabled(skillActivation!, family)) {
+      return { block: "", usages: [] };
+    }
+    if (installedSkills === null) installedSkills = readSkills(workspaceDir);
+    const route = routeSkillsForStage(installedSkills, {
+      stageName,
+      changedPaths,
+    });
+    return {
+      block: formatSkillInjection(route.selected),
+      usages: toSkillUsages(route.selected, stageName),
+    };
   };
 
   // When an external signal is injected (daemon/watch mode), the caller owns
@@ -721,6 +764,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         exitReason: reason,
         nextAction: nextActionFor(reason),
         artifacts: collectArtifacts(),
+        ...(runSkillsUsed.length > 0 ? { skillsUsed: runSkillsUsed } : {}),
         startedAt: manifestStartedAt,
         finishedAt: nowIso(),
       });
@@ -1034,9 +1078,21 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
                 recordStage(i, stageName, subSr, startedAt, reviewSeverity),
             });
           }
+          // P18: route validated skills for this stage and inject a bounded,
+          // attributed block via the `{{ SKILLS }}` template var (empty when
+          // activation is off, so the rendered prompt is unchanged).
+          const skillChanged = skillsActive
+            ? resolveChangedPaths
+              ? resolveChangedPaths(workspaceDir)
+              : iterStartSha
+                ? changedFilesSince(workspaceDir, iterStartSha)
+                : []
+            : [];
+          const injected = injectSkills(stage.name, skillChanged);
           const r = await executeStage({
             stage,
             vars: { INPUTS: inputs, RESUME: resumeNote },
+            injectedContext: injected.block,
             workspaceDir,
             packageDir,
             iteration: i,
@@ -1052,6 +1108,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             compressor,
             retrievalStore,
           });
+          if (injected.usages.length > 0) {
+            r.skillsUsed = injected.usages;
+            runSkillsUsed.push(...injected.usages);
+          }
           accountStage(r);
           if (explainRouting && modelRouting && r.routedTier) {
             const note = r.modelSource === "route" ? "" : ` [${r.modelSource}]`;

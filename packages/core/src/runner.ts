@@ -13,7 +13,7 @@ import { join, posix } from "node:path";
 import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
 import { resolveModelSelection } from "./model-tier.js";
 import type { ContextBreakdown } from "./context-report.js";
-import type { SafetyEvent, ToolUsage } from "./run-report.js";
+import type { SafetyEvent, SkillUsage, ToolUsage } from "./run-report.js";
 import type { Stage } from "./stages.js";
 import { boldOut, dim, SYM_OUT, type StreamJson } from "./stream-render.js";
 import { VerboseSink, type EventSink } from "./console-ui.js";
@@ -60,6 +60,9 @@ export type StageResult = {
   /** External tools invoked while rendering/running this stage (issue #111 P19);
    *  today only the P20 context compressor at @spill — absent when none ran. */
   toolsUsed?: ToolUsage[];
+  /** Validated skills injected into this stage's prompt (issue #114 P18); set by
+   *  the loop after routing when `--use-skills` is active — absent when none. */
+  skillsUsed?: SkillUsage[];
   /** Model tier this stage was routed to (issue #66 P11); absent when routing
    *  off or the stage has no declared tier. */
   routedTier?: import("./model-tier.js").ModelTier;

@@ -52,16 +52,42 @@ export type ImportedSkillProvenance = {
 };
 
 /**
- * Validation provenance: the successful run that last proved the skill works.
- * "Require validation before a skill is used automatically" (the issue) is
- * enforced by retrieval filtering on the DERIVED {@link skillStatus}, which is
- * computed from these fields — not by the bin executing the skill's tests.
+ * Compatibility class from the static validation gate (issue #113 P17). Tells
+ * the loop WHERE a validated skill may be applied: `afk-safe` anywhere unattended,
+ * `interactive-only` only in `--plan`/human-guided modes (it stops for input),
+ * `stage-scoped` only on the stages its capabilities imply, `blocked` nowhere (a
+ * policy/safety violation or an unnormalizable manifest). Persisted, not derived.
+ */
+export type SkillCompatibility =
+  | "afk-safe"
+  | "interactive-only"
+  | "stage-scoped"
+  | "blocked";
+
+/**
+ * Validation provenance: the successful run that last proved the skill works,
+ * plus the static-gate outcome (issue #113 P17). "Require validation before a
+ * skill is used automatically" (the issue) is enforced by retrieval filtering on
+ * the DERIVED {@link skillStatus}, which is computed from these fields — not by
+ * the bin executing the skill's tests.
  */
 export type SkillValidation = {
   /** Run id whose trajectory last validated this skill (absent = unvalidated). */
   lastValidatedRun?: string;
   /** When that validation happened (ISO). */
   lastValidatedAt?: string;
+  /** Compatibility class from the last static validation (P17), if any. */
+  compatibility?: SkillCompatibility;
+  /** Stages a `stage-scoped` skill is valid for (plan/implement/review/…). */
+  stages?: string[];
+  /** When the static gate last ran (ISO). */
+  staticCheckedAt?: string;
+  /**
+   * sha256 of the instruction body at static-validation time. A later reuse
+   * recomputes it and, on mismatch, knows the skill drifted upstream and must be
+   * revalidated before use (issue #135).
+   */
+  instructionsChecksum?: string;
 };
 
 /**
@@ -176,6 +202,13 @@ function parseProvenance(raw: unknown): ImportedSkillProvenance | undefined {
   return p;
 }
 
+const COMPATIBILITIES: ReadonlySet<string> = new Set([
+  "afk-safe",
+  "interactive-only",
+  "stage-scoped",
+  "blocked",
+]);
+
 function parseValidation(raw: unknown): SkillValidation {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
   const o = raw as Record<string, unknown>;
@@ -185,6 +218,20 @@ function parseValidation(raw: unknown): SkillValidation {
   }
   if (typeof o.lastValidatedAt === "string") {
     v.lastValidatedAt = o.lastValidatedAt;
+  }
+  if (
+    typeof o.compatibility === "string" &&
+    COMPATIBILITIES.has(o.compatibility)
+  ) {
+    v.compatibility = o.compatibility as SkillCompatibility;
+  }
+  const stages = stringArray(o.stages);
+  if (stages.length > 0) v.stages = stages;
+  if (typeof o.staticCheckedAt === "string") {
+    v.staticCheckedAt = o.staticCheckedAt;
+  }
+  if (typeof o.instructionsChecksum === "string") {
+    v.instructionsChecksum = o.instructionsChecksum;
   }
   return v;
 }
@@ -356,7 +403,43 @@ export function recordValidation(
 ): Skill {
   return {
     ...skill,
-    validation: { lastValidatedRun: runId, lastValidatedAt: now.toISOString() },
+    validation: {
+      ...skill.validation,
+      lastValidatedRun: runId,
+      lastValidatedAt: now.toISOString(),
+    },
+  };
+}
+
+/** The persisted outcome of a static validation gate run (issue #113 P17). */
+export type StaticValidationOutcome = {
+  compatibility: SkillCompatibility;
+  stages: string[];
+  /** sha256 of the instruction body that was validated. */
+  checksum: string;
+};
+
+/**
+ * Return a copy of the skill with the static-gate outcome (issue #134) recorded
+ * into its `validation` block, preserving any run-based validation fields. Pure —
+ * the caller writes it back. Recording a class does NOT make the skill eligible
+ * (validation is separate from selection): it tells the loop WHERE the skill may
+ * later be applied, and stores the checksum so a future reuse can detect drift.
+ */
+export function recordStaticValidation(
+  skill: Skill,
+  outcome: StaticValidationOutcome,
+  now: Date = new Date()
+): Skill {
+  return {
+    ...skill,
+    validation: {
+      ...skill.validation,
+      compatibility: outcome.compatibility,
+      ...(outcome.stages.length > 0 ? { stages: outcome.stages } : {}),
+      staticCheckedAt: now.toISOString(),
+      instructionsChecksum: outcome.checksum,
+    },
   };
 }
 

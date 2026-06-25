@@ -275,6 +275,7 @@ export {
   parseSkill,
   readSkill,
   readSkills,
+  recordStaticValidation,
   recordValidation,
   selectSkills,
   skillDir,
@@ -291,9 +292,11 @@ export {
   type SkillMatch,
   type SkillMatchContext,
   type ImportedSkillProvenance,
+  type SkillCompatibility,
   type SkillStatus,
   type SkillTrust,
   type SkillValidation,
+  type StaticValidationOutcome,
 } from "./skills.js";
 export {
   addSource,
@@ -329,10 +332,24 @@ export {
   formatSkillsReport,
   formatSources,
   formatSyncPlan,
+  formatValidationReport,
   formatWhy,
   runSkills,
   type SkillsDeps,
 } from "./skills-cli.js";
+export {
+  checkProvenance,
+  classifyCompatibility,
+  extractCapabilities,
+  lintManifest,
+  scanInstructionRisks,
+  skillChecksum,
+  validateSkill,
+  type SkillCheckFinding,
+  type SkillCheckKind,
+  type SkillCheckSeverity,
+  type SkillValidationReport,
+} from "./skill-validation.js";
 export {
   compareTrajectories,
   scoreTrajectory,

@@ -17,11 +17,19 @@ import {
 } from "./external-skills.js";
 import { listRunIds, readManifest } from "./run-report.js";
 import {
+  needsRevalidation,
+  validateSkill,
+  type SkillValidationReport,
+} from "./skill-validation.js";
+import {
   findSkillCandidates,
+  readSkill,
   readSkills,
+  recordStaticValidation,
   selectSkills,
   skillsDir,
   skillStatus,
+  writeSkill,
   type CandidateRun,
   type Skill,
   type SkillCandidate,
@@ -49,6 +57,7 @@ const defaultDeps: SkillsDeps = {
 const USAGE =
   "Usage: otto-skills <list|audit|candidates>\n" +
   "       otto-skills why <changed-path>...\n" +
+  "       otto-skills validate <skill> [--source <name>]\n" +
   "       otto-skills sources <list|add|remove> ...\n" +
   "       otto-skills sync [--dry-run]\n" +
   "       otto-skills audit --external";
@@ -105,6 +114,16 @@ export function formatSkillsAudit(
     lines.push(
       `  - ${s.name}  [${st}]  (run its tests, then record a validating run)`
     );
+  }
+
+  // Body-drift detection (issue #135): a statically-validated skill whose body
+  // changed since the gate ran must be revalidated before it is reused.
+  const drifted = skills.filter(needsRevalidation);
+  lines.push("");
+  lines.push(`Needs revalidation — body drifted (${drifted.length}):`);
+  if (drifted.length === 0) lines.push("  (none)");
+  for (const s of drifted) {
+    lines.push(`  - ${s.name}  (re-run: otto-skills validate ${s.name})`);
   }
   return lines.join("\n");
 }
@@ -178,6 +197,43 @@ export function formatSyncPlan(plan: SyncPlan, dryRun: boolean): string {
   return lines.join("\n");
 }
 
+/**
+ * Render a skill validation report (issue #113 P17): the extracted capabilities,
+ * each finding with its severity/rule/message/remediation, and a pass/fail line.
+ * Pure — the bin decides the exit code from `report.ok`.
+ */
+export function formatValidationReport(report: SkillValidationReport): string {
+  const scope =
+    report.compatibility === "stage-scoped" && report.stages.length
+      ? ` (${report.stages.join(", ")})`
+      : "";
+  const lines: string[] = [
+    `Validating skill '${report.skill}'`,
+    `  capabilities: ${report.capabilities.length ? report.capabilities.join(", ") : "(none)"}`,
+    `  compatibility: ${report.compatibility}${scope}`,
+  ];
+  if (report.findings.length === 0) {
+    lines.push("  no findings");
+  } else {
+    for (const f of report.findings) {
+      lines.push(`  [${f.severity}] ${f.rule}: ${f.message}`);
+      lines.push(`      → ${f.remediation}`);
+    }
+  }
+  const applied = report.drills.filter((d) => d.applied);
+  if (applied.length > 0) {
+    lines.push("  drills:");
+    for (const d of applied) {
+      lines.push(`    ${d.passed ? "pass" : "FAIL"}  ${d.drill}: ${d.detail}`);
+    }
+  }
+  lines.push("");
+  lines.push(
+    report.ok ? "PASS (no blocking errors)" : "FAIL (blocking errors present)"
+  );
+  return lines.join("\n");
+}
+
 /** Render the external-registry audit findings. Pure. */
 export function formatExternalAudit(findings: ExternalAuditFinding[]): string {
   if (findings.length === 0) return "External registry clean (no findings).";
@@ -207,7 +263,15 @@ export async function runSkills(
     deps.out(USAGE);
     return 0;
   }
-  const known = ["list", "audit", "why", "candidates", "sources", "sync"];
+  const known = [
+    "list",
+    "audit",
+    "why",
+    "validate",
+    "candidates",
+    "sources",
+    "sync",
+  ];
   if (arg !== undefined && !known.includes(arg)) {
     deps.err(`Unknown subcommand '${arg}'.\n${USAGE}`);
     return 1;
@@ -237,6 +301,34 @@ export async function runSkills(
     }
     deps.out(formatWhy(selectSkills(skills, { changedPaths: paths })));
     return 0;
+  }
+
+  if (arg === "validate") {
+    const rest = argv.slice(1);
+    const name = rest.find((a) => !a.startsWith("--"));
+    if (!name) {
+      deps.err(`validate needs a skill name.\n${USAGE}`);
+      return 1;
+    }
+    const skill = readSkill(workspaceDir, name);
+    if (!skill) {
+      deps.err(`No skill named '${name}' under ${skillsDir(workspaceDir)}.`);
+      return 1;
+    }
+    const source = flagValue(rest, "--source");
+    const report = validateSkill(skill, source ? { source } : {});
+    deps.out(formatValidationReport(report));
+    // Persist the static-gate outcome (issue #134). Recording a class does NOT
+    // make the skill eligible — selection stays a separate concern (P18).
+    writeSkill(
+      workspaceDir,
+      recordStaticValidation(skill, {
+        compatibility: report.compatibility,
+        stages: report.stages,
+        checksum: report.checksum,
+      })
+    );
+    return report.ok ? 0 : 1;
   }
 
   if (arg === "candidates") {

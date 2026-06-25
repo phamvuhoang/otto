@@ -1,9 +1,4 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -15,6 +10,7 @@ import {
   parseSkill,
   readSkill,
   readSkills,
+  recordStaticValidation,
   recordValidation,
   selectSkills,
   skillDir,
@@ -66,7 +62,10 @@ describe("parseSkill", () => {
       instructions: "inline body",
       scripts: { build: "pnpm -r build" },
       tests: ["pnpm test"],
-      validation: { lastValidatedRun: "run-1", lastValidatedAt: "2026-06-19T00:00:00.000Z" },
+      validation: {
+        lastValidatedRun: "run-1",
+        lastValidatedAt: "2026-06-19T00:00:00.000Z",
+      },
       trust: "trusted",
       createdAt: "2026-06-19T00:00:00.000Z",
       useCount: 3,
@@ -87,7 +86,12 @@ describe("parseSkill", () => {
   });
 
   it("fills safe defaults for missing/invalid fields", () => {
-    const s = parseSkill({ name: "x", capabilities: "nope", trust: "bogus", scripts: ["nope"] });
+    const s = parseSkill({
+      name: "x",
+      capabilities: "nope",
+      trust: "bogus",
+      scripts: ["nope"],
+    });
     expect(s?.version).toBe("0.0.0");
     expect(s?.capabilities).toEqual([]);
     expect(s?.scripts).toEqual({});
@@ -97,7 +101,11 @@ describe("parseSkill", () => {
   });
 
   it("filters non-string array elements", () => {
-    const s = parseSkill({ name: "x", capabilities: ["a", 1, "b"], tests: [true, "pnpm test"] });
+    const s = parseSkill({
+      name: "x",
+      capabilities: ["a", 1, "b"],
+      tests: [true, "pnpm test"],
+    });
     expect(s?.capabilities).toEqual(["a", "b"]);
     expect(s?.tests).toEqual(["pnpm test"]);
   });
@@ -118,7 +126,10 @@ describe("writeSkill / readSkill", () => {
     const ws = tmp();
     const dir = skillDir(ws, "s");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "skill.json"), JSON.stringify({ name: "s", instructions: "inline" }));
+    writeFileSync(
+      join(dir, "skill.json"),
+      JSON.stringify({ name: "s", instructions: "inline" })
+    );
     writeFileSync(join(dir, "instructions.md"), "from the sidecar");
     expect(readSkill(ws, "s")?.instructions).toBe("from the sidecar");
     rmSync(ws, { recursive: true, force: true });
@@ -169,15 +180,21 @@ describe("skillStatus / recordValidation", () => {
   });
 
   it("is validated when proven and within (or without) a freshness window", () => {
-    const s = skill({ validation: { lastValidatedRun: "run-1", lastValidatedAt: validatedAt } });
+    const s = skill({
+      validation: { lastValidatedRun: "run-1", lastValidatedAt: validatedAt },
+    });
     // No revalidate window → always validated once proven.
-    expect(skillStatus(s, new Date("2027-01-01T00:00:00.000Z"))).toBe("validated");
+    expect(skillStatus(s, new Date("2027-01-01T00:00:00.000Z"))).toBe(
+      "validated"
+    );
     // Within the window → validated.
     const windowed = skill({
       revalidateAfterDays: 30,
       validation: { lastValidatedRun: "run-1", lastValidatedAt: validatedAt },
     });
-    expect(skillStatus(windowed, new Date("2026-06-15T00:00:00.000Z"))).toBe("validated");
+    expect(skillStatus(windowed, new Date("2026-06-15T00:00:00.000Z"))).toBe(
+      "validated"
+    );
   });
 
   it("goes stale once revalidateAfterDays elapse since validation", () => {
@@ -193,23 +210,72 @@ describe("skillStatus / recordValidation", () => {
       revalidateAfterDays: 7,
       validation: { lastValidatedRun: "run-1", lastValidatedAt: "not-a-date" },
     });
-    expect(skillStatus(s, new Date("2027-01-01T00:00:00.000Z"))).toBe("validated");
+    expect(skillStatus(s, new Date("2027-01-01T00:00:00.000Z"))).toBe(
+      "validated"
+    );
   });
 
   it("recordValidation stamps the run + time without mutating the input", () => {
     const s = skill({ validation: {} });
-    const v = recordValidation(s, "run-9", new Date("2026-06-19T00:00:00.000Z"));
-    expect(v.validation).toEqual({ lastValidatedRun: "run-9", lastValidatedAt: "2026-06-19T00:00:00.000Z" });
+    const v = recordValidation(
+      s,
+      "run-9",
+      new Date("2026-06-19T00:00:00.000Z")
+    );
+    expect(v.validation).toEqual({
+      lastValidatedRun: "run-9",
+      lastValidatedAt: "2026-06-19T00:00:00.000Z",
+    });
     expect(s.validation).toEqual({}); // input untouched
     expect(skillStatus(v)).toBe("validated");
+  });
+
+  it("recordStaticValidation stores the class/stages/checksum, preserving run fields", () => {
+    const s = recordValidation(
+      skill({ validation: {} }),
+      "run-1",
+      new Date("2026-06-19T00:00:00.000Z")
+    );
+    const v = recordStaticValidation(
+      s,
+      { compatibility: "stage-scoped", stages: ["review"], checksum: "abc" },
+      new Date("2026-06-20T00:00:00.000Z")
+    );
+    expect(v.validation.compatibility).toBe("stage-scoped");
+    expect(v.validation.stages).toEqual(["review"]);
+    expect(v.validation.instructionsChecksum).toBe("abc");
+    expect(v.validation.staticCheckedAt).toBe("2026-06-20T00:00:00.000Z");
+    // run-based validation preserved
+    expect(v.validation.lastValidatedRun).toBe("run-1");
+    expect(s.validation.compatibility).toBeUndefined(); // input untouched
+  });
+
+  it("round-trips the compatibility metadata through writeSkill/readSkill", () => {
+    const ws = tmp();
+    const s = recordStaticValidation(
+      skill({ name: "rt" }),
+      { compatibility: "afk-safe", stages: [], checksum: "deadbeef" },
+      new Date("2026-06-20T00:00:00.000Z")
+    );
+    writeSkill(ws, s);
+    const back = readSkill(ws, "rt");
+    expect(back?.validation.compatibility).toBe("afk-safe");
+    expect(back?.validation.instructionsChecksum).toBe("deadbeef");
+    rmSync(ws, { recursive: true, force: true });
   });
 });
 
 describe("globMatch", () => {
   it("matches ** across separators and * within a segment", () => {
-    expect(globMatch("packages/core/**", "packages/core/src/eval.ts")).toBe(true);
-    expect(globMatch("packages/*/src/*.ts", "packages/core/src/eval.ts")).toBe(true);
-    expect(globMatch("packages/core/src/*.ts", "packages/core/src/eval.ts")).toBe(true);
+    expect(globMatch("packages/core/**", "packages/core/src/eval.ts")).toBe(
+      true
+    );
+    expect(globMatch("packages/*/src/*.ts", "packages/core/src/eval.ts")).toBe(
+      true
+    );
+    expect(
+      globMatch("packages/core/src/*.ts", "packages/core/src/eval.ts")
+    ).toBe(true);
     // single * does not span separators, and an unrelated prefix does not match.
     expect(globMatch("packages/*.ts", "packages/core/src/eval.ts")).toBe(false);
     expect(globMatch("docs/**", "packages/core/src/eval.ts")).toBe(false);
@@ -228,12 +294,20 @@ describe("selectSkills", () => {
     const byName = Object.fromEntries(matches.map((m) => [m.name, m]));
     expect(byName["ready"].eligible).toBe(true);
     expect(byName["never-validated"].eligible).toBe(false);
-    expect(byName["never-validated"].reasons.join(" ")).toMatch(/validation required/);
+    expect(byName["never-validated"].reasons.join(" ")).toMatch(
+      /validation required/
+    );
   });
 
   it("scores capability and scope matches, explaining each", () => {
     const m = selectSkills(
-      [validated({ name: "s", capabilities: ["release"], scope: ["packages/core/**"] })],
+      [
+        validated({
+          name: "s",
+          capabilities: ["release"],
+          scope: ["packages/core/**"],
+        }),
+      ],
       { capability: "release", changedPaths: ["packages/core/src/eval.ts"] }
     )[0];
     expect(m.score).toBe(4); // +2 capability, +2 scope
@@ -243,11 +317,18 @@ describe("selectSkills", () => {
 
   it("excludes a skill whose constraint forbids the change's risk class", () => {
     const m = selectSkills(
-      [validated({ name: "s", constraints: ["not for security-sensitive changes"] })],
+      [
+        validated({
+          name: "s",
+          constraints: ["not for security-sensitive changes"],
+        }),
+      ],
       { changedPaths: ["packages/core/src/auth.ts"] } // classifyRisk → security-sensitive
     )[0];
     expect(m.eligible).toBe(false);
-    expect(m.reasons.join(" ")).toMatch(/constraint for risk class "security-sensitive"/);
+    expect(m.reasons.join(" ")).toMatch(
+      /constraint for risk class "security-sensitive"/
+    );
   });
 
   it("ranks eligible-first, then score, then name (deterministic)", () => {

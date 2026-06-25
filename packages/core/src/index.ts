@@ -128,6 +128,30 @@ export {
   type ContextReportDeps,
 } from "./context-report-cli.js";
 export {
+  compressContent,
+  compressionToolUsage,
+  formatCompressionSummary,
+  readCompressorMode,
+  resolveCompressorMode,
+  runRetrievalStore,
+  summarizeCompression,
+  summarizeToolCompression,
+  type CompressInput,
+  type CompressOutput,
+  type CompressionCategory,
+  type CompressionSummary,
+  type CompressorMode,
+  type ContextCompressor,
+  type RetrievalStore,
+} from "./context-compressor.js";
+export {
+  HEADROOM_VERSION,
+  createHeadroomCompressor,
+  defaultHeadroomRunner,
+  headroomToolDefinition,
+  type HeadroomRunner,
+} from "./headroom-adapter.js";
+export {
   formatPlanReport,
   readTaskPlans,
   runPlanReport,

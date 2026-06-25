@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.0](https://github.com/phamvuhoang/otto/compare/otto-v0.8.4...otto-v0.9.0) (2026-06-25)
+
+
+### Features
+
+* **tools:** P19 external tool authority layer ([#145](https://github.com/phamvuhoang/otto/issues/145)) ([afd72f6](https://github.com/phamvuhoang/otto/commit/afd72f635f912ab5c8ad6421fbef8fb2294c9465))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @phamvuhoang/otto-core bumped to 0.23.0
+
 ## [0.8.4](https://github.com/phamvuhoang/otto/compare/otto-v0.8.3...otto-v0.8.4) (2026-06-25)
 
 

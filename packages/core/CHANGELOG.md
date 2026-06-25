@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.23.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.22.0...otto-core-v0.23.0) (2026-06-25)
+
+
+### Features
+
+* **skills:** P16 external skill source registry (local sources) ([#144](https://github.com/phamvuhoang/otto/issues/144)) ([af8ec05](https://github.com/phamvuhoang/otto/commit/af8ec05c55eb1ede041995140d8f3fe77b52c27f))
+* **tools:** P19 external tool authority layer ([#145](https://github.com/phamvuhoang/otto/issues/145)) ([afd72f6](https://github.com/phamvuhoang/otto/commit/afd72f635f912ab5c8ad6421fbef8fb2294c9465))
+
 ## [0.22.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.21.0...otto-core-v0.22.0) (2026-06-25)
 
 

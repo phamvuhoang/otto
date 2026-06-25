@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.27.0...otto-core-v0.28.0) (2026-06-25)
+
+
+### Features
+
+* **extensions:** land P21 + README scenarios on main ([#115](https://github.com/phamvuhoang/otto/issues/115)) ([#158](https://github.com/phamvuhoang/otto/issues/158)) ([fa4ce3f](https://github.com/phamvuhoang/otto/commit/fa4ce3fed41eedbd68c1635e313d8fece5f4cc94))
+
 ## [0.27.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.26.0...otto-core-v0.27.0) (2026-06-25)
 
 

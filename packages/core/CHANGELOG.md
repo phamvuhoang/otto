@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.23.0...otto-core-v0.24.0) (2026-06-25)
+
+
+### Features
+
+* **context:** P20a Headroom context-compression adapter (spike) ([#148](https://github.com/phamvuhoang/otto/issues/148)) ([cba39ea](https://github.com/phamvuhoang/otto/commit/cba39eaa0415fb002d80d41e194f90ae5c8f3e54))
+
 ## [0.23.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.22.0...otto-core-v0.23.0) (2026-06-25)
 
 

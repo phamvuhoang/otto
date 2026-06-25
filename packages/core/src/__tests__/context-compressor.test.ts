@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   compressContent,
+  compressContentSync,
   compressionToolUsage,
   readCompressorMode,
   resolveCompressorMode,
@@ -20,7 +21,10 @@ import {
   type CompressInput,
   type ContextCompressor,
   type RetrievalStore,
+  type SyncContextCompressor,
 } from "../context-compressor.js";
+import { estimateTokens } from "../context-report.js";
+import { applyPromptReduction } from "../prompt-reduction.js";
 
 /** A fake compressor: configurable availability, transform, and ok flag. */
 function fake(opts: {
@@ -263,6 +267,107 @@ describe("summaries + tool usage", () => {
     expect(rolled.invocations).toBe(1);
     expect(rolled.retrievals).toBe(1);
     expect(rolled.tokensSaved).toBe(out.tokensSaved);
+  });
+});
+
+describe("compressContentSync (the render/@spill path)", () => {
+  function syncFake(opts: {
+    available?: boolean;
+    transform?: (t: string) => string;
+    throws?: boolean;
+  }): SyncContextCompressor {
+    return {
+      name: "headroom",
+      version: "sync-1",
+      available: opts.available ?? true,
+      compress: (i) => {
+        if (opts.throws) throw new Error("boom");
+        return { ok: true, text: (opts.transform ?? ((t) => t))(i.text) };
+      },
+    };
+  }
+
+  it("off (null) returns the original verbatim", () => {
+    const out = compressContentSync(null, input("hi"), null);
+    expect(out.text).toBe("hi");
+    expect(out.degraded).toBe(false);
+  });
+
+  it("unavailable degrades to the original", () => {
+    const out = compressContentSync(
+      syncFake({ available: false }),
+      input("x".repeat(400)),
+      null
+    );
+    expect(out.degraded).toBe(true);
+    expect(out.text).toBe("x".repeat(400));
+  });
+
+  it("a thrown sync compressor degrades, never throws", () => {
+    const out = compressContentSync(
+      syncFake({ throws: true }),
+      input("y".repeat(400)),
+      null
+    );
+    expect(out.degraded).toBe(true);
+  });
+
+  it("success stores the original and is reversible", () => {
+    const { store, saved } = memStore();
+    const original = "FACT-XYZ " + "pad ".repeat(200);
+    const out = compressContentSync(
+      syncFake({ transform: () => "small" }),
+      input(original),
+      store
+    );
+    expect(out.text).toBe("small");
+    expect(out.tokensSaved).toBeGreaterThan(0);
+    expect(saved.get("k1")).toBe(original);
+  });
+});
+
+describe("Task 5 benchmark: off vs reduce vs headroom (no fact lost)", () => {
+  // A large issue-dump fixture with one buried fact.
+  const fixture =
+    "Issue: checkout fails\n" +
+    "log line that repeats a lot   \n".repeat(400) +
+    "DECISIVE-FACT: the mutex is reentrant\n" +
+    "more   trailing   noise\n".repeat(400);
+
+  it("headroom cuts the most tokens while keeping the fact retrievable", () => {
+    const off = estimateTokens(fixture.length);
+    const reduce = estimateTokens(applyPromptReduction(fixture).prompt.length);
+
+    const { store, saved } = memStore();
+    const headroom = compressContentSync(
+      {
+        name: "headroom",
+        version: "bench-1",
+        available: true,
+        // Summarize to the first + decisive lines — the kind of lossy transform
+        // that must keep the original retrievable.
+        compress: (i) => ({
+          ok: true,
+          text: i.text
+            .split("\n")
+            .filter(
+              (l) => l.startsWith("Issue:") || l.startsWith("DECISIVE-FACT:")
+            )
+            .join("\n"),
+        }),
+      },
+      { key: "bench", category: "issue-body", text: fixture },
+      store
+    );
+
+    // off ≥ reduce (whitespace only) ≥ ... ; headroom is the smallest by far.
+    expect(reduce).toBeLessThanOrEqual(off);
+    expect(headroom.tokensAfter).toBeLessThan(reduce);
+    expect(headroom.tokensSaved).toBeGreaterThan(off / 2);
+    // No regression on the decisive fact: it survives in the retained original.
+    expect(saved.get("bench")).toContain(
+      "DECISIVE-FACT: the mutex is reentrant"
+    );
   });
 });
 

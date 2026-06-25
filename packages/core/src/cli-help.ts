@@ -12,6 +12,7 @@ import { resolveModelSelection } from "./runner.js";
 import type { TierLadder } from "./model-tier.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import { parseTokenMode, type TokenMode } from "./tokens.js";
+import type { CompressorMode } from "./context-compressor.js";
 
 export type CliFlags = {
   help: boolean;
@@ -31,6 +32,9 @@ export type CliFlags = {
   budget?: number;
   cooldownMs?: number;
   tokenMode?: TokenMode;
+  /** `--context-compressor <off|headroom>` (default off; issue #112 P20). Routes
+   *  @spill output through the named context compressor; validated at parse time. */
+  contextCompressor?: CompressorMode;
   /**
    * Validated `--agent` value (the active agent CLI runtime). Undefined when the
    * flag is absent; run-bin then falls back to OTTO_AGENT / .otto/config.json /
@@ -200,6 +204,8 @@ export function parseFlags(
   let expectingCooldown = false;
   let tokenMode: TokenMode | undefined;
   let expectingTokenMode = false;
+  let contextCompressor: CompressorMode | undefined;
+  let expectingContextCompressor = false;
   let agent: AgentRuntimeId | undefined;
   let expectingAgent = false;
   let fallbackAgent: AgentRuntimeId | undefined;
@@ -289,6 +295,16 @@ export function parseFlags(
       expectingTokenMode = false;
       continue;
     }
+    if (expectingContextCompressor) {
+      if (a !== "off" && a !== "headroom") {
+        throw new Error(
+          `--context-compressor must be "off" or "headroom", got: ${JSON.stringify(a)}`
+        );
+      }
+      contextCompressor = a;
+      expectingContextCompressor = false;
+      continue;
+    }
     if (expectingAgent) {
       agent = parseAgentId(a, "--agent");
       expectingAgent = false;
@@ -375,6 +391,7 @@ export function parseFlags(
     else if (a === "--adaptive-router") adaptiveRouter = true;
     else if (a === "--explain-routing") explainRouting = true;
     else if (a === "--model-routing") modelRouting = true;
+    else if (a === "--context-compressor") expectingContextCompressor = true;
     else if (a === "--fan-out") fanOut = true;
     else if (a === "--fan-out-concurrency") expectingFanOutConcurrency = true;
     else if (a === "--watch") watch = true;
@@ -458,6 +475,7 @@ export function parseFlags(
     budget,
     cooldownMs,
     tokenMode,
+    contextCompressor,
     agent,
     fallbackAgent,
     autoSwitchOnLimit,
@@ -609,6 +627,8 @@ export type PrintConfigOptions = {
   cooldownMs?: number;
   tokenMode?: TokenMode | string;
   tokenModeError?: string;
+  /** Resolved context compressor (issue #112 P20); default "off". */
+  contextCompressor?: CompressorMode;
   /** Resolved active runtime id (e.g. "claude"); omitted → claude default. */
   agentId?: AgentRuntimeId;
   /** Display name for the active runtime (e.g. "Claude Code"). */
@@ -683,6 +703,7 @@ export function printConfig(
     cooldownMs,
     tokenMode = "off",
     tokenModeError,
+    contextCompressor = "off",
     agentId = "claude",
     agentDisplayName = "Claude Code",
     agentSource = "default",
@@ -797,6 +818,7 @@ export function printConfig(
   budget                ${budgetStatus}
   cooldown              ${cooldownStatus}
   token mode            ${tokenModeStatus}
+  context compressor    ${contextCompressor}
   max-wait              ${maxWaitMs != null ? `${Math.round(maxWaitMs / 60000)}m` : "6h (default)"}
   verbose               ${verbose}
   review                ${reviewStatus}

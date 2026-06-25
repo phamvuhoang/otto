@@ -48,6 +48,13 @@ export type RenderOptions = {
   // caller can surface it as a trajectory safety event. Called before the
   // offending command is skipped.
   onPolicyViolation?: (violation: PolicyViolation) => void;
+  // Optional context-compression hook (issue #112 P20). When set, each @spill's
+  // captured output is passed through it before being written to the spill file;
+  // the hook returns the text to actually write (compressed, or the original on
+  // degrade) and is responsible for retaining the original + recording evidence.
+  // Absent → spill output is written verbatim (today's behavior). Synchronous so
+  // it fits the sync render path (the Headroom command runner is itself sync).
+  compressSpill?: (name: string, content: string) => string;
 };
 
 export function resolveShell(): string {
@@ -88,10 +95,14 @@ export function renderTemplate(
   // vars are substituted into the path so @include:lens-guidance/{{ LENS }}.md works.
   function expandIncludes(text: string, fromDir: string): string {
     const expanded = text.replace(INCLUDE_TAG, (_match, rel: string) => {
-      const resolvedRel = rel.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (m, k: string) =>
-        Object.prototype.hasOwnProperty.call(vars, k) ? vars[k] : m
+      const resolvedRel = rel.replace(
+        /\{\{\s*([A-Z0-9_]+)\s*\}\}/g,
+        (m, k: string) =>
+          Object.prototype.hasOwnProperty.call(vars, k) ? vars[k] : m
       );
-      const target = isAbsolute(resolvedRel) ? resolvedRel : resolve(fromDir, resolvedRel);
+      const target = isAbsolute(resolvedRel)
+        ? resolvedRel
+        : resolve(fromDir, resolvedRel);
       const content = readFileSync(target, "utf8").replace(/\r?\n$/, "");
       // Recurse so includes within included files are resolved relative to
       // the included file's own directory.
@@ -155,7 +166,8 @@ export function renderTemplate(
         }
       }
       mkdirSync(opts.spillHostDir, { recursive: true });
-      writeFileSync(join(opts.spillHostDir, name), out, "utf8");
+      const toWrite = opts.compressSpill ? opts.compressSpill(name, out) : out;
+      writeFileSync(join(opts.spillHostDir, name), toWrite, "utf8");
       return `./${opts.spillRefPath}/${name}`;
     }
   );

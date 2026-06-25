@@ -26,6 +26,10 @@ import type { Stage } from "./stages.js";
 import { parseGithubRepo, describeScope, type WorkScope } from "./task-key.js";
 import type { TokenMode } from "./tokens.js";
 import { parseTokenMode } from "./tokens.js";
+import {
+  readCompressorMode,
+  type CompressorMode,
+} from "./context-compressor.js";
 import type { PollResult, WatchProvider } from "./watch.js";
 
 export type RunBinConfig = {
@@ -170,6 +174,14 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       tokenModeError = (err as Error).message;
     }
   }
+
+  // Context compressor (issue #112 P20): --context-compressor flag → env
+  // OTTO_CONTEXT_COMPRESSOR → .otto/config.json contextCompressor → off.
+  const contextCompressor: CompressorMode = readCompressorMode(
+    workspaceDir,
+    process.env,
+    flags.contextCompressor
+  );
 
   // Resolve the active agent runtime: --agent flag → OTTO_AGENT → .otto/config.json
   // "agent" → claude default. Mirror the token-mode handling: an invalid env/config
@@ -415,6 +427,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
         ? (process.env.OTTO_TOKEN_MODE?.trim() ?? "")
         : tokenMode,
       tokenModeError,
+      contextCompressor,
       agentId: agent.id,
       agentDisplayName: agent.displayName,
       agentSource: agent.source,
@@ -564,7 +577,9 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   }
   // One-shot regardless of any positional count.
   if (oneShot && iterationsArg) {
-    console.error(`${oneShotFlag} is one-shot; ignoring the iterations argument`);
+    console.error(
+      `${oneShotFlag} is one-shot; ignoring the iterations argument`
+    );
   }
   const iterations = oneShot ? 1 : Number.parseInt(iterationsArg, 10);
   if (!oneShot && (!Number.isFinite(iterations) || iterations < 1)) {
@@ -674,6 +689,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     cliVersion: cfg.cliVersion,
     cooldownMs: flags.cooldownMs,
     tokenMode,
+    contextCompressor,
     reviewLenses,
     adaptiveRouter,
     explainRouting,

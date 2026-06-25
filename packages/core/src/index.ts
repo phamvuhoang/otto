@@ -129,6 +129,7 @@ export {
 } from "./context-report-cli.js";
 export {
   compressContent,
+  compressContentSync,
   compressionToolUsage,
   formatCompressionSummary,
   readCompressorMode,
@@ -143,10 +144,12 @@ export {
   type CompressorMode,
   type ContextCompressor,
   type RetrievalStore,
+  type SyncContextCompressor,
 } from "./context-compressor.js";
 export {
   HEADROOM_VERSION,
   createHeadroomCompressor,
+  createHeadroomSyncCompressor,
   defaultHeadroomRunner,
   headroomToolDefinition,
   type HeadroomRunner,

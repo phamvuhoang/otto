@@ -1,6 +1,10 @@
 import { spawnSync } from "node:child_process";
 
-import type { CompressInput, ContextCompressor } from "./context-compressor.js";
+import type {
+  CompressInput,
+  ContextCompressor,
+  SyncContextCompressor,
+} from "./context-compressor.js";
 import type { ToolDefinition } from "./tools.js";
 
 /**
@@ -97,6 +101,23 @@ export function createHeadroomCompressor(
       return probed;
     },
     compress: (input) => Promise.resolve(runner.run(input)),
+  };
+}
+
+/**
+ * Build a {@link SyncContextCompressor} over a {@link HeadroomRunner} for the
+ * sync render/`@spill` path. Availability is probed once at construction (one
+ * `headroom --version` per run). The runner is synchronous (spawnSync), so this
+ * needs no event loop — exactly what `renderTemplate` requires.
+ */
+export function createHeadroomSyncCompressor(
+  runner: HeadroomRunner = defaultHeadroomRunner()
+): SyncContextCompressor {
+  return {
+    name: "headroom",
+    version: HEADROOM_VERSION,
+    available: runner.available(),
+    compress: (input) => runner.run(input),
   };
 }
 

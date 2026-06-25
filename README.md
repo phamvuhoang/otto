@@ -258,6 +258,7 @@ The rest of this section is the detail behind each row:
 - 🛠️ **It gives you an operator view.** A CLI-first cockpit over the evidence bundles: `otto-runs list` for a one-row-per-run summary (status, iterations, cost, elapsed), `otto-inspect [latest]` for one run's report, `otto-explain [latest]` to re-render any run in plain language a non-engineer can verify, `otto-tail [latest]` to attach to a running loop and watch a live status tree (prints the done card once it finalizes), and `otto-eval compare <run-a> <run-b>` to A/B two past runs side-by-side **without re-paying for a run**. `--explain-routing` prints the adaptive router's per-iteration reasoning (change class, risk, chosen review depth) so a routing decision is never a black box. The in-run console is quiet by default (one terse line per meaningful action — edits, commits, test results, errors); `--verbose` restores the full firehose.
 - 🧩 **It can turn repeated workflows into skills.** Stable, repeated procedures (release flow, test bootstrap, a migration pattern) can be promoted into git-tracked `.otto/skills/<name>/` packages — instructions + metadata + constraints + a last-validated run. `otto-skills candidates` suggests them from runs that succeeded the same way twice; `otto-skills why <changed-files>` shows which skills retrieval would pick and **why** (by capability, touched files, and change risk). A skill must be **validated before it is eligible**, and stale skills are flagged rather than reapplied.
 - 🧮 **It can spend the cheapest model that does the job.** Opt-in `--model-routing` routes each stage to a model **tier** — `cheap` for docs/test-only changes, `mid` for ordinary code, `strong` for design/review/security — and **escalates a tier on repeated failure**, so a wedged run climbs to a stronger model on its own. A pinned `--model`/`OTTO_MODEL` always wins and disables routing. Pure, deterministic tier selection; the ladder (`haiku`/`sonnet`/`opus` by default) is overridable per tier.
+- 🗜️ **It can compress token-heavy context — reversibly.** Opt-in `--context-compressor headroom` routes large `@spill` content (issue bodies, comments, diffs) through a local [Headroom](https://github.com/headroomlabs-ai/headroom) binary before the agent reads it, cutting input tokens on long runs. It **never hides evidence**: every compression retains the original under the run bundle (`.otto/runs/<id>/compressed/`) and records tokens before/after, savings, and latency as a tool-usage record surfaced in `--context-report`. The compressor runs under repo-local **tool authority** (P19) — declared in `.otto/tools/`, scoped by `.otto/policy.json`, never inherited from personal config. Off by default; a missing/failed `headroom` **degrades cleanly** to today's behavior with a clear warning, not a broken run.
 - 🪢 **It can parallelize independent work.** When a plan ships a machine-readable task graph (`.otto/tasks/<key>/tasks.json`, authored by `--plan`), opt-in `--fan-out` runs the independent tasks as **isolated git-worktree sub-agents** (each with its own bounded context), then cherry-picks their commits back onto the workspace — **serially, with a hard fallback**: any merge conflict or sub-agent failure defers that task to the normal sequential loop, so fan-out never leaves the tree half-merged. Worst case it degrades to today's behavior.
 - 📣 **It can build in public — safely.** Opt-in per repo, at the end of a run Otto can turn one generic craft learning into a short "field note" and publish it to **Threads** ("a coding agent's field notes"). Every candidate passes an **airtight, default-deny secrecy gate** — a deterministic deny-list (secrets, tokens, paths, code, URLs, the repo's own names, plus your `.otto/policy.json` secret patterns), a generalization check, and an adversarial LLM judge biased to refuse — and **a post that cannot be proven safe is never sent** (zero-leak is the hard gate). The sandboxed agent only ever produces text; the harness owns the gate and the network. **Draft-only by default** (screened notes land in `.otto/journal/drafts/`); actually posting needs an explicit **double opt-in**.
 
@@ -381,6 +382,16 @@ OTTO_MODEL=claude-opus-4-8 otto-afk --model-routing "./docs/plans/feature.md" 10
 
 # Conservative render-time prompt compaction + token reporting
 otto-afk --token-mode reduce "./docs/plans/feature.md" 5
+
+# Compress token-heavy spilled content (issue bodies, comments, diffs) through a
+# local Headroom binary — reversible: originals are retained under the run bundle
+# and the savings show up in --context-report. Off by default; degrades cleanly
+# (a clear warning, no broken run) if `headroom` is not installed.
+otto-afk --context-compressor headroom "./docs/plans/feature.md" 10
+# or set it per-shell / per-repo:
+OTTO_CONTEXT_COMPRESSOR=headroom otto-afk "./docs/plans/feature.md" 10
+# .otto/config.json: { "contextCompressor": "headroom" }
+# Put the compressor under repo-local tool authority (P19): otto-tools list/why/health
 ```
 
 ### 5. Govern memory, safety & skills
@@ -516,12 +527,13 @@ The [architecture diagram](#otto) above maps the full stack: CLI + template laye
 
 Otto is configured by flags and environment variables. The essentials:
 
-| Variable          | Default         | Purpose                                                                                 |
-| ----------------- | --------------- | --------------------------------------------------------------------------------------- |
-| `OTTO_WORKSPACE`  | `cwd`           | Host repo the selected agent runs against; also where `.otto-tmp/` is written.          |
-| `OTTO_RUNNER`     | `sandbox`       | `sandbox` confines writes to the workspace; `host` runs the selected agent unsandboxed. |
-| `OTTO_MODEL`      | _(CLI default)_ | Pin the active runtime's model (`--model` pass-through).                                |
-| `OTTO_TOKEN_MODE` | `off`           | `off`, `measure`, or `reduce`; overridden by `--token-mode`.                            |
+| Variable                  | Default         | Purpose                                                                                 |
+| ------------------------- | --------------- | --------------------------------------------------------------------------------------- |
+| `OTTO_WORKSPACE`          | `cwd`           | Host repo the selected agent runs against; also where `.otto-tmp/` is written.          |
+| `OTTO_RUNNER`             | `sandbox`       | `sandbox` confines writes to the workspace; `host` runs the selected agent unsandboxed. |
+| `OTTO_MODEL`              | _(CLI default)_ | Pin the active runtime's model (`--model` pass-through).                                |
+| `OTTO_TOKEN_MODE`         | `off`           | `off`, `measure`, or `reduce`; overridden by `--token-mode`.                            |
+| `OTTO_CONTEXT_COMPRESSOR` | `off`           | `off` or `headroom`; overridden by `--context-compressor`. Compresses `@spill` content. |
 
 ### How to set config values
 
@@ -555,14 +567,14 @@ otto-afk --print-config     # resolved config + a preflight check of run prerequ
 **Flags** (per-run; same set across all bins unless noted):
 
 - **Agent runtime** — `--agent <claude|codex>` (default `claude`), `--fallback-agent <claude|codex>`, `--auto-switch-on-limit`
-- **Loop & cost** — `--budget <usd>`, `--cooldown <ms>`, `--max-retries <N>`, `--max-wait <dur>`, `--token-mode <off|measure|reduce>`, `--review-panel`, `--adaptive-router`, `--model-routing`, `--fresh`
+- **Loop & cost** — `--budget <usd>`, `--cooldown <ms>`, `--max-retries <N>`, `--max-wait <dur>`, `--token-mode <off|measure|reduce>`, `--context-compressor <off|headroom>`, `--review-panel`, `--adaptive-router`, `--model-routing`, `--fresh`
 - **Orchestration** (`otto-afk`) — `--model-routing` (per-stage model tier by difficulty/risk), `--fan-out` + `--fan-out-concurrency <n>` (parallel worktree sub-agents from a plan task graph)
 - **Process & UX** — `--detach`, `--log <path>`, `--notify`, `--no-keep-alive`, `--explain-routing`, `--verbose`, `--print-config`, `--context-report`, `--plan-report`, `--help`, `--version`
 - **Branch** — `--branch <current|branch|worktree>`, `--branch-convention <c>`, `--branch-prefix <p>`
 - **Targeting** (`otto-ghafk` / `otto-linear-afk`) — `--watch`, `--watch-interval <sec>`, `--repo <owner/name>`, `--project <name>`, `--issue <ref>`, `--include-sub-issues` (otto-ghafk; with `--issue`)
 - **Modes** (`otto-afk`) — `--plan` (author spec + plan, no edits), `--verify` (read-only reconcile), `--apply-review <doc>`
 
-**Environment variables** (per-shell defaults): `OTTO_WORKSPACE`, `OTTO_RUNNER`, `OTTO_SANDBOX_NET`, `OTTO_RESULT_GRACE_MS`, `OTTO_AGENT`, `OTTO_FALLBACK_AGENT`, `OTTO_AUTO_SWITCH_ON_LIMIT`, `OTTO_MODEL`, `OTTO_CLAUDE_MODEL`, `OTTO_CODEX_MODEL`, `OTTO_TOKEN_MODE`, `OTTO_REVIEW_LENSES`, `OTTO_ADAPTIVE_ROUTER`, `OTTO_EXPLAIN_ROUTING`, `OTTO_MAX_WAIT`, `OTTO_WATCH_LABEL`, `OTTO_GITHUB_REPO(S)`, `OTTO_INCLUDE_SUB_ISSUES`, `OTTO_BRANCH`, `OTTO_BRANCH_PREFIX`, `OTTO_BRANCH_CONVENTION`, `OTTO_LINEAR_API_KEY` / `LINEAR_API_KEY`, `OTTO_LINEAR_LABEL`, `OTTO_LINEAR_TEAM`, `OTTO_LINEAR_PROJECT(S)`, `OTTO_LINEAR_DONE_STATE`, and `NO_COLOR` / `TERM=dumb`.
+**Environment variables** (per-shell defaults): `OTTO_WORKSPACE`, `OTTO_RUNNER`, `OTTO_SANDBOX_NET`, `OTTO_RESULT_GRACE_MS`, `OTTO_AGENT`, `OTTO_FALLBACK_AGENT`, `OTTO_AUTO_SWITCH_ON_LIMIT`, `OTTO_MODEL`, `OTTO_CLAUDE_MODEL`, `OTTO_CODEX_MODEL`, `OTTO_TOKEN_MODE`, `OTTO_CONTEXT_COMPRESSOR`, `OTTO_HEADROOM_BIN`, `OTTO_REVIEW_LENSES`, `OTTO_ADAPTIVE_ROUTER`, `OTTO_EXPLAIN_ROUTING`, `OTTO_MAX_WAIT`, `OTTO_WATCH_LABEL`, `OTTO_GITHUB_REPO(S)`, `OTTO_INCLUDE_SUB_ISSUES`, `OTTO_BRANCH`, `OTTO_BRANCH_PREFIX`, `OTTO_BRANCH_CONVENTION`, `OTTO_LINEAR_API_KEY` / `LINEAR_API_KEY`, `OTTO_LINEAR_LABEL`, `OTTO_LINEAR_TEAM`, `OTTO_LINEAR_PROJECT(S)`, `OTTO_LINEAR_DONE_STATE`, and `NO_COLOR` / `TERM=dumb`.
 
 Phase-2 orchestration & journal (all opt-in, off by default):
 

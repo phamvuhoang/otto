@@ -1,6 +1,11 @@
 import { resolve } from "node:path";
 
-import { listRunIds, readStageRecords, type StageRecord } from "./run-report.js";
+import { summarizeToolCompression } from "./context-compressor.js";
+import {
+  listRunIds,
+  readStageRecords,
+  type StageRecord,
+} from "./run-report.js";
 import { formatCacheEfficiency, summarizeCacheEfficiency } from "./tokens.js";
 
 /**
@@ -88,7 +93,8 @@ export function formatContextReportRun(
     const firstAvg = avg(toks.slice(0, third));
     const lastAvg = avg(toks.slice(-third));
     const deltaPct = firstAvg > 0 ? ((lastAvg - firstAvg) / firstAvg) * 100 : 0;
-    const trend = deltaPct > 10 ? "growing" : deltaPct < -10 ? "shrinking" : "flat";
+    const trend =
+      deltaPct > 10 ? "growing" : deltaPct < -10 ? "shrinking" : "flat";
     lines.push(
       `  Slope (~tokens/stage): first-third avg ~${num.format(
         Math.round(firstAvg)
@@ -104,6 +110,19 @@ export function formatContextReportRun(
   const cache = summarizeCacheEfficiency(stages.map((s) => s.usage));
   if (cache.totalInputTokens > 0) {
     lines.push("", `  ${formatCacheEfficiency(cache)}`);
+  }
+
+  // Context compression savings (P20) — drawn from compression tool-usage records
+  // on the stage bundle; omitted entirely when no compressor ran.
+  const comp = summarizeToolCompression(
+    stages.flatMap((s) => s.toolsUsed ?? [])
+  );
+  if (comp.invocations > 0) {
+    lines.push(
+      "",
+      `  Context compression: ~${num.format(comp.tokensSaved)} tokens saved across ` +
+        `${comp.invocations} call(s); ${comp.retrievals} original(s) retained.`
+    );
   }
   return lines.join("\n");
 }
@@ -126,6 +145,8 @@ export async function runContextReport(
     return 1;
   }
   const runId = ids[ids.length - 1];
-  deps.out(formatContextReportRun(runId, readStageRecords(workspaceDir, runId)));
+  deps.out(
+    formatContextReportRun(runId, readStageRecords(workspaceDir, runId))
+  );
   return 0;
 }

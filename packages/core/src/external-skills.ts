@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, relative, sep } from "node:path";
 
 import {
   skillDir,
@@ -137,10 +143,9 @@ export function writeSources(
   sources: ExternalSkillSource[]
 ): void {
   const sorted = [...sources].sort((a, b) => a.name.localeCompare(b.name));
-  writeFileSync(
-    sourcesPath(workspaceDir),
-    JSON.stringify({ sources: sorted }, null, 2) + "\n"
-  );
+  const path = sourcesPath(workspaceDir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ sources: sorted }, null, 2) + "\n");
 }
 
 function parseLockEntry(raw: unknown): ExternalSkillLockEntry | null {
@@ -195,10 +200,9 @@ export function writeLock(workspaceDir: string, lock: ExternalSkillLock): void {
   const entries = [...lock.entries].sort((a, b) =>
     a.skill.localeCompare(b.skill)
   );
-  writeFileSync(
-    lockPath(workspaceDir),
-    JSON.stringify({ entries }, null, 2) + "\n"
-  );
+  const path = lockPath(workspaceDir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ entries }, null, 2) + "\n");
 }
 
 /** Add (or replace by name) a source. Pure — returns a new array. */

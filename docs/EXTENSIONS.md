@@ -11,6 +11,8 @@ Curated, lockable bundles that combine the Phase-4 primitives — skill sources 
 
 A profile is **generated config, not hidden behavior**: inspect it, edit it, diff it, roll it back. Enabling a profile does **not** auto-trust anything — a registered source is still imported `unverified` and must clear the P17 gate before P18 will inject it; a tool is still policy-scoped.
 
+> Want a from-scratch, per-pack walkthrough (Superpowers, Product-Manager-Skills, a single Cursor skill, Headroom) — clone → register → validate → activate, with the gotchas? See **[INTEGRATIONS.md](./INTEGRATIONS.md)**.
+
 ```bash
 otto-extensions list                       # show the curated profiles
 otto-extensions init context-saver --dry-run   # preview every file it would write

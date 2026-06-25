@@ -117,6 +117,22 @@ describe("sources read/write", () => {
   });
 });
 
+describe("fresh-workspace writes create missing dirs", () => {
+  it("writeSources creates .otto/skills on a workspace with no .otto", () => {
+    const fresh = mkdtempSync(join(tmpdir(), "otto-ext-fresh-"));
+    writeSources(fresh, [{ name: "a", type: "local", location: "/p" }]);
+    expect(readSources(fresh).map((s) => s.name)).toEqual(["a"]);
+    rmSync(fresh, { recursive: true, force: true });
+  });
+
+  it("writeLock creates .otto on a workspace with no .otto", () => {
+    const fresh = mkdtempSync(join(tmpdir(), "otto-ext-fresh-"));
+    writeLock(fresh, { entries: [] });
+    expect(readLock(fresh)).toEqual({ entries: [] });
+    rmSync(fresh, { recursive: true, force: true });
+  });
+});
+
 describe("lock read/write", () => {
   it("absent lock reads as empty (never throws)", () => {
     expect(readLock(work)).toEqual({ entries: [] });

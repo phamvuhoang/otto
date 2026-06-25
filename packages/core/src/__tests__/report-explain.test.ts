@@ -40,11 +40,15 @@ const REPORT = [
   "",
   "Needs human review",
   "",
-  "## What Changed",
+  "## What You Can Now Do",
   "",
   "Issues now close themselves when the fix lands.",
   "",
   "_Engineer detail below — a non-engineer can stop reading here._",
+  "",
+  "## What Changed",
+  "",
+  "The issue completion path posts the close-out report.",
   "",
   "## Evidence",
   "",
@@ -69,7 +73,9 @@ describe("formatPlainReport", () => {
 
   it("explains the absence when no report was persisted", () => {
     const out = formatPlainReport(manifest, null);
-    expect(out).toMatch(/didn't emit a plain-language report|older run|plan\/PRD/);
+    expect(out).toMatch(
+      /didn't emit a plain-language report|older run|plan\/PRD/
+    );
     // Still gives the facts so the run isn't opaque.
     expect(out).toContain("Run facts");
     expect(out).toContain("$1.23");

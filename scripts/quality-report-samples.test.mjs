@@ -5,7 +5,7 @@
 // REAL contract template (packages/core/templates/quality-report.md) so that a
 // change to the contract's sections or verdict vocabulary forces the samples to
 // be updated instead of silently going stale:
-//   - the six contract section headings   ← parsed from quality-report.md
+//   - the contract section headings       ← parsed from quality-report.md
 //   - the four-value verdict vocabulary    ← parsed from quality-report.md
 //   - the real run modes                   ← parsed from quality-report.md
 // Run via `pnpm test` (node --test). No build / network needed — reads the doc
@@ -25,7 +25,7 @@ const samplesPath = join(root, "docs", "quality-report-samples.md");
 const samples = readFileSync(samplesPath, "utf8");
 
 // Source of truth #1: the contract's `## ` section headings. The template's only
-// `## ` lines are the six contract sections (inside the ```markdown fence).
+// `## ` lines are the contract sections (inside the ```markdown fence).
 const CONTRACT_SECTIONS = [...contract.matchAll(/^## (.+)$/gm)].map((m) =>
   m[1].trim()
 );
@@ -58,12 +58,13 @@ test("contract parse sanity — the test's sources of truth resolved", () => {
     CONTRACT_SECTIONS,
     [
       "Verdict",
-      "What Changed",
+      "What You Can Now Do",
       "Why",
       "How To Verify",
       "What To Watch",
       "What I Was Unsure About",
       "Task Source",
+      "What Changed",
       "Evidence",
       "Human Acceptance Checklist",
       "Gaps And Follow-Ups",
@@ -89,7 +90,7 @@ test("samples doc exists with a few realistic reports", () => {
   );
 });
 
-test("every sample carries all six contract sections", () => {
+test("every sample carries all contract sections", () => {
   for (const [i, report] of sampleReports(samples).entries()) {
     for (const section of CONTRACT_SECTIONS) {
       assert.ok(

@@ -22,7 +22,7 @@
 
 You are PLANNING, not implementing. Turn the thin task in `<inputs>` into a
 world-class, structured **spec** and a task-decomposed **plan**, persisted for
-human review *before* any code is written. There is NO human available during
+human review _before_ any code is written. There is NO human available during
 this run: act autonomously and **record your reasoning** instead of waiting for
 approval ("record assumptions and proceed").
 
@@ -66,7 +66,7 @@ plan-quality rubric scores — a world-class plan has all of them):
 
 - `## Problem` — who is blocked, what they cannot do, and why it matters.
 - `## Decisions` (or `## Assumptions`) — each `question → chosen answer →
-  rationale`; record blockers and the safest assumption taken.
+rationale`; record blockers and the safest assumption taken.
 - `## Scope guard` — what is explicitly **out of scope** / the **non-goals**, so
   the implementer does not sprawl.
 - `## File map` — the component/file map: the specific files this work will
@@ -96,8 +96,20 @@ independent tasks out to isolated sub-agents (issue #66 P11). Shape:
 {
   "version": 1,
   "tasks": [
-    { "id": "t1", "title": "<short>", "fileScope": ["path/you/expect/to/touch"], "dependsOn": [], "parallelSafe": true },
-    { "id": "t2", "title": "<short>", "fileScope": ["other/path"], "dependsOn": ["t1"], "parallelSafe": false }
+    {
+      "id": "t1",
+      "title": "<short>",
+      "fileScope": ["path/you/expect/to/touch"],
+      "dependsOn": [],
+      "parallelSafe": true
+    },
+    {
+      "id": "t2",
+      "title": "<short>",
+      "fileScope": ["other/path"],
+      "dependsOn": ["t1"],
+      "parallelSafe": false
+    }
   ]
 }
 ```
@@ -109,9 +121,29 @@ Rules: `id` unique; `dependsOn` lists earlier task ids that must land first;
 if the work does not decompose into cleanly independent tasks, omit it and the
 run proceeds sequentially. A malformed file is ignored (fan-out simply disabled).
 
+## 4c. SELF-CHECK PLAN DEPTH ONCE
+
+Before committing, inspect the spec + plan you wrote. If any item below is
+missing, revise the artifacts once before you commit:
+
+- File map names at least two real repo paths in backticks.
+- Every task names the failing test file/case it will start with and includes an
+  explicit `verify:` command.
+- Success criteria are concretely testable: a reviewer can tell pass/fail from
+  an observable result, test, or command.
+
 ## 5. COMMIT
 
 Commit ONLY the spec + plan + (if written) the task graph — this is the whole
 run, no code. Use a `docs(plan):` or `chore(plan):` commit. Then print a one-line
 summary of the task-key and the number of plan tasks authored. Do not implement;
 the human reviews the plan next.
+
+## 6. QUALITY REPORT
+
+Before you output `<promise>NO MORE TASKS</promise>`, emit one Otto quality
+report for this plan-authoring run. Frame it around what the maintainer can now
+do with the authored plan (approve it, edit it, or reject it before
+implementation), not around the diff.
+
+@include:quality-report.md

@@ -139,6 +139,180 @@ export type PlanRubricScore = {
   missing: string[];
 };
 
+export type PlanDepthCriterion =
+  | "realFileMap"
+  | "taskTestAndVerify"
+  | "testableSuccessCriteria";
+
+export type PlanDepthCriterionResult = {
+  criterion: PlanDepthCriterion;
+  label: string;
+  met: boolean;
+  detail: string;
+};
+
+export type PlanDepthScore = {
+  results: PlanDepthCriterionResult[];
+  metCount: number;
+  maxScore: number;
+  ratio: number;
+  missing: string[];
+  fileMap: string[];
+};
+
+const REAL_PATH_RE =
+  /`([^`\n]*(?:\/[^`\n]*|\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|py|go|rs|java|rb|sh))[^\n`]*)`/gi;
+const TEST_FILE_RE =
+  /\b(?:__tests__\/\S+|\S+\.(?:test|spec)\.(?:ts|tsx|js|jsx|mjs|cjs)|\S+_test\.(?:go|py)|tests?\/\S+)\b/i;
+const VERIFY_CMD_RE =
+  /\bverify:\s*`?[^`\n]*(?:pnpm|npm run|vitest|tsc|node --test|node --|pytest|go test|cargo test|make)[^`\n]*`?/i;
+const FAILING_TEST_RE =
+  /\b(?:failing test|test[- ]first|tdd|red[- ]green|write (?:a |the )?(?:failing )?test|tests? (?:first|before)|pinned by)\b/i;
+
+export function extractPlanFileMap(doc: string): string[] {
+  const paths = new Set<string>();
+  for (const match of doc.matchAll(REAL_PATH_RE)) {
+    const p = match[1].trim();
+    if (!p || /^https?:\/\//i.test(p)) continue;
+    paths.add(p.replace(/^\.\//, ""));
+  }
+  return [...paths].sort();
+}
+
+function taskBlocks(doc: string): string[] {
+  const lines = doc.split("\n");
+  const blocks: string[] = [];
+  let cur: string[] = [];
+  const startsTask = (line: string): boolean =>
+    /^\s*[-*]\s*\[[ xX]\]\s+\S/.test(line) || /^\s*\d+\.\s+\S/.test(line);
+  const flush = () => {
+    if (cur.length > 0) blocks.push(cur.join("\n"));
+    cur = [];
+  };
+  for (const line of lines) {
+    if (startsTask(line)) {
+      flush();
+      cur.push(line);
+    } else if (cur.length > 0) {
+      if (/^\S/.test(line) && line.trim() !== "") flush();
+      else cur.push(line);
+    }
+  }
+  flush();
+  return blocks;
+}
+
+function successSection(doc: string): string {
+  const m =
+    /(?:^|\n)#{1,6}\s+[^\n]*(?:success criteria|acceptance criteria|testing notes)[^\n]*\n/i.exec(
+      doc
+    );
+  if (!m) return "";
+  const rest = doc.slice(m.index + m[0].length);
+  const next = /(?:^|\n)#{1,6}\s+/.exec(rest);
+  return next ? rest.slice(0, next.index) : rest;
+}
+
+export function scorePlanDepth(doc: string): PlanDepthScore {
+  const fileMap = extractPlanFileMap(doc);
+  const tasks = taskBlocks(doc);
+  const badTasks = tasks.filter(
+    (t) =>
+      !FAILING_TEST_RE.test(t) ||
+      !TEST_FILE_RE.test(t) ||
+      !VERIFY_CMD_RE.test(t)
+  );
+  const success = successSection(doc);
+  const results: PlanDepthCriterionResult[] = [
+    {
+      criterion: "realFileMap",
+      label: "File map names at least two real paths",
+      met: fileMap.length >= 2,
+      detail: `${fileMap.length} path(s) found`,
+    },
+    {
+      criterion: "taskTestAndVerify",
+      label: "Each task names a failing test and verify command",
+      met: tasks.length > 0 && badTasks.length === 0,
+      detail:
+        tasks.length === 0
+          ? "no task blocks found"
+          : `${tasks.length - badTasks.length}/${tasks.length} task(s) deep enough`,
+    },
+    {
+      criterion: "testableSuccessCriteria",
+      label: "Success criteria are concretely testable",
+      met:
+        success.trim().length > 0 &&
+        /\b(?:done when|pass(?:es)?|fails?|asserts?|verif(?:y|ied)|observable|expected result|acceptance)\b/i.test(
+          success
+        ) &&
+        /\b(?:test|command|step|case|assert|expect|check)\b/i.test(success),
+      detail: success.trim()
+        ? "success criteria section is concrete"
+        : "missing success criteria section",
+    },
+  ];
+  const metCount = results.reduce((n, r) => n + (r.met ? 1 : 0), 0);
+  const maxScore = results.length;
+  return {
+    results,
+    metCount,
+    maxScore,
+    ratio: maxScore > 0 ? metCount / maxScore : 0,
+    missing: results.filter((r) => !r.met).map((r) => r.label),
+    fileMap,
+  };
+}
+
+export function formatPlanDepthRubric(score: PlanDepthScore): string {
+  const header =
+    `plan depth: ${score.metCount}/${score.maxScore} ` +
+    `(${pct.format(score.ratio * 100)}%)`;
+  const lines = score.results.map(
+    (r) => `  [${r.met ? "x" : " "}] ${r.label} — ${r.detail}`
+  );
+  const tail =
+    score.missing.length > 0 ? [`  missing: ${score.missing.join(", ")}`] : [];
+  return [header, ...lines, ...tail].join("\n");
+}
+
+export type ScopeDriftResult = {
+  plannedFiles: string[];
+  touchedFiles: string[];
+  outOfScope: string[];
+};
+
+function withinScope(path: string, planned: string): boolean {
+  if (path === planned) return true;
+  const p = planned.replace(/\/+$/, "");
+  return path.startsWith(`${p}/`);
+}
+
+export function detectScopeDrift(
+  planDoc: string,
+  touchedFiles: string[]
+): ScopeDriftResult {
+  const plannedFiles = extractPlanFileMap(planDoc);
+  const normalizedTouched = [
+    ...new Set(touchedFiles.map((p) => p.replace(/^\.\//, ""))),
+  ].sort();
+  if (plannedFiles.length === 0) {
+    return {
+      plannedFiles,
+      touchedFiles: normalizedTouched,
+      outOfScope: normalizedTouched,
+    };
+  }
+  return {
+    plannedFiles,
+    touchedFiles: normalizedTouched,
+    outOfScope: normalizedTouched.filter(
+      (t) => !plannedFiles.some((p) => withinScope(t, p))
+    ),
+  };
+}
+
 /**
  * Score a spec/plan markdown document against {@link PLAN_CRITERIA}. Pure and
  * deterministic — pass the spec text, the plan text, or both concatenated. Each
@@ -173,9 +347,7 @@ export function formatPlanRubric(score: PlanRubricScore): string {
   const header =
     `plan quality: ${score.metCount}/${score.maxScore} ` +
     `(${pct.format(score.ratio * 100)}%)`;
-  const lines = score.results.map(
-    (r) => `  [${r.met ? "x" : " "}] ${r.label}`
-  );
+  const lines = score.results.map((r) => `  [${r.met ? "x" : " "}] ${r.label}`);
   const tail =
     score.missing.length > 0 ? [`  missing: ${score.missing.join(", ")}`] : [];
   return [header, ...lines, ...tail].join("\n");

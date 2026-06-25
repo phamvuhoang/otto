@@ -108,11 +108,7 @@ export {
   type SkillUsage,
   type StageRecord,
 } from "./run-report.js";
-export {
-  formatRunReport,
-  runInspect,
-  type InspectDeps,
-} from "./inspect.js";
+export { formatRunReport, runInspect, type InspectDeps } from "./inspect.js";
 export {
   formatPlainReport,
   runExplain,
@@ -137,11 +133,7 @@ export {
   type PlanReportDeps,
   type TaskPlanScore,
 } from "./plan-report-cli.js";
-export {
-  formatAuditReport,
-  runMemory,
-  type MemoryDeps,
-} from "./memory-cli.js";
+export { formatAuditReport, runMemory, type MemoryDeps } from "./memory-cli.js";
 export {
   allocateMemoryId,
   auditMemory,
@@ -262,12 +254,29 @@ export {
 } from "./eval.js";
 export {
   PLAN_CRITERIA,
+  detectScopeDrift,
+  extractPlanFileMap,
+  formatPlanDepthRubric,
   formatPlanRubric,
+  scorePlanDepth,
   scorePlanQuality,
+  type PlanDepthCriterion,
+  type PlanDepthCriterionResult,
+  type PlanDepthScore,
   type PlanCriterion,
   type PlanCriterionResult,
   type PlanRubricScore,
+  type ScopeDriftResult,
 } from "./plan-rubric.js";
+export {
+  buildFallbackRunReport,
+  extractRunReport,
+  finalizeReportText,
+  summarizeReviewSeverity,
+  type FinalizeReportContext,
+  type ReviewSeveritySummary,
+  type ScopeDriftSummary,
+} from "./report-finalize.js";
 export {
   REPORT_CRITERIA,
   formatReportRubric,
@@ -285,6 +294,7 @@ export {
 } from "./plan-checkpoint.js";
 export {
   DEFAULT_PLAN_QUALITY_THRESHOLD,
+  DEFAULT_PLAN_DEPTH_THRESHOLD,
   assessPlanGate,
   formatPlanGate,
   type PlanGateVerdict,

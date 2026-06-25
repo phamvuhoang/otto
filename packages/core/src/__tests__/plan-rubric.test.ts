@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   PLAN_CRITERIA,
+  detectScopeDrift,
+  extractPlanFileMap,
+  formatPlanDepthRubric,
   formatPlanRubric,
+  scorePlanDepth,
   scorePlanQuality,
   type PlanCriterion,
 } from "../plan-rubric.js";
@@ -26,13 +30,13 @@ const COMPLETE_PLAN = [
   "- `packages/core/src/__tests__/export.test.ts` — vitest pinning it",
   "",
   "## Tasks",
-  "- [ ] 1. Write a failing test for `toCsv`, then implement it.",
+  "- [ ] 1. Write a failing test in packages/core/src/__tests__/export.test.ts for `toCsv`, then implement it.",
   "      verify: `pnpm -r test`",
-  "- [ ] 2. Wire `toCsv` into the report bin.",
+  "- [ ] 2. Write a failing test in packages/core/src/__tests__/report.test.ts, then wire `toCsv` into the report bin.",
   "      verify: `pnpm -r typecheck`",
   "",
   "## Success criteria",
-  "Done when: `toCsv` emits RFC-4180 output for every input (testable).",
+  "Done when: `toCsv` emits RFC-4180 output for every input; the test command passes and reviewers can check the expected output.",
   "Testing notes: vitest, pure.",
   "",
 ].join("\n");
@@ -82,7 +86,9 @@ describe("scorePlanQuality", () => {
     expect(score.ratio).toBeCloseTo(2 / PLAN_CRITERIA.length);
     // problem + scopeGuard met; the other six are missing.
     expect(score.missing.length).toBe(PLAN_CRITERIA.length - 2);
-    expect(score.results.find((r) => r.criterion === "problem")?.met).toBe(true);
+    expect(score.results.find((r) => r.criterion === "problem")?.met).toBe(
+      true
+    );
     expect(score.results.find((r) => r.criterion === "scopeGuard")?.met).toBe(
       true
     );
@@ -98,6 +104,53 @@ describe("scorePlanQuality", () => {
       expect(score.ratio).toBe(0);
       expect(score.results).toHaveLength(PLAN_CRITERIA.length);
     }
+  });
+});
+
+describe("scorePlanDepth", () => {
+  it("scores a complete plan as deep", () => {
+    const score = scorePlanDepth(COMPLETE_PLAN);
+    expect(score.metCount).toBe(score.maxScore);
+    expect(score.ratio).toBe(1);
+    expect(score.fileMap).toContain("packages/core/src/export.ts");
+  });
+
+  it("requires real paths, named failing tests, verify commands, and testable success criteria", () => {
+    const shallow = [
+      "## File map",
+      "- core stuff",
+      "",
+      "## Tasks",
+      "- [ ] Add the thing.",
+      "",
+      "## Success criteria",
+      "Make it good.",
+    ].join("\n");
+    const score = scorePlanDepth(shallow);
+    expect(score.metCount).toBe(0);
+    expect(score.missing).toEqual([
+      "File map names at least two real paths",
+      "Each task names a failing test and verify command",
+      "Success criteria are concretely testable",
+    ]);
+  });
+
+  it("extracts the file map and flags touched files outside it", () => {
+    expect(extractPlanFileMap(COMPLETE_PLAN)).toEqual([
+      "packages/core/src/__tests__/export.test.ts",
+      "packages/core/src/export.ts",
+    ]);
+    const drift = detectScopeDrift(COMPLETE_PLAN, [
+      "packages/core/src/export.ts",
+      "packages/core/src/other.ts",
+    ]);
+    expect(drift.outOfScope).toEqual(["packages/core/src/other.ts"]);
+  });
+
+  it("formats a depth scorecard", () => {
+    const out = formatPlanDepthRubric(scorePlanDepth(COMPLETE_PLAN));
+    expect(out).toMatch(/plan depth/i);
+    expect(out).toContain("100%");
   });
 });
 

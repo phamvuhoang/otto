@@ -19,7 +19,7 @@ const COMPLETE_REPORT = [
   "",
   "**Accepted**",
   "",
-  "## What Changed",
+  "## What You Can Now Do",
   "",
   "The export feature now works for all users.",
   "",
@@ -47,6 +47,10 @@ const COMPLETE_REPORT = [
   "## Task Source",
   "",
   "- Mode: ghafk",
+  "",
+  "## What Changed",
+  "",
+  "The export path is wired and tested.",
   "",
 ].join("\n");
 
@@ -97,7 +101,7 @@ describe("scoreReportLegibility", () => {
       "",
       "**Accepted**",
       "",
-      "## What Changed",
+      "## What You Can Now Do",
       "",
       "Something changed.",
     ].join("\n");
@@ -105,9 +109,15 @@ describe("scoreReportLegibility", () => {
     expect(score.metCount).toBe(2);
     expect(score.ratio).toBeCloseTo(2 / REPORT_CRITERIA.length);
     expect(score.missing.length).toBe(REPORT_CRITERIA.length - 2);
-    expect(score.results.find((r) => r.criterion === "verdict")?.met).toBe(true);
-    expect(score.results.find((r) => r.criterion === "whatChanged")?.met).toBe(true);
-    expect(score.results.find((r) => r.criterion === "howToVerify")?.met).toBe(false);
+    expect(score.results.find((r) => r.criterion === "verdict")?.met).toBe(
+      true
+    );
+    expect(
+      score.results.find((r) => r.criterion === "whatYouCanNowDo")?.met
+    ).toBe(true);
+    expect(score.results.find((r) => r.criterion === "howToVerify")?.met).toBe(
+      false
+    );
   });
 
   it("handles an empty / whitespace doc without throwing", () => {
@@ -167,7 +177,9 @@ describe("formatReportRubric", () => {
   it("renders a scorecard with the score and a per-criterion marker", () => {
     const out = formatReportRubric(scoreReportLegibility(COMPLETE_REPORT));
     expect(out).toMatch(/report legibility/i);
-    expect(out).toContain(`${REPORT_CRITERIA.length}/${REPORT_CRITERIA.length}`);
+    expect(out).toContain(
+      `${REPORT_CRITERIA.length}/${REPORT_CRITERIA.length}`
+    );
     expect(out).toContain("100%");
     for (const c of REPORT_CRITERIA) expect(out).toContain(c.label);
   });

@@ -7,10 +7,13 @@
 
 Produce an **Otto quality report** with the exact section headings below. Rules:
 
+- **Outcome-first.** Lead with what the end user can now do, drawn from the
+  issue/plan intent and traceable to evidence — not marketing claims and not a
+  diff summary. Keep the change description below the engineer divider.
 - **Layperson-first.** Lead with plain language a non-engineer can act on — the
-  prose sections (What Changed · Why · How To Verify · What To Watch · What I Was
-  Unsure About) come first; keep code-cited engineer detail below the divider.
-  Write the top sections with no jargon, file paths, or SHAs.
+  prose sections (What You Can Now Do · Why · How To Verify · What To Watch ·
+  What I Was Unsure About) come first; keep code-cited engineer detail below the
+  divider. Write the top sections with no jargon, file paths, or SHAs.
 - **Readable first.** Keep it short enough to review in a couple of minutes — a
   maintainer should not have to replay the run log. Specific beats exhaustive.
 - **Verification a non-engineer can run.** _How To Verify_ is numbered,
@@ -33,10 +36,11 @@ Produce an **Otto quality report** with the exact section headings below. Rules:
 One of — **Accepted** · **Accepted with follow-ups** · **Needs human review** · **Rejected**
 (when uncertain, choose **Needs human review**)
 
-## What Changed
+## What You Can Now Do
 
-<Plain language, no jargon — what is different now for a person using this, in
-one or two sentences. No file paths or SHAs here; those go under Evidence.>
+<Plain language, no jargon — the user-visible outcome this run enables, in one
+or two sentences. Draw it from the issue/plan intent. No file paths, SHAs, or
+diff summaries here; those go below the divider.>
 
 ## Why
 
@@ -72,6 +76,11 @@ _Engineer detail below — a non-engineer can stop reading here._
 - Source: <plan/PRD path, GitHub issue #, or Linear ref>
 - Issue or plan: <link or path>
 
+## What Changed
+
+<Engineer-facing change summary: the concrete implementation or documentation
+changes, one click below the user outcome. Cite evidence in the next section.>
+
 ## Evidence
 
 - Implementation evidence: <file:line or commit SHA proving each claim; the
@@ -97,8 +106,8 @@ _Engineer detail below — a non-engineer can stop reading here._
 ### Human verdict trail
 
 Prior **human** verdicts on past Otto runs (most recent last) — consult them so a
-recurring reason ("scope creep", "thin evidence") informs *this* run's Verdict
-and *Recommended next action* before you commit to one:
+recurring reason ("scope creep", "thin evidence") informs _this_ run's Verdict
+and _Recommended next action_ before you commit to one:
 
 <verdict-trail>
 
@@ -109,7 +118,7 @@ and *Recommended next action* before you commit to one:
 **Maintainer:** after reviewing this report, append your verdict to
 `./.otto/verdicts.md` (create it lazily) — a dated `##` heading plus one line:
 the human verdict (**Accepted** · **Accepted with follow-ups** · **Rejected** ·
-**Needs investigation**) and *why* (what was accepted with caveats, or the
+**Needs investigation**) and _why_ (what was accepted with caveats, or the
 concrete reason it was rejected). The file is git-tracked; it feeds the existing
 learning loop, so future runs see what was accepted or rejected and why.
 

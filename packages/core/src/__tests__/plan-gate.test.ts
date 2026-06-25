@@ -6,6 +6,7 @@ import {
   formatPlanGate,
 } from "../plan-gate.js";
 import type { PlanRubricScore } from "../plan-rubric.js";
+import type { PlanDepthScore } from "../plan-rubric.js";
 
 /** A rubric score with `met` of 8 criteria met (ratio = met/8). */
 function score(met: number): PlanRubricScore {
@@ -18,6 +19,15 @@ function score(met: number): PlanRubricScore {
     missing: Array.from({ length: maxScore - met }, (_, i) => `crit${i}`),
   };
 }
+
+const shallowDepth: PlanDepthScore = {
+  results: [],
+  metCount: 2,
+  maxScore: 3,
+  ratio: 2 / 3,
+  missing: ["Each task names a failing test and verify command"],
+  fileMap: ["packages/core/src/foo.ts", "packages/core/src/foo.test.ts"],
+};
 
 describe("assessPlanGate", () => {
   it("passes at or above the default threshold", () => {
@@ -40,6 +50,15 @@ describe("assessPlanGate", () => {
     expect(assessPlanGate(score(7), { threshold: 1 }).passed).toBe(false);
     expect(assessPlanGate(score(0), { threshold: 0 }).passed).toBe(true);
   });
+
+  it("fails a presence-complete plan when the P13 depth score is low", () => {
+    const v = assessPlanGate(score(8), { depth: shallowDepth });
+    expect(v.passed).toBe(false);
+    expect(v.shortfall).toBe(0);
+    expect(v.depthMissing).toEqual([
+      "Each task names a failing test and verify command",
+    ]);
+  });
 });
 
 describe("formatPlanGate", () => {
@@ -53,5 +72,12 @@ describe("formatPlanGate", () => {
     const out = formatPlanGate(assessPlanGate(score(3)));
     expect(out).toMatch(/plan gate: FAIL/);
     expect(out).toMatch(/re-plan to add 3 more/);
+  });
+
+  it("renders depth shortfalls", () => {
+    const out = formatPlanGate(
+      assessPlanGate(score(8), { depth: shallowDepth })
+    );
+    expect(out).toMatch(/deepen plan/);
   });
 });

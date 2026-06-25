@@ -1,10 +1,13 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import { assessPlanGate, formatPlanGate } from "./plan-gate.js";
+import { readTaskPlanDocuments } from "./plan-artifacts.js";
 import {
+  formatPlanDepthRubric,
   formatPlanRubric,
+  scorePlanDepth,
   scorePlanQuality,
+  type PlanDepthScore,
   type PlanRubricScore,
 } from "./plan-rubric.js";
 
@@ -34,7 +37,11 @@ const defaultDeps: PlanReportDeps = {
 };
 
 /** One task's authored plan and its rubric score. */
-export type TaskPlanScore = { taskKey: string; score: PlanRubricScore };
+export type TaskPlanScore = {
+  taskKey: string;
+  score: PlanRubricScore;
+  depth: PlanDepthScore;
+};
 
 /**
  * Render the per-task plan scorecards into one report. Pure: takes the already
@@ -48,7 +55,8 @@ export function formatPlanReport(tasks: TaskPlanScore[]): string {
       "",
       `Task ${t.taskKey}`,
       formatPlanRubric(t.score),
-      formatPlanGate(assessPlanGate(t.score))
+      formatPlanDepthRubric(t.depth),
+      formatPlanGate(assessPlanGate(t.score, { depth: t.depth }))
     );
   }
   return lines.join("\n");
@@ -61,31 +69,11 @@ export function formatPlanReport(tasks: TaskPlanScore[]): string {
  * {@link formatPlanReport} stays pure. Absent/unreadable dir → `[]`.
  */
 export function readTaskPlans(workspaceDir: string): TaskPlanScore[] {
-  const tasksDir = join(workspaceDir, ".otto", "tasks");
-  let entries: string[];
-  try {
-    entries = readdirSync(tasksDir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
-      .sort();
-  } catch {
-    return [];
-  }
-  const scored: TaskPlanScore[] = [];
-  for (const taskKey of entries) {
-    const doc = ["spec.md", "plan.md"]
-      .map((f) => {
-        try {
-          return readFileSync(join(tasksDir, taskKey, f), "utf8");
-        } catch {
-          return "";
-        }
-      })
-      .join("\n");
-    if (doc.trim() === "") continue;
-    scored.push({ taskKey, score: scorePlanQuality(doc) });
-  }
-  return scored;
+  return readTaskPlanDocuments(workspaceDir).map((task) => ({
+    taskKey: task.taskKey,
+    score: scorePlanQuality(task.doc),
+    depth: scorePlanDepth(task.doc),
+  }));
 }
 
 /**

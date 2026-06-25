@@ -494,12 +494,15 @@ A skill is a git-tracked directory package `.otto/skills/<name>/` — `skill.jso
 
 ```bash
 otto-skills list                              # inventory + derived status (validated/unvalidated/stale)
-otto-skills audit                             # how many are usable; which need (re)validation
+otto-skills audit                             # how many are usable; which need (re)validation; which drifted
 otto-skills why <changed-path>...             # which skills retrieval would select for these files, and why
+otto-skills validate <skill> [--source <n>]   # run the compatibility + validation gate; persist the class
 otto-skills candidates                        # workflows that succeeded the same way >= 2x — worth extracting
 ```
 
 A skill is **eligible** for reuse only once a successful run has validated it (`validation.lastValidatedRun`) and it is within its `revalidateAfterDays` window; otherwise `otto-skills why` flags it `skip` with the reason. Retrieval ranks by declared capability, scope-glob match against the changed files, and the change's risk class (a skill whose constraints forbid that class is excluded).
+
+**The compatibility + validation gate (`validate`).** Before an imported or repo-authored skill can shape a live run, it must clear a static gate: manifest/schema lint, frontmatter/capability extraction, a license/provenance check (`--source <name>` asserts the skill belongs to that source), and an **instruction-risk scan** (unsafe shell advice, secret handling, network use, interactive hard stops, unsupported-tool assumptions, and attempts to overrule repo policy). Each finding names the exact blocker and a remediation. The gate then derives a **compatibility class** — `afk-safe` (usable unattended), `interactive-only` (needs a human; `--plan` only), `stage-scoped` (valid only on the stages its capabilities imply, e.g. a `code-review` skill → review), or `blocked` (a policy/safety violation) — and runs small **behavior drills** (Superpowers planning/TDD must stay usable; a PM roadmap/PRD skill must scope to plan; a review skill must not overrule policy). The class, stages, check time, and a body checksum are persisted to `skill.json`'s `validation` block; `validate` exits non-zero on a blocking error or a failed drill. **Validation is separate from selection** — a validated skill is _eligible_, not auto-applied. If a skill's body later drifts from the validated checksum (e.g. an upstream re-sync), `otto-skills audit` flags it as needing revalidation before reuse.
 
 ---
 

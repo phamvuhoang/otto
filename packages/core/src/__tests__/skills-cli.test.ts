@@ -3,13 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import {
-  formatSkillsReport,
-  formatWhy,
-  runSkills,
-} from "../skills-cli.js";
+import { formatSkillsReport, formatWhy, runSkills } from "../skills-cli.js";
 import { writeManifest, type RunManifest } from "../run-report.js";
-import { recordValidation, selectSkills, writeSkill, type Skill } from "../skills.js";
+import {
+  readSkill,
+  recordValidation,
+  selectSkills,
+  writeSkill,
+  type Skill,
+} from "../skills.js";
 import { emptyTokenUsage } from "../tokens.js";
 
 function tmp(): string {
@@ -56,7 +58,11 @@ function manifest(over: Partial<RunManifest> = {}): RunManifest {
 describe("pure formatters", () => {
   it("formatSkillsReport shows status, capabilities, and scope", () => {
     const out = formatSkillsReport([
-      recordValidation(skill({ name: "ready" }), "run-1", new Date("2026-06-19T00:00:00.000Z")),
+      recordValidation(
+        skill({ name: "ready" }),
+        "run-1",
+        new Date("2026-06-19T00:00:00.000Z")
+      ),
     ]);
     expect(out).toContain("ready@1.0.0");
     expect(out).toContain("[validated/unverified]");
@@ -119,7 +125,13 @@ describe("runSkills", () => {
 
   it("explains why for given changed paths", async () => {
     const ws = tmp();
-    writeSkill(ws, recordValidation(skill({ name: "core-skill", scope: ["packages/core/**"] }), "r1"));
+    writeSkill(
+      ws,
+      recordValidation(
+        skill({ name: "core-skill", scope: ["packages/core/**"] }),
+        "r1"
+      )
+    );
     const { d, lines } = deps(ws);
     expect(await runSkills(["why", "packages/core/src/eval.ts"], d)).toBe(0);
     expect(lines.join("\n")).toMatch(/eligible/);
@@ -140,6 +152,101 @@ describe("runSkills", () => {
     expect(await runSkills(["candidates"], d)).toBe(0);
     expect(lines.join("\n")).toMatch(/2 successful runs/);
     rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("validates a well-formed skill (exit 0) and shows its class", async () => {
+    const ws = tmp();
+    writeSkill(ws, skill({ name: "good", instructions: "Run the steps." }));
+    const { d, lines } = deps(ws);
+    expect(await runSkills(["validate", "good"], d)).toBe(0);
+    expect(lines.join("\n")).toMatch(/good/);
+    expect(lines.join("\n")).toMatch(/afk-safe|stage-scoped/);
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("persists the compatibility class back to skill.json", async () => {
+    const ws = tmp();
+    writeSkill(
+      ws,
+      skill({ name: "persisted", instructions: "Cut a release." })
+    );
+    const { d } = deps(ws);
+    await runSkills(["validate", "persisted"], d);
+    expect(readSkill(ws, "persisted")?.validation.compatibility).toBe(
+      "afk-safe"
+    );
+    expect(readSkill(ws, "persisted")?.validation.instructionsChecksum).toMatch(
+      /^[0-9a-f]{64}$/
+    );
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("classifies and persists a blocked skill but exits 1", async () => {
+    const ws = tmp();
+    writeSkill(
+      ws,
+      skill({ name: "danger", instructions: "Run sudo rm -rf /" })
+    );
+    const { d } = deps(ws);
+    expect(await runSkills(["validate", "danger"], d)).toBe(1);
+    expect(readSkill(ws, "danger")?.validation.compatibility).toBe("blocked");
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("shows behavior-drill results in the validate output", async () => {
+    const ws = tmp();
+    writeSkill(
+      ws,
+      skill({
+        name: "rev",
+        capabilities: ["code-review"],
+        instructions: "Review.",
+      })
+    );
+    const { d, lines } = deps(ws);
+    await runSkills(["validate", "rev"], d);
+    expect(lines.join("\n")).toMatch(/review-respects-policy/);
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("audit flags a skill whose body drifted since validation", async () => {
+    const ws = tmp();
+    // Validate, then mutate the body so the stored checksum no longer matches.
+    writeSkill(ws, skill({ name: "drifty", instructions: "Original body." }));
+    const { d, lines } = deps(ws);
+    await runSkills(["validate", "drifty"], d);
+    writeSkill(
+      ws,
+      readSkill(ws, "drifty")!.validation.instructionsChecksum
+        ? { ...readSkill(ws, "drifty")!, instructions: "A different body now." }
+        : readSkill(ws, "drifty")!
+    );
+    lines.length = 0;
+    expect(await runSkills(["audit"], d)).toBe(0);
+    expect(lines.join("\n")).toMatch(/revalidat/i);
+    expect(lines.join("\n")).toContain("drifty");
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("fails validation for an empty-body skill (exit 1)", async () => {
+    const ws = tmp();
+    writeSkill(ws, skill({ name: "hollow", instructions: "" }));
+    const { d, lines } = deps(ws);
+    expect(await runSkills(["validate", "hollow"], d)).toBe(1);
+    expect(lines.join("\n")).toMatch(/empty-instructions|error/i);
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("errors when validate names no skill", async () => {
+    const { d, errs } = deps(tmp());
+    expect(await runSkills(["validate"], d)).toBe(1);
+    expect(errs.join("\n")).toMatch(/skill/i);
+  });
+
+  it("errors when validate targets a missing skill", async () => {
+    const { d, errs } = deps(tmp());
+    expect(await runSkills(["validate", "ghost"], d)).toBe(1);
+    expect(errs.join("\n")).toMatch(/not found|no skill/i);
   });
 
   it("rejects an unknown subcommand and prints usage on --help", async () => {

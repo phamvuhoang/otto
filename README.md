@@ -418,6 +418,11 @@ otto-skills sync                                 # import as trust=unverified sk
 otto-skills audit --external                     # unpinned refs, missing licenses, dup names, stale copies
 # Imported skills are inert: unverified + unvalidated, so the loop never auto-applies them.
 
+# Skills: prove an imported skill is safe, compatible, and useful before it can shape a run (P17)
+otto-skills validate tdd                         # static lint + risk scan + compatibility class + drills
+otto-skills validate prd --source pm-skills      # assert provenance against a named source
+# Classes: afk-safe | interactive-only | stage-scoped | blocked. Persisted to skill.json, not auto-applied.
+
 # Tools: register external tools/MCP/services under repo-local, policy-scoped authority (P19)
 otto-tools list                                 # registered .otto/tools/<name>.json adapters
 otto-tools why review                           # which tools the review stage may use, and why

@@ -349,8 +349,9 @@ otto-afk --token-mode measure "./docs/plans/feature.md" 5
 # of the latest run (playbook / learnings / diffs / reads) — read-only, then exit
 otto-afk --context-report
 
-# Score the authored plans (.otto/tasks/*/spec.md + plan.md) against the
-# plan-quality rubric (scope guard? per-task verify? file map?) — read-only
+# Score the authored plans (.otto/tasks/*/spec.md + plan.md) against the plan
+# rubric — presence (scope guard? per-task verify? file map?) AND P13 depth (real
+# paths? named failing test? testable success criteria?) — read-only
 otto-afk --plan-report
 ```
 
@@ -360,8 +361,8 @@ otto-afk --plan-report
 # Hard spend cap (halts at the ceiling) + pacing between iterations
 otto-afk --budget 5 --cooldown 2000 "./docs/plans/spike.md" 20
 
-# Higher-confidence review: correctness/security/tests lenses → adversarial verify
-# → one consolidated fix(review): commit of only the confirmed defects
+# Higher-confidence review: correctness/security/tests/structural lenses, severity-ranked
+# → adversarial verify → one consolidated fix(review): commit of only the confirmed defects
 otto-afk --review-panel "./docs/plans/feature.md" 30
 
 # Spend review compute by risk: single reviewer for docs, full panel for security —
@@ -454,6 +455,30 @@ OTTO_JOURNAL_AUTONOMOUS=1 otto-afk "./docs/plans/feature.md" 10
 ```
 
 Even autonomous, a note ships only if it clears every gate (deny-list → generalization → adversarial judge); anything ambiguous is denied and drafted instead of posted. Cadence (`minDaysBetweenPosts`) and de-duplication (`.otto/journal/posted.json`) cap it to at most one post per run.
+
+### 9. Phase 3 — deeper plans, sharper reviews, clearer reports (P13 / P14 / P15)
+
+These raise the _substance_ of what Otto checks. No new flags for the common path: the plan gate runs in `--plan` mode, the report is emitted every run, and the structural review rides on `--review-panel`.
+
+**Deeper plans (P13).** In `--plan` mode Otto scores the plan's _depth_, not just whether the sections exist — does the file map list real paths, does each task name a failing test and a verify command, are the success criteria testable. A thin plan is re-planned once with the shortfall fed back; if it's still thin, Otto pauses rather than build on a weak spec. In an interactive terminal it shows the rubric and asks you to approve / edit / reject before any code is written (AFK runs auto-approve and record the assumption). Use it when a weak plan is the cheapest place to prevent rework.
+
+```bash
+otto-afk --plan "./docs/ideas/inventory-revamp.md"   # author + gate the plan
+otto-afk --plan-report                               # score existing plans, read-only
+```
+
+**Sharper, cheaper reviews (P14).** `--review-panel` gains a `structural` lens that asks "did this change make the codebase worse?" (incidental complexity, file bloat, spaghetti, missed simplifications). Every finding is severity-ranked (`blocker | major | minor | nit`), nits are suppressed when real issues exist, and only confirmed fixes land in one `fix(review):` commit. Add `--adaptive-router` to spend review compute by risk (single reviewer for docs; the full panel — structural + security — only for risky changes) and `--model-routing` to put the strong model only where it pays. Use it for merge confidence and codebase health, not just "it works."
+
+```bash
+otto-afk --review-panel "./docs/plans/feature.md" 30
+otto-afk --review-panel --adaptive-router --model-routing --explain-routing "./docs/plans/feature.md" 30
+```
+
+**Clearer reports (P15).** Every run ends with an outcome-first report that leads with _what you can now do_ (not just what changed), auto-cites its evidence (HEAD, changed files, review severities), and is held to a legibility rubric — a low-scoring report is rewritten once before handoff. Plan/AFK runs that used to emit nothing now always leave a readable report; if an agent emits none, Otto synthesizes an honest fallback from the run's own evidence. Use it to hand unattended work to a non-engineer to accept or reject.
+
+```bash
+otto-explain latest                                  # render the report for a non-engineer
+```
 
 Full flag reference and more recipes: **[docs/CLI.md](./docs/CLI.md)**.
 

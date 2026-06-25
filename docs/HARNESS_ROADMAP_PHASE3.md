@@ -2,6 +2,10 @@
 
 Last updated: 2026-06-23
 
+> **Status:** P14, P15, and P13 are shipped. The next phase - external skills,
+> external tools, and Headroom-backed token savings - is planned in
+> **[HARNESS_ROADMAP_PHASE4.md](./HARNESS_ROADMAP_PHASE4.md)** (P16-P21).
+
 Phase 1 ([`HARNESS_ENHANCEMENT_ROADMAP.md`](./HARNESS_ENHANCEMENT_ROADMAP.md), P0–P6)
 made Otto **governed, measurable, and adaptive**. Phase 2
 ([`HARNESS_ROADMAP_PHASE2.md`](./HARNESS_ROADMAP_PHASE2.md), P7–P12) made it

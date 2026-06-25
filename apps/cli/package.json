@@ -1,6 +1,6 @@
 {
   "name": "@phamvuhoang/otto",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "CLI for the otto AFK loop (otto-afk, otto-ghafk).",
   "type": "module",
   "license": "MIT",

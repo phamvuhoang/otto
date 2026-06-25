@@ -1,5 +1,20 @@
 import { resolve } from "node:path";
 
+import {
+  addSource,
+  applySync,
+  auditExternal,
+  importedChecksum,
+  planSync,
+  readLock,
+  readSources,
+  removeSource,
+  writeSources,
+  type ExternalAuditFinding,
+  type ExternalSkillSource,
+  type ExternalSourceType,
+  type SyncPlan,
+} from "./external-skills.js";
 import { listRunIds, readManifest } from "./run-report.js";
 import {
   findSkillCandidates,
@@ -33,7 +48,10 @@ const defaultDeps: SkillsDeps = {
 
 const USAGE =
   "Usage: otto-skills <list|audit|candidates>\n" +
-  "       otto-skills why <changed-path>...";
+  "       otto-skills why <changed-path>...\n" +
+  "       otto-skills sources <list|add|remove> ...\n" +
+  "       otto-skills sync [--dry-run]\n" +
+  "       otto-skills audit --external";
 
 /** One-line scope label: the globs, or "(repo-wide)" when empty. */
 function scopeLabel(skill: Skill): string {
@@ -84,7 +102,9 @@ export function formatSkillsAudit(
   lines.push(`Not yet usable (${notUsable.length}):`);
   if (notUsable.length === 0) lines.push("  (none — all validated)");
   for (const { s, st } of notUsable) {
-    lines.push(`  - ${s.name}  [${st}]  (run its tests, then record a validating run)`);
+    lines.push(
+      `  - ${s.name}  [${st}]  (run its tests, then record a validating run)`
+    );
   }
   return lines.join("\n");
 }
@@ -98,7 +118,9 @@ export function formatWhy(matches: SkillMatch[]): string {
   if (matches.length === 0) return "No skills to match.";
   const lines: string[] = [];
   for (const m of matches) {
-    lines.push(`- ${m.name}  [${m.eligible ? "eligible" : "skip"}]  score ${m.score}`);
+    lines.push(
+      `- ${m.name}  [${m.eligible ? "eligible" : "skip"}]  score ${m.score}`
+    );
     for (const r of m.reasons) lines.push(`    · ${r}`);
   }
   return lines.join("\n");
@@ -118,13 +140,63 @@ export function formatCandidates(candidates: SkillCandidate[]): string {
   return lines.join("\n");
 }
 
+/** Render the configured external sources, sorted. Pure. */
+export function formatSources(sources: ExternalSkillSource[]): string {
+  if (sources.length === 0) {
+    return "No external sources. Add one: otto-skills sources add <name> <url-or-path> [--ref <sha-or-tag>] [--type local|git|archive]";
+  }
+  const lines: string[] = [];
+  for (const s of [...sources].sort((a, b) => a.name.localeCompare(b.name))) {
+    lines.push(
+      `- ${s.name}  [${s.type}]  ${s.location}${s.ref ? `  @${s.ref}` : "  (unpinned)"}`
+    );
+  }
+  return lines.join("\n");
+}
+
+/** Render a sync plan; `dryRun` flips the header between preview and applied. Pure. */
+export function formatSyncPlan(plan: SyncPlan, dryRun: boolean): string {
+  if (plan.items.length === 0) {
+    return "Nothing to sync (no local sources resolved any SKILL.md packages).";
+  }
+  const lines: string[] = [
+    dryRun ? "Sync plan (--dry-run, nothing written):" : "Synced:",
+  ];
+  for (const i of plan.items) {
+    const note =
+      i.action === "conflict"
+        ? `  (name already claimed by ${i.conflictWith})`
+        : "";
+    lines.push(`  ${i.action.padEnd(9)} ${i.skill}  <- ${i.source}${note}`);
+  }
+  const conflicts = plan.items.filter((i) => i.action === "conflict").length;
+  if (conflicts > 0) {
+    lines.push(
+      `\n${conflicts} conflict(s) skipped — rename or drop the duplicate source.`
+    );
+  }
+  return lines.join("\n");
+}
+
+/** Render the external-registry audit findings. Pure. */
+export function formatExternalAudit(findings: ExternalAuditFinding[]): string {
+  if (findings.length === 0) return "External registry clean (no findings).";
+  const lines: string[] = [`External registry findings (${findings.length}):`];
+  for (const f of findings) lines.push(`  - [${f.kind}] ${f.detail}`);
+  return lines.join("\n");
+}
+
 /**
- * Drive the read-only `otto-skills` command over `.otto/skills/`. Subcommands:
+ * Drive the `otto-skills` command over `.otto/skills/`. Inspection subcommands:
  * `list` (default) inventories skills + derived status; `audit` summarizes
- * usable/unvalidated/stale; `why <path>...` shows which skills retrieval would
- * select for those changed paths and why; `candidates` suggests skills from
- * repeated successful runs. Read-only — it never executes a skill's tests or
- * mutates a package. Resolves to the process exit code (mirrors `runMemory`).
+ * usable/unvalidated/stale (`audit --external` audits the import registry);
+ * `why <path>...` shows which skills retrieval would select for those changed
+ * paths and why; `candidates` suggests skills from repeated successful runs.
+ * Registry subcommands (issue #110 P16): `sources <list|add|remove>` edits
+ * `.otto/skills/sources.json`, and `sync [--dry-run]` imports external packs as
+ * inert, unverified skills + refreshes `.otto/skills.lock.json`. It never
+ * executes a skill's tests, and import never makes a skill eligible for a run.
+ * Resolves to the process exit code (mirrors `runMemory`).
  */
 export async function runSkills(
   argv: string[],
@@ -135,13 +207,26 @@ export async function runSkills(
     deps.out(USAGE);
     return 0;
   }
-  const known = ["list", "audit", "why", "candidates"];
+  const known = ["list", "audit", "why", "candidates", "sources", "sync"];
   if (arg !== undefined && !known.includes(arg)) {
     deps.err(`Unknown subcommand '${arg}'.\n${USAGE}`);
     return 1;
   }
 
   const workspaceDir = resolve(deps.env.OTTO_WORKSPACE ?? deps.cwd);
+
+  if (arg === "sources") {
+    return runSources(argv.slice(1), workspaceDir, deps);
+  }
+
+  if (arg === "sync") {
+    const dryRun = argv.includes("--dry-run");
+    const plan = planSync(workspaceDir, readSources(workspaceDir), new Date());
+    if (!dryRun) applySync(workspaceDir, plan);
+    deps.out(formatSyncPlan(plan, dryRun));
+    return 0;
+  }
+
   const skills = readSkills(workspaceDir);
 
   if (arg === "why") {
@@ -170,6 +255,15 @@ export async function runSkills(
   }
 
   if (arg === "audit") {
+    if (argv.includes("--external")) {
+      const findings = auditExternal(
+        readSources(workspaceDir),
+        readLock(workspaceDir),
+        (s) => importedChecksum(workspaceDir, s)
+      );
+      deps.out(formatExternalAudit(findings));
+      return findings.length === 0 ? 0 : 1;
+    }
     deps.out(`Skills audit (${skillsDir(workspaceDir)})`);
     deps.out(formatSkillsAudit(skills));
     return 0;
@@ -178,4 +272,78 @@ export async function runSkills(
   deps.out(`Skills (${skillsDir(workspaceDir)})`);
   deps.out(formatSkillsReport(skills));
   return 0;
+}
+
+const SOURCES_USAGE =
+  "Usage: otto-skills sources list\n" +
+  "       otto-skills sources add <name> <url-or-path> [--ref <sha-or-tag>] [--type local|git|archive]\n" +
+  "       otto-skills sources remove <name>";
+
+/** Read a `--flag value` from argv, or undefined. */
+function flagValue(argv: string[], flag: string): string | undefined {
+  const i = argv.indexOf(flag);
+  return i >= 0 && i + 1 < argv.length ? argv[i + 1] : undefined;
+}
+
+const SOURCE_TYPES: ReadonlySet<string> = new Set(["local", "git", "archive"]);
+
+/**
+ * Handle `otto-skills sources <list|add|remove>`. Unlike the rest of the bin
+ * these mutate `.otto/skills/sources.json`, but they only edit the source
+ * registry — no skill is imported or made eligible until a later `sync` +
+ * validation. Resolves to an exit code.
+ */
+function runSources(
+  argv: string[],
+  workspaceDir: string,
+  deps: SkillsDeps
+): number {
+  const sub = argv[0];
+  if (sub === undefined || sub === "list") {
+    deps.out(formatSources(readSources(workspaceDir)));
+    return 0;
+  }
+
+  if (sub === "add") {
+    const name = argv[1];
+    const location = argv[2];
+    if (!name || !location || location.startsWith("--")) {
+      deps.err(`add needs <name> and <url-or-path>.\n${SOURCES_USAGE}`);
+      return 1;
+    }
+    const ref = flagValue(argv, "--ref");
+    const rawType = flagValue(argv, "--type") ?? "local";
+    if (!SOURCE_TYPES.has(rawType)) {
+      deps.err(`Unknown --type '${rawType}' (local|git|archive).`);
+      return 1;
+    }
+    const source: ExternalSkillSource = {
+      name,
+      type: rawType as ExternalSourceType,
+      location,
+    };
+    if (ref) source.ref = ref;
+    writeSources(workspaceDir, addSource(readSources(workspaceDir), source));
+    deps.out(`Added source '${name}'. Run: otto-skills sync --dry-run`);
+    return 0;
+  }
+
+  if (sub === "remove") {
+    const name = argv[1];
+    if (!name) {
+      deps.err(`remove needs <name>.\n${SOURCES_USAGE}`);
+      return 1;
+    }
+    const before = readSources(workspaceDir);
+    if (!before.some((s) => s.name === name)) {
+      deps.err(`No source named '${name}'.`);
+      return 1;
+    }
+    writeSources(workspaceDir, removeSource(before, name));
+    deps.out(`Removed source '${name}'.`);
+    return 0;
+  }
+
+  deps.err(`Unknown sources subcommand '${sub}'.\n${SOURCES_USAGE}`);
+  return 1;
 }

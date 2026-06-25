@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.24.0...otto-core-v0.25.0) (2026-06-25)
+
+
+### Features
+
+* **context:** P20 production wiring — compress [@spill](https://github.com/spill) live + docs ([#150](https://github.com/phamvuhoang/otto/issues/150)) ([b50f921](https://github.com/phamvuhoang/otto/commit/b50f921d86e861227168ceedf6ed02246c8a8336))
+
 ## [0.24.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.23.0...otto-core-v0.24.0) (2026-06-25)
 
 

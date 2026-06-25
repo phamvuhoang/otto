@@ -62,6 +62,10 @@ export type CliFlags = {
   /** `--model-routing` toggle (default false; opt-in, issue #66 P11). Routes each
    *  stage to a model tier by difficulty + change risk + failure escalation. */
   modelRouting: boolean;
+  /** `--use-skills` toggle (default false; opt-in, issue #114 P18). Injects
+   *  validated, stage-scoped skill guidance into live stages (or OTTO_USE_SKILLS=1
+   *  / `.otto/config.json` `skills.enabled`). Off = byte-for-byte unchanged runs. */
+  useSkills: boolean;
   /** `--fan-out` toggle (default false; opt-in, issue #66 P11). Runs independent
    *  plan tasks as isolated worktree sub-agents before the sequential loop. */
   fanOut: boolean;
@@ -216,6 +220,7 @@ export function parseFlags(
   let adaptiveRouter = false;
   let explainRouting = false;
   let modelRouting = false;
+  let useSkills = false;
   let fanOut = false;
   let fanOutConcurrency = 3;
   let expectingFanOutConcurrency = false;
@@ -391,6 +396,7 @@ export function parseFlags(
     else if (a === "--adaptive-router") adaptiveRouter = true;
     else if (a === "--explain-routing") explainRouting = true;
     else if (a === "--model-routing") modelRouting = true;
+    else if (a === "--use-skills") useSkills = true;
     else if (a === "--context-compressor") expectingContextCompressor = true;
     else if (a === "--fan-out") fanOut = true;
     else if (a === "--fan-out-concurrency") expectingFanOutConcurrency = true;
@@ -484,6 +490,7 @@ export function parseFlags(
     adaptiveRouter,
     explainRouting,
     modelRouting,
+    useSkills,
     fanOut,
     fanOutConcurrency,
     watch,
@@ -566,6 +573,7 @@ Flags:
   --adaptive-router   route review depth by per-iteration change risk: single reviewer (low) / lens subset (medium) / full panel (high) (or OTTO_ADAPTIVE_ROUTER=1; default: off)
   --explain-routing   print the adaptive router's per-iteration reasoning (change class, risk, chosen depth/lenses); requires --adaptive-router (or OTTO_EXPLAIN_ROUTING=1; default: off)
   --model-routing     route each stage to a model tier by difficulty + change risk, escalating on repeated failure; a pinned --model/OTTO_MODEL overrides it (or OTTO_MODEL_ROUTING=1; default: off)
+  --use-skills        inject validated, stage-scoped skill guidance (from .otto/skills) into live stages, bounded + attributed (or OTTO_USE_SKILLS=1 / config "skills.enabled"; default: off)
   --fan-out           run independent plan tasks (from a .otto/tasks/<key>/tasks.json) as isolated worktree sub-agents before the sequential loop (or OTTO_FAN_OUT=1; default: off)
   --fan-out-concurrency <n>  max concurrent sub-agents per fan-out wave (default: 3)
   --branch <mode>     where Otto commits: current (default) | branch (new branch) | worktree (isolated checkout)

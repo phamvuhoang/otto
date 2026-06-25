@@ -334,9 +334,29 @@ export {
   formatSyncPlan,
   formatValidationReport,
   formatWhy,
+  formatWhyStage,
   runSkills,
   type SkillsDeps,
 } from "./skills-cli.js";
+export {
+  readSkillsConfig,
+  resolveSkillActivation,
+  stageEnabled,
+  type SkillActivation,
+  type StageFamily,
+} from "./skill-activation.js";
+export {
+  boundExcerpt,
+  formatSkillInjection,
+  routeSkillsForStage,
+  stageFamily,
+  toSkillUsages,
+  DEFAULT_SKILLS_BUDGET_CHARS,
+  DEFAULT_PER_SKILL_CHARS,
+  type SkillRouteResult,
+  type SkillRouteSelection,
+  type SkillRouteVerdict,
+} from "./skill-routing.js";
 export {
   checkProvenance,
   classifyCompatibility,

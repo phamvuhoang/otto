@@ -77,6 +77,40 @@ describe("executeStage token mode", () => {
     );
   });
 
+  it("appends injectedContext to the rendered prompt (P18 skills)", async () => {
+    await executeStage({
+      stage,
+      vars: { INPUTS: "plan" },
+      injectedContext: "<available-skills>tdd guidance</available-skills>",
+      workspaceDir,
+      packageDir,
+      iteration: 1,
+      maxRetries: 0,
+      tokenMode: "off",
+    });
+    const prompt = mocks.runStage.mock.calls[0][1] as string;
+    expect(prompt).toContain("hello plan");
+    expect(prompt).toContain(
+      "<available-skills>tdd guidance</available-skills>"
+    );
+  });
+
+  it("leaves the prompt unchanged when injectedContext is empty", async () => {
+    await executeStage({
+      stage,
+      vars: { INPUTS: "plan" },
+      injectedContext: "",
+      workspaceDir,
+      packageDir,
+      iteration: 1,
+      maxRetries: 0,
+      tokenMode: "off",
+    });
+    expect(mocks.runStage.mock.calls[0][1]).toBe(
+      "hello plan   \n\n\n\n\nread ./full.txt   \n"
+    );
+  });
+
   it("does not change the rendered prompt in measure mode", async () => {
     await executeStage({
       stage,

@@ -423,6 +423,11 @@ otto-skills validate tdd                         # static lint + risk scan + com
 otto-skills validate prd --source pm-skills      # assert provenance against a named source
 # Classes: afk-safe | interactive-only | stage-scoped | blocked. Persisted to skill.json, not auto-applied.
 
+# Skills: actually inject validated skills into live stages, bounded + attributed + recorded (P18)
+otto-skills why --stage reviewer --changed src/api.ts   # which validated skills route to a stage, and why
+otto-afk --use-skills "./docs/plans/feature.md" 10      # opt in (or OTTO_USE_SKILLS=1 / config "skills.enabled")
+# Off by default. skillsUsed[] lands in the evidence bundle (otto-inspect / otto-explain / otto-eval).
+
 # Tools: register external tools/MCP/services under repo-local, policy-scoped authority (P19)
 otto-tools list                                 # registered .otto/tools/<name>.json adapters
 otto-tools why review                           # which tools the review stage may use, and why

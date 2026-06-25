@@ -22,6 +22,10 @@ import { detachAndExit } from "./detach.js";
 import { runLoop } from "./loop.js";
 import { getAgentRuntime } from "./runner.js";
 import { resolveTierLadder } from "./model-tier.js";
+import {
+  resolveSkillActivation,
+  readSkillsConfig,
+} from "./skill-activation.js";
 import type { Stage } from "./stages.js";
 import { parseGithubRepo, describeScope, type WorkScope } from "./task-key.js";
 import type { TokenMode } from "./tokens.js";
@@ -268,6 +272,15 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       (process.env.OTTO_MODEL_ROUTING ?? "").trim().toLowerCase()
     );
   const tierLadder = resolveTierLadder(process.env);
+
+  // Runtime skill activation (issue #114 P18): inject validated, stage-scoped
+  // skill guidance into live stages. Off by default; resolved from
+  // --use-skills / OTTO_USE_SKILLS / .otto/config.json "skills".
+  const skillActivation = resolveSkillActivation({
+    flag: flags.useSkills,
+    env: process.env.OTTO_USE_SKILLS,
+    config: readSkillsConfig(workspaceDir),
+  });
 
   // Sub-agent fan-out (issue #66 P11): run independent plan tasks as isolated
   // worktree sub-agents before the sequential loop. Opt-in; needs a tasks.json.
@@ -695,6 +708,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     explainRouting,
     modelRouting,
     tierLadder,
+    skillActivation,
     fanOut,
     fanOutConcurrency,
     verbose: flags.verbose,

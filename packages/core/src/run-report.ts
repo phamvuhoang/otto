@@ -60,6 +60,12 @@ export type SkillUsage = {
   name: string;
   /** The skill version applied. */
   version: string;
+  /** Source name an imported skill came from, or "repo" (issue #139 P18). */
+  source?: string;
+  /** Upstream ref of an imported skill, when pinned (issue #139 P18). */
+  ref?: string;
+  /** The stage that consumed the skill, when stage-scoped (issue #139 P18). */
+  stage?: string;
   /** Why retrieval selected it (so a run report can explain the choice). */
   reasons?: string[];
 };

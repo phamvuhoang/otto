@@ -83,6 +83,11 @@ export function formatRunReport(
       `  ${String(i + 1).padStart(2)}. iter${s.iteration} ${s.stage}  ` +
         `[${status}]  $${s.costUsd.toFixed(2)}`
     );
+    if (s.skillsUsed && s.skillsUsed.length > 0) {
+      lines.push(
+        `      skills: ${s.skillsUsed.map((u) => `${u.name}${u.source ? ` (${u.source})` : ""}`).join(", ")}`
+      );
+    }
   });
 
   lines.push("");
@@ -93,6 +98,20 @@ export function formatRunReport(
   for (const a of manifest.artifacts) {
     const desc = a.description ? ` — ${a.description}` : "";
     lines.push(`  - ${a.kind}: ${a.path}${desc}`);
+  }
+
+  // Injected skills (issue #114 P18): the validated skills that shaped this run,
+  // with attribution, so a reader can trace which guidance influenced the agent.
+  if (manifest.skillsUsed && manifest.skillsUsed.length > 0) {
+    lines.push("");
+    lines.push(`Skills applied (${manifest.skillsUsed.length}):`);
+    for (const u of manifest.skillsUsed) {
+      const src = u.source
+        ? ` from ${u.source}${u.ref ? `@${u.ref}` : ""}`
+        : "";
+      const at = u.stage ? ` at ${u.stage}` : "";
+      lines.push(`  - ${u.name}@${u.version}${src}${at}`);
+    }
   }
 
   return lines.join("\n");

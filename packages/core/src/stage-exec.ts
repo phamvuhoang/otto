@@ -59,6 +59,10 @@ export type ExecuteStageOptions = {
   /** Where compressed-spill originals are retained (the run's retrieval store);
    *  required for the compressor to store reversible originals. */
   retrievalStore?: RetrievalStore;
+  /** Bounded, attributed skill guidance appended to the rendered prompt (issue
+   *  #114 P18). Empty/absent ⇒ the prompt is unchanged. Appended after rendering
+   *  so it is measured by `analyzeContext` but never disturbs the template. */
+  injectedContext?: string;
 };
 
 /** Map a spill filename to its compression category for evidence attribution. */
@@ -165,6 +169,12 @@ export async function executeStage(
         process.stderr.write(
           `${dim(`prompt reduce ${originalChars} -> ${reducedChars} chars | cache hits ${cacheHits}`)}\n`
         );
+      }
+      // Append the bounded, attributed skill block (issue #114 P18) after
+      // rendering + reduction so it reaches the agent verbatim and is measured by
+      // analyzeContext below. Empty ⇒ no change to the rendered prompt.
+      if (opts.injectedContext && opts.injectedContext.trim().length > 0) {
+        prompt = `${prompt}\n\n${opts.injectedContext}\n`;
       }
       // Route the model for this stage (issue #66 P11): a pin wins, else the
       // declared tier through the ladder when routing is on, else runtime default.

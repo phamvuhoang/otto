@@ -77,6 +77,9 @@ vi.mock("../stream-render.js", () => ({
 }));
 
 import { runLoop, nextActionFor, countDeferredFollowups } from "../loop.js";
+import { listRunIds, readManifest, readStageRecords } from "../run-report.js";
+import { recordStaticValidation, writeSkill } from "../skills.js";
+import { skillChecksum } from "../skill-validation.js";
 
 const stage: Stage = { name: "implementer", template: "stage.md" };
 const sentinel = "<promise>NO MORE TASKS</promise>";
@@ -240,6 +243,89 @@ describe("runLoop", () => {
     expect(mocks.runStage).toHaveBeenCalledTimes(1);
     expect(mocks.release).toHaveBeenCalledTimes(1);
     expect(mocks.notifyComplete).toHaveBeenCalledWith(1, true);
+  });
+
+  it("injects a validated skill + records skillsUsed when activation is on (P18)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const body = "Write the failing test first.";
+    writeSkill(
+      dirs.workspaceDir,
+      recordStaticValidation(
+        {
+          name: "tdd",
+          version: "1.0.0",
+          capabilities: ["tdd"],
+          constraints: [],
+          scope: [],
+          instructions: body,
+          scripts: {},
+          tests: [],
+          validation: {},
+          trust: "unverified",
+          createdAt: new Date(0).toISOString(),
+          useCount: 0,
+        },
+        { compatibility: "afk-safe", stages: [], checksum: skillChecksum(body) }
+      )
+    );
+    mocks.runStage.mockResolvedValue(ok("did work, no sentinel"));
+
+    await runLoop(
+      loopOptions(dirs, {
+        iterations: 1,
+        skillActivation: { enabled: true, stages: {} },
+      })
+    );
+
+    const prompt = String(mocks.runStage.mock.calls[0][1]);
+    expect(prompt).toContain("<available-skills");
+    expect(prompt).toContain(body);
+
+    const runId = listRunIds(dirs.workspaceDir)[0];
+    const records = readStageRecords(dirs.workspaceDir, runId);
+    expect(records[0].skillsUsed?.[0]).toMatchObject({
+      name: "tdd",
+      stage: "implementer",
+    });
+    expect(readManifest(dirs.workspaceDir, runId)?.skillsUsed?.[0]?.name).toBe(
+      "tdd"
+    );
+  });
+
+  it("does not inject or record skills when activation is off (default)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const body = "Write the failing test first.";
+    writeSkill(
+      dirs.workspaceDir,
+      recordStaticValidation(
+        {
+          name: "tdd",
+          version: "1.0.0",
+          capabilities: ["tdd"],
+          constraints: [],
+          scope: [],
+          instructions: body,
+          scripts: {},
+          tests: [],
+          validation: {},
+          trust: "unverified",
+          createdAt: new Date(0).toISOString(),
+          useCount: 0,
+        },
+        { compatibility: "afk-safe", stages: [], checksum: skillChecksum(body) }
+      )
+    );
+    mocks.runStage.mockResolvedValue(ok("did work, no sentinel"));
+
+    await runLoop(loopOptions(dirs, { iterations: 1 }));
+
+    expect(String(mocks.runStage.mock.calls[0][1])).not.toContain(
+      "available-skills"
+    );
+    const runId = listRunIds(dirs.workspaceDir)[0];
+    expect(readManifest(dirs.workspaceDir, runId)?.skillsUsed).toBeUndefined();
   });
 
   it("prints the cli + core version banner at loop init", async () => {

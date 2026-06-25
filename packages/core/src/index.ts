@@ -358,6 +358,22 @@ export {
   type SkillRouteVerdict,
 } from "./skill-routing.js";
 export {
+  EXTENSION_PROFILES,
+  getProfile,
+  listProfiles,
+  type ExtensionProfile,
+} from "./extension-profiles.js";
+export {
+  applyProfile,
+  formatProfileList,
+  formatProfilePlan,
+  planProfile,
+  runExtensions,
+  type ExtensionsDeps,
+  type ProfilePlan,
+  type ProfilePlanItem,
+} from "./extensions-cli.js";
+export {
   checkProvenance,
   classifyCompatibility,
   extractCapabilities,

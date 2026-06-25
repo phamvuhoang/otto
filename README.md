@@ -271,7 +271,26 @@ Beyond the build loop, two read/repair modes reuse all of the above:
 
 ## Use cases
 
-Recipes grouped by what you're trying to do. The trailing number on the loop bins is the **max iteration count**; a run also stops early when the agent emits `<promise>NO MORE TASKS</promise>`.
+The trailing number on the loop bins is the **max iteration count**; a run also stops early when the agent emits `<promise>NO MORE TASKS</promise>`.
+
+### Real-world scenarios
+
+Start here — concrete end-to-end jobs people actually run. Each maps to the feature recipes below.
+
+| You want to…                                                                 | Run this                                                                                                                                                        |
+| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Clear my GitHub backlog overnight, cheaply, with merge-confident reviews** | `otto-ghafk --detach --notify --model-routing --review-panel 30`                                                                                                |
+| **Turn a rough idea into a spec, then a reviewed, tested feature**           | `otto-afk --plan "./docs/ideas/x.md"` → review the plan → `otto-afk --review-panel "./docs/ideas/x.md ./.otto/tasks/x/plan.md" 20`                              |
+| **Ship one specific issue (and its sub-issues) and stop**                    | `otto-ghafk --issue 42 --include-sub-issues 20`                                                                                                                 |
+| **Land a big feature faster by parallelizing independent tasks**             | `otto-afk --plan --fan-out "./docs/ideas/x.md" 20`                                                                                                              |
+| **Bring in the Superpowers TDD skill and have Otto actually use it**         | `otto-skills sources add sp ./vendor/superpowers --type local && otto-skills sync && otto-skills validate tdd` → `otto-afk --use-skills "./docs/plans/x.md" 10` |
+| **Hand an unattended run to a non-engineer to accept or reject**             | run any loop, then `otto-explain latest`                                                                                                                        |
+| **Audit what actually landed without changing anything**                     | `otto-afk --verify "./docs/plans/x.md ./docs/prd/x.md"`                                                                                                         |
+| **Fix the findings of an external code review, one at a time**               | `otto-afk --apply-review ./code-review.md 20`                                                                                                                   |
+| **Keep a repo's backlog moving on its own**                                  | `otto-ghafk --watch --watch-interval 300 5`                                                                                                                     |
+| **Run the whole thing on Codex instead of Claude**                           | `otto-afk --agent codex "./docs/plans/x.md" 10`                                                                                                                 |
+
+The recipes below are grouped by capability — reach for them to compose your own scenario.
 
 ### 1. Ship work autonomously
 
@@ -435,6 +454,13 @@ otto-tools audit                                # unreachable, missing health ch
 otto-tools health                               # run each tool's health-check command
 # Authority = intersection of the tool's declared scope and .otto/policy.json; personal
 # MCP/plugin config is never inherited into a run. No .otto/tools/ ⇒ unchanged behavior.
+
+# Extensions: start from a curated profile instead of raw source/tool config (P21)
+otto-extensions list                            # coding-superpowers | pm-planning | context-saver | security-review
+otto-extensions init context-saver --dry-run    # preview every file it would write
+otto-extensions init context-saver              # writes normal, diffable .otto/ config — git diff to review
+# Profiles are generated config, not hidden behavior; sources stay unverified until you validate.
+# See docs/EXTENSIONS.md for the compatibility matrix + update/lock/rollback.
 ```
 
 ### 6. Verify & repair (read-only / surgical)
@@ -524,7 +550,7 @@ Full flag reference and more recipes: **[docs/CLI.md](./docs/CLI.md)**.
 
 Otto ships as two npm packages:
 
-- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool). The read-only operator bins: `otto-inspect` renders one run's evidence bundle, `otto-explain` re-renders any run in plain language for a non-engineer, `otto-runs` lists recent runs, `otto-tail` attaches to a running loop for a live status tree, `otto-eval compare` A/Bs two of them (and `otto-eval` benchmarks harness quality across configs — the [eval suite](./benchmarks)), `otto-memory` audits the governed memory records, `otto-skills` inventories repo-local skill packages, and `otto-tools` inspects the repo-local external-tool authority registry.
+- **[`@phamvuhoang/otto`](./apps/cli)** — the CLI: `otto-afk` (plan/PRD loop), `otto-ghafk` (GitHub-issue loop), and `otto-linear-afk` (Linear-issue loop, with the `otto-linear` helper + `otto-linear-auth` credential tool). The read-only operator bins: `otto-inspect` renders one run's evidence bundle, `otto-explain` re-renders any run in plain language for a non-engineer, `otto-runs` lists recent runs, `otto-tail` attaches to a running loop for a live status tree, `otto-eval compare` A/Bs two of them (and `otto-eval` benchmarks harness quality across configs — the [eval suite](./benchmarks)), `otto-memory` audits the governed memory records, `otto-skills` inventories and validates repo-local skill packages, `otto-tools` inspects the repo-local external-tool authority registry, and `otto-extensions` enables curated extension profiles.
 - **[`@phamvuhoang/otto-core`](./packages/core)** — the library: iteration loop, native-sandbox runner, template renderer, stage registry. Importable from any Node project.
 
 Each iteration runs a **stage chain**: a **gate** stage (implement / verify / apply-review, depending on the bin and flags) followed by a **reviewer**. Before each stage, Otto renders a prompt template — expanding `@include`, `@spill`, `` !?`cmd` ``, `` !`cmd` ``, and `{{ INPUTS }}` tags — and injects the workspace's `.otto/LEARNINGS.md`. If the gate emits the sentinel `<promise>NO MORE TASKS</promise>`, the loop exits before the reviewer runs.
@@ -616,6 +642,7 @@ Requires **Node 20+** and an authenticated agent runtime: **Claude Code** (`clau
 | **[docs/CLI.md](./docs/CLI.md)**                                       | Every command, flag, and mode — start at [Choosing a mode](./docs/CLI.md#choosing-a-mode) (afk vs ghafk vs verify vs apply-review).    |
 | **[docs/CONFIG.md](./docs/CONFIG.md)**                                 | Environment variables, runner/sandbox, branch strategy, setup.                                                                         |
 | **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)**                     | Runtime internals and data flow for library extenders.                                                                                 |
+| **[docs/EXTENSIONS.md](./docs/EXTENSIONS.md)**                         | Curated extension profiles: what each writes, the compatibility matrix, and update/lock/rollback.                                      |
 | **[docs/MIGRATION.md](./docs/MIGRATION.md)**                           | Task-grouped `.otto/tasks/<task-key>/` layout, old→new path mapping, branch-convention namespace, and how to migrate an existing repo. |
 | **[docs/quality-report-samples.md](./docs/quality-report-samples.md)** | Filled-in sample quality reports — what good verification output looks like per run mode.                                              |
 | **[SECURITY.md](./SECURITY.md)**                                       | Threat model and the `bypassPermissions` blast-radius story.                                                                           |

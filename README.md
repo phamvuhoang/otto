@@ -399,6 +399,13 @@ otto-memory project > .otto/LEARNINGS.md
 otto-skills candidates                          # workflows that succeeded the same way >= 2x
 otto-skills why packages/core/src/eval.ts       # which skills retrieval would pick, and why
 otto-skills list                                # inventory + validated/unvalidated/stale status
+
+# Skills: import external skill packs (Superpowers, PM-Skills) as pinned, inert sources (P16)
+otto-skills sources add sp ./vendor/superpowers --type local   # register a source (git|local|archive)
+otto-skills sync --dry-run                       # deterministic preview: add/update/unchanged/conflict
+otto-skills sync                                 # import as trust=unverified skills + write skills.lock.json
+otto-skills audit --external                     # unpinned refs, missing licenses, dup names, stale copies
+# Imported skills are inert: unverified + unvalidated, so the loop never auto-applies them.
 ```
 
 ### 6. Verify & repair (read-only / surgical)

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.2](https://github.com/phamvuhoang/otto/compare/otto-core-v0.28.1...otto-core-v0.28.2) (2026-06-26)
+
+
+### Bug Fixes
+
+* **plan-gate:** bound the interactive plan checkpoint so AFK runs on a TTY don't hang ([#175](https://github.com/phamvuhoang/otto/issues/175)) ([0dc9125](https://github.com/phamvuhoang/otto/commit/0dc9125586db1f6d41cf21ca71845c49e2dabe2c)), closes [#174](https://github.com/phamvuhoang/otto/issues/174)
+
 ## [0.28.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.28.0...otto-core-v0.28.1) (2026-06-25)
 
 

@@ -11,6 +11,13 @@ function charsOf(b: ContextBreakdown, category: string): number {
   return b.segments.find((s) => s.category === category)?.chars ?? 0;
 }
 
+function lifecycleOf(
+  b: ContextBreakdown,
+  category: string
+): string | undefined {
+  return b.segments.find((s) => s.category === category)?.lifecycle;
+}
+
 describe("estimateTokens", () => {
   it("is ceil(chars / 4)", () => {
     expect(estimateTokens(0)).toBe(0);
@@ -33,9 +40,9 @@ describe("analyzeContext", () => {
       "be careful",
       "</learnings>",
       "",
-      "<issue>",
-      "issue body text",
-      "</issue>",
+      "<inputs>",
+      "the plan and prd",
+      "</inputs>",
       "",
       "# THE TASK",
       "do the work",
@@ -55,11 +62,40 @@ describe("analyzeContext", () => {
     expect(b.estimatedTokens).toBe(estimateTokens(prompt.length));
   });
 
-  it("treats afk <inputs> and ghafk <issues-summary>/<issues-full-file> as inputs", () => {
+  it("derives a lifecycle class onto each segment", () => {
+    const prompt = [
+      "<commits>",
+      "abc123 fix things",
+      "</commits>",
+      "<learnings>",
+      "# Otto learnings",
+      "be careful",
+      "</learnings>",
+      "<inputs>",
+      "the plan and prd",
+      "</inputs>",
+      "# THE TASK",
+      "do the work",
+    ].join("\n");
+
+    const b = analyzeContext(prompt);
+
+    expect(lifecycleOf(b, "commits")).toBe("resolved");
+    expect(lifecycleOf(b, "learnings")).toBe("durable");
+    expect(lifecycleOf(b, "inputs")).toBe("required-now");
+    expect(lifecycleOf(b, "playbook")).toBe("required-now");
+    // every present segment carries a lifecycle
+    expect(b.segments.every((s) => typeof s.lifecycle === "string")).toBe(true);
+  });
+
+  it("keeps afk <inputs> as inputs/required-now but treats ghafk issue-body tags as evidence/retrievable", () => {
     const prompt = [
       "<inputs>",
       "the plan and prd",
       "</inputs>",
+      "<issue>",
+      "a single issue body",
+      "</issue>",
       "<issues-summary>",
       "1: a  2: b",
       "</issues-summary>",
@@ -70,9 +106,13 @@ describe("analyzeContext", () => {
     ].join("\n");
 
     const b = analyzeContext(prompt);
+    // The active afk task source stays required-now — it IS the current task.
     expect(charsOf(b, "inputs")).toBeGreaterThan(0);
-    // all three input blocks fold into one inputs segment
-    expect(b.segments.filter((s) => s.category === "inputs")).toHaveLength(1);
+    expect(lifecycleOf(b, "inputs")).toBe("required-now");
+    // All three ghafk issue-body tags fold into one retrievable evidence segment.
+    expect(charsOf(b, "evidence")).toBeGreaterThan(0);
+    expect(b.segments.filter((s) => s.category === "evidence")).toHaveLength(1);
+    expect(lifecycleOf(b, "evidence")).toBe("retrievable");
     expect(charsOf(b, "playbook")).toBeGreaterThan(0);
   });
 

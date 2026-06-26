@@ -13,12 +13,28 @@
  * prompt made of") that a single usage total cannot.
  */
 
-export type ContextCategory = "commits" | "learnings" | "inputs" | "playbook";
+import {
+  classifyLifecycle,
+  type ContextLifecycle,
+} from "./context-lifecycle.js";
+
+export type ContextCategory =
+  | "commits"
+  | "learnings"
+  | "inputs"
+  | "evidence"
+  | "playbook";
 
 export type ContextSegment = {
   category: ContextCategory;
   chars: number;
   estimatedTokens: number;
+  /**
+   * The orthogonal lifecycle class derived from `category` (see
+   * `context-lifecycle.ts`) — *why* the segment is still in the window and
+   * whether it could be freed. Optional so older serialized breakdowns parse.
+   */
+  lifecycle?: ContextLifecycle;
 };
 
 export type ContextBreakdown = {
@@ -43,9 +59,13 @@ const BLOCK_CATEGORY: Record<string, ContextCategory> = {
   commits: "commits",
   learnings: "learnings",
   inputs: "inputs",
-  issue: "inputs",
-  "issues-summary": "inputs",
-  "issues-full-file": "inputs",
+  // ghafk issue-body tags are reconstructable evidence (`gh issue view`
+  // re-fetches them), not the active task — `evidence` → `retrievable`, so the
+  // report names a multi-KB pasted issue body as compressible rather than
+  // load-bearing. The afk `<inputs>` block (the active plan/PRD) stays `inputs`.
+  issue: "evidence",
+  "issues-summary": "evidence",
+  "issues-full-file": "evidence",
 };
 
 /** Sum the char footprint of every recognized `<tag>…</tag>` span, by category. */
@@ -55,7 +75,10 @@ function recognizedSpans(prompt: string): Map<ContextCategory, number> {
     // Non-greedy, dot-all: each top-level block appears at most once per prompt.
     const re = new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, "g");
     for (const match of prompt.matchAll(re)) {
-      byCategory.set(category, (byCategory.get(category) ?? 0) + match[0].length);
+      byCategory.set(
+        category,
+        (byCategory.get(category) ?? 0) + match[0].length
+      );
     }
   }
   return byCategory;
@@ -82,6 +105,7 @@ export function analyzeContext(prompt: string): ContextBreakdown {
       category,
       chars,
       estimatedTokens: estimateTokens(chars),
+      lifecycle: classifyLifecycle(category),
     }))
     .sort((a, b) => b.chars - a.chars);
 

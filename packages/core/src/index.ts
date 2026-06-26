@@ -60,6 +60,19 @@ export {
   type ContextSegment,
 } from "./context-report.js";
 export {
+  assessFreeableContext,
+  classifyLifecycle,
+  formatFreeableContext,
+  lifecycleRationale,
+  summarizeLifecycle,
+  type ContextLifecycle,
+  type FreeableAction,
+  type FreeableContextAssessment,
+  type FreeableSegment,
+  type LifecycleSummary,
+  type LifecycleTotals,
+} from "./context-lifecycle.js";
+export {
   DEFAULT_COMMITS_BUDGET_CHARS,
   compactCommits,
   formatCompactedCommits,

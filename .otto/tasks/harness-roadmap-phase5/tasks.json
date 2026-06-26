@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "t1",
+      "title": "evidence category producer -> retrievable lifecycle",
+      "fileScope": [
+        "packages/core/src/context-report.ts",
+        "packages/core/src/context-lifecycle.ts",
+        "packages/core/src/__tests__/context-report.test.ts",
+        "packages/core/src/__tests__/context-lifecycle.test.ts"
+      ],
+      "dependsOn": [],
+      "parallelSafe": false
+    },
+    {
+      "id": "t2",
+      "title": "lifecycle rationale + large issue-body fixture in --context-report",
+      "fileScope": [
+        "packages/core/src/context-lifecycle.ts",
+        "packages/core/src/context-report-cli.ts",
+        "packages/core/src/index.ts",
+        "packages/core/src/__tests__/context-lifecycle.test.ts",
+        "packages/core/src/__tests__/context-report-cli.test.ts"
+      ],
+      "dependsOn": ["t1"],
+      "parallelSafe": false
+    }
+  ]
+}

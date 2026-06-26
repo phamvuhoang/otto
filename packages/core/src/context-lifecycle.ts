@@ -23,9 +23,9 @@ import {
  * - `required-now` — stage contract, current task, active diff. Must stay.
  * - `resolved` — previous-iteration discussion / completed subtasks. Retirable.
  * - `durable` — governed memory and final decisions. Kept, but compactable.
- * - `retrievable` — logs, issue bodies, command output, screenshots. No distinct
- *   category emits this yet (finer `inputs` segmentation is a later slice), so it
- *   is part of the taxonomy but not produced by `classifyLifecycle` today.
+ * - `retrievable` — logs, issue bodies, command output, screenshots. Produced by
+ *   the `evidence` category (the ghafk issue-body tags); finer producers
+ *   (command-output spills, screenshots) join the same category in later slices.
  */
 export type ContextLifecycle =
   | "required-now"
@@ -40,6 +40,7 @@ export type ContextLifecycle =
  * - `playbook` / `inputs` → `required-now`
  * - `commits` → `resolved`
  * - `learnings` → `durable`
+ * - `evidence` → `retrievable`
  */
 export function classifyLifecycle(category: ContextCategory): ContextLifecycle {
   switch (category) {
@@ -50,6 +51,8 @@ export function classifyLifecycle(category: ContextCategory): ContextLifecycle {
       return "resolved";
     case "learnings":
       return "durable";
+    case "evidence":
+      return "retrievable";
   }
 }
 
@@ -72,7 +75,9 @@ export type LifecycleSummary = {
  * per-segment estimates so the rollup is rounding-stable against the breakdown's
  * own segment tokens.
  */
-export function summarizeLifecycle(breakdown: ContextBreakdown): LifecycleSummary {
+export function summarizeLifecycle(
+  breakdown: ContextBreakdown
+): LifecycleSummary {
   const byLifecycle = new Map<ContextLifecycle, LifecycleTotals>();
   for (const segment of breakdown.segments) {
     const lifecycle = classifyLifecycle(segment.category);
@@ -176,7 +181,8 @@ export function formatFreeableContext(a: FreeableContextAssessment): string {
     return "freeable context: none — no resolved or retrievable context to free";
   }
   const parts = a.segments.map(
-    (s) => `${s.action} ${s.lifecycle} (~${num.format(s.estimatedTokens)} tokens)`
+    (s) =>
+      `${s.action} ${s.lifecycle} (~${num.format(s.estimatedTokens)} tokens)`
   );
   return (
     `freeable context: ~${num.format(a.freeableTokens)} tokens ` +

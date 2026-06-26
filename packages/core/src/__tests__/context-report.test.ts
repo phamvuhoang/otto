@@ -11,7 +11,10 @@ function charsOf(b: ContextBreakdown, category: string): number {
   return b.segments.find((s) => s.category === category)?.chars ?? 0;
 }
 
-function lifecycleOf(b: ContextBreakdown, category: string): string | undefined {
+function lifecycleOf(
+  b: ContextBreakdown,
+  category: string
+): string | undefined {
   return b.segments.find((s) => s.category === category)?.lifecycle;
 }
 
@@ -37,9 +40,9 @@ describe("analyzeContext", () => {
       "be careful",
       "</learnings>",
       "",
-      "<issue>",
-      "issue body text",
-      "</issue>",
+      "<inputs>",
+      "the plan and prd",
+      "</inputs>",
       "",
       "# THE TASK",
       "do the work",
@@ -85,11 +88,14 @@ describe("analyzeContext", () => {
     expect(b.segments.every((s) => typeof s.lifecycle === "string")).toBe(true);
   });
 
-  it("treats afk <inputs> and ghafk <issues-summary>/<issues-full-file> as inputs", () => {
+  it("keeps afk <inputs> as inputs/required-now but treats ghafk issue-body tags as evidence/retrievable", () => {
     const prompt = [
       "<inputs>",
       "the plan and prd",
       "</inputs>",
+      "<issue>",
+      "a single issue body",
+      "</issue>",
       "<issues-summary>",
       "1: a  2: b",
       "</issues-summary>",
@@ -100,9 +106,13 @@ describe("analyzeContext", () => {
     ].join("\n");
 
     const b = analyzeContext(prompt);
+    // The active afk task source stays required-now — it IS the current task.
     expect(charsOf(b, "inputs")).toBeGreaterThan(0);
-    // all three input blocks fold into one inputs segment
-    expect(b.segments.filter((s) => s.category === "inputs")).toHaveLength(1);
+    expect(lifecycleOf(b, "inputs")).toBe("required-now");
+    // All three ghafk issue-body tags fold into one retrievable evidence segment.
+    expect(charsOf(b, "evidence")).toBeGreaterThan(0);
+    expect(b.segments.filter((s) => s.category === "evidence")).toHaveLength(1);
+    expect(lifecycleOf(b, "evidence")).toBe("retrievable");
     expect(charsOf(b, "playbook")).toBeGreaterThan(0);
   });
 

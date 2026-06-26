@@ -18,7 +18,12 @@ import {
   type ContextLifecycle,
 } from "./context-lifecycle.js";
 
-export type ContextCategory = "commits" | "learnings" | "inputs" | "playbook";
+export type ContextCategory =
+  | "commits"
+  | "learnings"
+  | "inputs"
+  | "evidence"
+  | "playbook";
 
 export type ContextSegment = {
   category: ContextCategory;
@@ -54,9 +59,13 @@ const BLOCK_CATEGORY: Record<string, ContextCategory> = {
   commits: "commits",
   learnings: "learnings",
   inputs: "inputs",
-  issue: "inputs",
-  "issues-summary": "inputs",
-  "issues-full-file": "inputs",
+  // ghafk issue-body tags are reconstructable evidence (`gh issue view`
+  // re-fetches them), not the active task — `evidence` → `retrievable`, so the
+  // report names a multi-KB pasted issue body as compressible rather than
+  // load-bearing. The afk `<inputs>` block (the active plan/PRD) stays `inputs`.
+  issue: "evidence",
+  "issues-summary": "evidence",
+  "issues-full-file": "evidence",
 };
 
 /** Sum the char footprint of every recognized `<tag>…</tag>` span, by category. */
@@ -66,7 +75,10 @@ function recognizedSpans(prompt: string): Map<ContextCategory, number> {
     // Non-greedy, dot-all: each top-level block appears at most once per prompt.
     const re = new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, "g");
     for (const match of prompt.matchAll(re)) {
-      byCategory.set(category, (byCategory.get(category) ?? 0) + match[0].length);
+      byCategory.set(
+        category,
+        (byCategory.get(category) ?? 0) + match[0].length
+      );
     }
   }
   return byCategory;

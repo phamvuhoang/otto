@@ -16,6 +16,7 @@ describe("classifyLifecycle", () => {
       ["inputs", "required-now"],
       ["commits", "resolved"],
       ["learnings", "durable"],
+      ["evidence", "retrievable"],
     ];
     for (const [category, lifecycle] of table) {
       expect(classifyLifecycle(category)).toBe(lifecycle);
@@ -60,9 +61,12 @@ describe("summarizeLifecycle", () => {
   });
 
   it("folds same-lifecycle categories together (playbook + inputs → required-now)", () => {
-    const prompt = ["<inputs>", "task source", "</inputs>", "playbook prose"].join(
-      "\n"
-    );
+    const prompt = [
+      "<inputs>",
+      "task source",
+      "</inputs>",
+      "playbook prose",
+    ].join("\n");
     const breakdown = analyzeContext(prompt);
     const summary = summarizeLifecycle(breakdown);
 
@@ -102,7 +106,9 @@ describe("assessFreeableContext", () => {
     const breakdown = analyzeContext(prompt);
     const assessment = assessFreeableContext(breakdown);
 
-    const resolved = assessment.segments.find((s) => s.lifecycle === "resolved");
+    const resolved = assessment.segments.find(
+      (s) => s.lifecycle === "resolved"
+    );
     expect(resolved).toBeDefined();
     expect(resolved?.action).toBe("retire");
 
@@ -148,7 +154,9 @@ describe("assessFreeableContext", () => {
   it("formats a one-line human summary, both freeable and none", () => {
     const freeable = formatFreeableContext(
       assessFreeableContext(
-        analyzeContext(["<commits>", "abc123 settled work", "</commits>"].join("\n"))
+        analyzeContext(
+          ["<commits>", "abc123 settled work", "</commits>"].join("\n")
+        )
       )
     );
     expect(freeable).toMatch(/^freeable context:/);

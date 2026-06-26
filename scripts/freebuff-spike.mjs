@@ -96,7 +96,7 @@ export function freebuffPreflight(probes = {}) {
   const cliOk = bin != null;
 
   // Check 2: version probe (detects launcher/native-binary mismatch).
-  let versionOk = false;
+  let versionOk = null; // null = not probed / unknown
   let versionDetail;
   if (!cliOk) {
     versionDetail = "freebuff --version not checked (binary not on PATH)";
@@ -322,11 +322,11 @@ export function detectFreebuffLimit(eventsOrLines) {
         typeof ev.message === "string" ? ev.message : (status ?? "unknown");
       if (status && RATE_LIMIT_STATUSES.has(status)) {
         // Rate-limited: retryable, but Freebuff does not surface a reset time.
-        return { kind: "rate_limit", message, resetsAt: null };
+        return { kind: "rate-limit", message, resetsAt: null };
       }
       if (status && HEADLESS_NOT_READY_STATUSES.has(status)) {
         // Queued: session not yet executing; headless automation cannot wait.
-        return { kind: "headless_not_ready", message };
+        return { kind: "headless-not-ready", message };
       }
       if (status && FATAL_STATUSES.has(status)) {
         return { kind: "fatal", message };
@@ -337,7 +337,7 @@ export function detectFreebuffLimit(eventsOrLines) {
       // Check error messages for rate-limit keywords even without a status field.
       const message = typeof ev.message === "string" ? ev.message : "";
       if (RATE_LIMIT_RE.test(message)) {
-        return { kind: "rate_limit", message, resetsAt: null };
+        return { kind: "rate-limit", message, resetsAt: null };
       }
     }
   }

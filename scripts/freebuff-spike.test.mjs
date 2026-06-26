@@ -108,7 +108,7 @@ test("detectFreebuffLimit classifies rate_limited → rate_limit with null reset
     },
   ]);
   assert.ok(hit, "expected a limit result for rate_limited");
-  assert.equal(hit.kind, "rate_limit");
+  assert.equal(hit.kind, "rate-limit");
   assert.equal(hit.message, "too many sessions");
   // Freebuff does not expose a reset time — resetsAt is always null (documented gap).
   assert.equal(hit.resetsAt, null);
@@ -123,11 +123,16 @@ test("detectFreebuffLimit classifies queued → headless_not_ready", () => {
     },
   ]);
   assert.ok(hit, "expected a limit result for queued");
-  assert.equal(hit.kind, "headless_not_ready");
+  assert.equal(hit.kind, "headless-not-ready");
 });
 
-test("detectFreebuffLimit classifies country_blocked, banned, model_unavailable → fatal", () => {
-  for (const status of ["country_blocked", "banned", "model_unavailable"]) {
+test("detectFreebuffLimit classifies country_blocked, banned, model_unavailable, takeover_prompt → fatal", () => {
+  for (const status of [
+    "country_blocked",
+    "banned",
+    "model_unavailable",
+    "takeover_prompt",
+  ]) {
     const hit = detectFreebuffLimit([
       { type: "session.status", status, message: `session ${status}` },
     ]);
@@ -141,7 +146,7 @@ test("detectFreebuffLimit detects rate-limit keywords in session.error messages"
     { type: "session.error", message: "quota exceeded for this account" },
   ]);
   assert.ok(hit, "expected a limit result for quota message");
-  assert.equal(hit.kind, "rate_limit");
+  assert.equal(hit.kind, "rate-limit");
   assert.equal(hit.resetsAt, null);
 });
 
@@ -152,7 +157,7 @@ test("detectFreebuffLimit accepts a newline-delimited JSONL string input", () =>
   });
   const hit = detectFreebuffLimit(str);
   assert.ok(hit);
-  assert.equal(hit.kind, "rate_limit");
+  assert.equal(hit.kind, "rate-limit");
 });
 
 // ---------------------------------------------------------------------------
@@ -225,6 +230,19 @@ test("freebuffPreflight detects credentials via CODEBUFF_API_KEY env when no fil
   });
   assert.equal(viaEnv.auth.ok, true);
   assert.match(viaEnv.auth.detail, /CODEBUFF_API_KEY/);
+});
+
+test("freebuffPreflight reports version.ok as null (not false) when runVersion probe is not injected", () => {
+  const noProbe = freebuffPreflight({
+    resolveBin: () => "/usr/local/bin/freebuff",
+    // runVersion intentionally omitted — simulates the not-probed path.
+    pathExists: () => true,
+    home: "/home/u",
+    env: {},
+  });
+  assert.equal(noProbe.cli.ok, true); // binary found
+  assert.equal(noProbe.version.ok, null); // not probed — must not be false
+  assert.match(noProbe.version.detail, /not probed/);
 });
 
 // ---------------------------------------------------------------------------

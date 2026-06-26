@@ -14,6 +14,7 @@ import {
   detectFreebuffLimit,
   freebuffPreflight,
   buildFreebuffArgs,
+  finalizeFreebuffResult,
 } from "./freebuff-spike.mjs";
 
 // ---------------------------------------------------------------------------
@@ -296,4 +297,40 @@ test("buildFreebuffArgs does not emit Claude-only or Codex-only flags", () => {
 test("buildFreebuffArgs uses cwd default of '.' when opts omitted", () => {
   const argv = buildFreebuffArgs("prompt.md");
   assert.ok(argv.includes("."), "default cwd should be '.'");
+});
+
+// finalizeFreebuffResult: fold the child process exit code + stderr into the
+// parsed result. Surfaced by the live smoke against freebuff v0.0.115, where
+// `freebuff exec --json` exits 1 with an error on stderr and no stdout events,
+// yet parseFreebuffEvents alone returns isError:false (it never saw the exit).
+
+test("finalizeFreebuffResult flags non-zero exit with no events as an error", () => {
+  const parsed = parseFreebuffEvents([]); // empty stdout → isError:false
+  const final = finalizeFreebuffResult(parsed, {
+    code: 1,
+    stderr: "error: unknown option '--json'\n",
+  });
+  assert.equal(final.isError, true);
+  assert.match(final.apiErrorStatus, /unknown option '--json'/);
+  assert.equal(final.runtimeId, "freebuff");
+});
+
+test("finalizeFreebuffResult leaves a clean zero-exit completion untouched", () => {
+  const parsed = parseFreebuffEvents([
+    { type: "task.completed", output: "ok" },
+  ]);
+  const final = finalizeFreebuffResult(parsed, { code: 0, stderr: "" });
+  assert.equal(final.isError, false);
+  assert.equal(final.apiErrorStatus, null);
+  assert.equal(final.result, "ok");
+});
+
+test("finalizeFreebuffResult preserves a parser-detected error on non-zero exit", () => {
+  const parsed = parseFreebuffEvents([
+    { type: "session.error", message: "rate limited", status: "rate_limited" },
+  ]);
+  const final = finalizeFreebuffResult(parsed, { code: 1, stderr: "noise" });
+  assert.equal(final.isError, true);
+  // The richer parser-supplied status wins over a generic stderr fallback.
+  assert.equal(final.apiErrorStatus, "rate limited");
 });

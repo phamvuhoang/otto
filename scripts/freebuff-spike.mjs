@@ -268,6 +268,29 @@ export function parseFreebuffEvents(eventsOrLines) {
 }
 
 /**
+ * Fold the child process exit into a parsed result.
+ *
+ * parseFreebuffEvents only sees stdout events; it cannot know the process
+ * exited non-zero. The live smoke against freebuff v0.0.115 exposed this gap:
+ * `freebuff exec --json` exits 1 with an error on stderr and emits no stdout
+ * events, so the parsed result was isError:false — a false success.
+ *
+ * A non-zero exit is an error unless the parser already classified one. When
+ * the parser found nothing, fall back to the trimmed stderr (or the bare exit
+ * code) as apiErrorStatus. A parser-supplied status is richer, so it wins.
+ */
+export function finalizeFreebuffResult(parsed, exit = {}) {
+  const code = exit.code ?? null;
+  if (code === 0 || code === null || parsed.isError) return parsed;
+  const stderr = typeof exit.stderr === "string" ? exit.stderr.trim() : "";
+  return {
+    ...parsed,
+    isError: true,
+    apiErrorStatus: stderr || `freebuff exited ${code}`,
+  };
+}
+
+/**
  * Detect Freebuff session/limit states and classify them.
  *
  * Known Freebuff session statuses (from Codebuff source, inferred — UNVERIFIED
@@ -380,13 +403,17 @@ async function main() {
 
   await new Promise((resolve) => {
     const lines = [];
+    let stderr = "";
     const child = spawn(argv[0], argv.slice(1), {
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout.on("data", (d) => {
       for (const l of d.toString().split("\n")) if (l.trim()) lines.push(l);
     });
-    child.stderr.on("data", (d) => process.stderr.write(d));
+    child.stderr.on("data", (d) => {
+      stderr += d.toString();
+      process.stderr.write(d);
+    });
     child.on("error", (err) => {
       process.stderr.write(
         `\nSPIKE BLOCKED: failed to spawn freebuff — ${err.message}\n` +
@@ -396,7 +423,10 @@ async function main() {
     });
     child.on("close", (code) => {
       process.stderr.write(`\nfreebuff exited ${code}\n`);
-      const parsed = parseFreebuffEvents(lines);
+      const parsed = finalizeFreebuffResult(parseFreebuffEvents(lines), {
+        code,
+        stderr,
+      });
       const limit = detectFreebuffLimit(lines);
       process.stdout.write(JSON.stringify({ parsed, limit }, null, 2) + "\n");
       resolve();

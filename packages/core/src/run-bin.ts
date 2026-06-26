@@ -692,6 +692,11 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
   // Shared runLoop options; only `inputs` and `budgetUsd` vary per sub-issue.
   const loopBase = {
     stages,
+    // Issue #177: hand the loop the reviewer from the bin's full chain so a
+    // `--plan` + `--fan-out` run that lands implementation work can review the
+    // aggregated diff instead of re-authoring the plan. `--plan` swaps `stages`
+    // to `[planStage]`, so the reviewer must come from `cfg.stages`.
+    reviewStage: cfg.stages.find((s) => s.name === "reviewer"),
     iterations,
     workspaceDir: effectiveWorkspaceDir,
     packageDir,

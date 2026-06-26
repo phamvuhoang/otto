@@ -60,6 +60,13 @@ export {
   type ContextSegment,
 } from "./context-report.js";
 export {
+  classifyLifecycle,
+  summarizeLifecycle,
+  type ContextLifecycle,
+  type LifecycleSummary,
+  type LifecycleTotals,
+} from "./context-lifecycle.js";
+export {
   DEFAULT_COMMITS_BUDGET_CHARS,
   compactCommits,
   formatCompactedCommits,

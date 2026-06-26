@@ -1,11 +1,13 @@
 # Freebuff CLI adapter spike (Phase 0)
 
-**Status:** spike complete · conclusion: **`requires-upstream`** · no production
-`--agent freebuff` support ships from this phase. The live smoke could not run on
-this host (no `freebuff` binary present), and public Codebuff source confirms
-Freebuff mode's arg parser intentionally does not accept initial prompt args.
-The spike harness lives in `scripts/freebuff-spike.{mjs,test.mjs}` as a
-non-shipping reference; the unit tests run without any binary.
+**Status:** spike complete · conclusion: **`requires-upstream`** (confirmed live
+against `freebuff` v0.0.115 on 2026-06-26) · no production `--agent freebuff`
+support ships from this phase. The live smoke **was run against the real binary**
+and confirms what public Codebuff source predicted: Freebuff's CLI exposes only a
+`login` subcommand and `--continue`/`--cwd` options — it rejects any prompt
+argument and has no `exec`/`--json` headless path. The spike harness lives in
+`scripts/freebuff-spike.{mjs,test.mjs}` as a non-shipping reference; the unit
+tests run without any binary.
 
 **Goal:** confirm whether the Freebuff CLI (`freebuff`) can satisfy Otto's
 non-interactive loop contract, and map each Claude-specific runner seam to its
@@ -20,7 +22,9 @@ node scripts/freebuff-spike.mjs "Reply: ok"        # live smoke — needs a work
 ```
 
 The harness lives in `scripts/` (not `packages/core/src/`) and ships in no
-tarball. It exports four symbols:
+tarball. The live-smoke `main()` is guarded by an `import.meta.url` check, so
+importing the module in the unit tests never spawns anything. It exports five
+symbols:
 
 - `freebuffPreflight(probes)` — three-check preflight: CLI on PATH, version
   probe (catches launcher/native-binary mismatch), credential/session readiness.
@@ -34,38 +38,49 @@ tarball. It exports four symbols:
   (`rate_limited`, `queued`, `country_blocked`, `banned`, `takeover_prompt`,
   `model_unavailable`) into `rate-limit`, `headless-not-ready`, or `fatal`
   (inferred from Codebuff source, UNVERIFIED as CLI output).
+- `finalizeFreebuffResult(parsed, { code, stderr })` — folds the child process
+  exit code and stderr into the parsed result, so a non-zero exit with no stdout
+  events surfaces as an error (added after the live smoke exposed that gap).
 
 The production adapter would live in `packages/core/src/runner.ts` and
 `packages/core/src/preflight.ts`. Schemas flagged **UNVERIFIED** need a live
 binary to confirm.
 
-## Live-smoke blocker (this host)
+## Live-smoke results (`freebuff` v0.0.115, 2026-06-26)
 
-`freebuff` is **not installed** on this host. `npm install -g freebuff` has not
-been run; `freebuff` is not on PATH; `freebuff --version` cannot be invoked.
+The binary was installed (`npm install -g freebuff`, v0.0.115) and probed on a
+host that already had an authenticated session (`~/.config/manicode/credentials.json`).
+All probes ran with stdin closed and a hard timeout so the interactive TUI could
+not hang the session. Results:
 
-Beyond the missing binary, public Codebuff source (the repository that publishes
-`freebuff`) shows that Freebuff mode's argument parser exposes only:
+| Probe                                           | Result                                                                                                                                                                                                                                |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `freebuff --version`                            | **exit 0**, prints `0.0.115`. On first run the launcher lazily downloads a 33.1 MB native binary, then succeeds. (`npm` ran with `allow-scripts` off, so the `postinstall` was skipped; the launcher self-heals on first invocation.) |
+| `freebuff --help`                               | Lists `Usage: freebuff [options] [command]`; the **only** command is `login`; options are `--continue [id]`, `--cwd <dir>`, `-v/--version`, `-h/--help`. No `exec`, no `--json`, no positional prompt.                                |
+| `freebuff "say hello and exit"` (prompt as arg) | **exit 1** — `error: command-argument value '…' is invalid for argument 'command'. Allowed choices are login.`                                                                                                                        |
+| `freebuff exec --json "…"` (preferred contract) | **exit 1** — `error: unknown option '--json'`. The hypothesized headless contract does not exist.                                                                                                                                     |
+| bare `freebuff --cwd <dir>` (stdin closed)      | Drops into the interactive **TUI** (alternate-screen, "Connecting…" spinner) and **does not exit** — had to be SIGTERM'd at the timeout. With no prompt path it hangs in any headless context.                                        |
+| `~/.config/manicode/credentials.json`           | Present; shape `{ default: { id, name, email, authToken, fingerprintId, fingerprintHash } }`. Confirms the auth-preflight source and that an `authToken` is the credential.                                                           |
 
-- `--continue` — resume the last session
-- `--cwd` — set working directory
-- `login` — authenticate interactively
-- `help` / version flags
+Harness validation: `node scripts/freebuff-spike.mjs "print hello"` reported
+preflight **cli: ok / version: ok (0.0.115) / auth: ok** — all three green — then
+spawned `freebuff exec --json …`, which the real binary rejected (`exited 1`).
+The live run also exposed a harness gap (now fixed): a non-zero exit with no
+stdout events was returned as `isError: false`. `finalizeFreebuffResult()` now
+folds the child exit code + stderr into the result, so the live failure surfaces
+as `isError: true, apiErrorStatus: "error: unknown option '--json'"`.
 
-It **intentionally does not accept initial prompt arguments**. Codebuff (paid)
-mode accepts `[prompt...]`; Freebuff does not. This means even on a host where
-the binary is installed, passing a prompt via argv in the current release is
-expected to fail.
+**Conclusion of the live smoke: blocked, exactly as predicted.** The current
+Freebuff release has no non-interactive prompt path; bare invocation hangs in a
+TUI. This is hard evidence (not inference) that the gate cannot clear on v0.0.115.
 
-The live smoke gate therefore remains open pending both:
+The live smoke gate remains open pending a Freebuff release (or undocumented
+mode) that accepts a non-interactive prompt and exits deterministically —
+preferred upstream contract: `freebuff exec --json --cwd <workspace> <prompt>`.
 
-1. A host where `freebuff --version` succeeds.
-2. A Freebuff release (or undocumented mode) that accepts a non-interactive
-   prompt path — or an upstream feature request to add `freebuff exec --json`.
-
-Note the failure mode for preflight: because an npm shim might be present on
-PATH while the vendored native binary is absent (the same pattern seen with the
-Codex adapter in `codex-runtime-spike.md`), a robust preflight must treat
+Preflight note: an npm shim can be present on PATH while the native binary is
+absent (the launcher downloads it lazily — observed live above), the same
+pattern seen with the Codex adapter. A robust preflight must treat
 "`freebuff --version` exits non-zero" as not-usable, not just "binary on PATH".
 `freebuffPreflight` handles this via the injectable `runVersion` probe.
 
@@ -117,10 +132,11 @@ emit if one existed:
 ## Answers to the Open Questions (PRD §10)
 
 **Does the distributed `freebuff` binary have an undocumented headless mode?**
-Unknown — not confirmed against a live binary. Public Codebuff source shows
-Freebuff mode's arg parser exposes only `--continue`, `--cwd`, `login`, help,
-and version. No `exec` subcommand or `--json` flag is visible. An undocumented
-mode may exist but cannot be confirmed here.
+**No (confirmed on v0.0.115).** `freebuff --help` lists only the `login`
+command with `--continue`/`--cwd`/version/help options. A prompt argument is
+rejected (`Allowed choices are login`), `--json` is an `unknown option`, and
+bare invocation enters an interactive TUI. No headless mode is reachable through
+any documented or guessed flag in this release.
 
 **Can Freebuff accept a prompt via stdin and then exit after completion?**
 Unknown — needs a live binary. The current public CLI surface gives no evidence
@@ -164,20 +180,22 @@ as actual CLI output; it matches the Codebuff source session enum.
    in the harness is inferred from Codebuff source, not captured from a real run.
 5. **Reset time gap** — Freebuff does not surface a rate-limit reset time;
    `resetsAt` is always `null`, and the retry path must tolerate that.
-6. **Version-probe completeness** — `freebuff --version` behavior with a missing
-   native binary (the known npm platform-binary failure mode) is untested on a
-   host that actually has the shim installed.
+6. **Version-probe behavior** — confirmed live: `freebuff --version` lazily
+   downloads the native binary on first run then exits 0 with `0.0.115`. The
+   missing-native-binary failure mode self-heals via download, so preflight must
+   also tolerate the first-run download latency, not only a hard version failure.
 7. **Cost derivation** — Freebuff is free/ad-supported; `costUsd: 0` is the
    correct default and should not need a pricing table.
 
 ## Conclusion
 
-**`requires-upstream`**
+**`requires-upstream`** (confirmed live against v0.0.115)
 
-The live-smoke gate cannot be cleared on this host: the `freebuff` binary is not
-installed, and public Codebuff source confirms Freebuff mode intentionally omits
-initial prompt argument support. No non-interactive prompt path is provable from
-either local binary access or public documentation.
+The live smoke ran against the real binary and confirms the gate cannot clear:
+`freebuff` v0.0.115 rejects any prompt argument, has no `exec`/`--json` headless
+path, and hangs in an interactive TUI on bare invocation. Binary presence,
+version, and authenticated credentials are all fine — the missing piece is purely
+the non-interactive prompt contract, which the current release does not provide.
 
 Otto needs an upstream Freebuff headless contract — preferred:
 `freebuff exec --json --cwd <workspace> <prompt>` — before Phases 1–6 can

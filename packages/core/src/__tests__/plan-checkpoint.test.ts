@@ -66,9 +66,30 @@ describe("resolvePlanCheckpoint", () => {
   });
 
   it("reads and parses the operator's answer when interactive", async () => {
-    expect(await resolvePlanCheckpoint("P", deps(true, "yes").d)).toBe("approve");
+    expect(await resolvePlanCheckpoint("P", deps(true, "yes").d)).toBe(
+      "approve"
+    );
     expect(await resolvePlanCheckpoint("P", deps(true, "edit").d)).toBe("edit");
     expect(await resolvePlanCheckpoint("P", deps(true, "").d)).toBe("reject");
+  });
+
+  it("auto-approves when the operator never answers within timeoutMs (AFK on a TTY)", async () => {
+    // readLine that resolves only when its abort signal fires — models a real
+    // stdin read that nobody answers.
+    const lines: string[] = [];
+    const decision = await resolvePlanCheckpoint("P", {
+      interactive: true,
+      timeoutMs: 5,
+      out: (m) => lines.push(m),
+      readLine: (signal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError"))
+          );
+        }),
+    });
+    expect(decision).toBe("approve");
+    expect(lines.join("\n")).toMatch(/auto-approved \(AFK fallback\)/i);
   });
 
   it("prints the prompt", async () => {

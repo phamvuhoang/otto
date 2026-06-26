@@ -27,7 +27,8 @@ export type CheckpointDecision = "approve" | "edit" | "reject";
  */
 export function parseCheckpointResponse(raw: string): CheckpointDecision {
   const a = raw.trim().toLowerCase();
-  if (a === "y" || a === "yes" || a === "a" || a === "approve") return "approve";
+  if (a === "y" || a === "yes" || a === "a" || a === "approve")
+    return "approve";
   if (a === "e" || a === "edit") return "edit";
   return "reject";
 }
@@ -50,8 +51,17 @@ export function formatCheckpointPrompt(opts: {
 export type PlanCheckpointDeps = {
   /** Whether a human is present to answer (e.g. `process.stdin.isTTY`). */
   interactive: boolean;
-  /** Read one line of operator input; only called when `interactive`. */
-  readLine: () => Promise<string>;
+  /**
+   * Read one line of operator input; only called when `interactive`. Receives an
+   * abort signal that fires when `timeoutMs` elapses so the underlying read can be
+   * cancelled (otherwise an AFK run launched from a TTY blocks forever).
+   */
+  readLine: (signal?: AbortSignal) => Promise<string>;
+  /**
+   * Auto-approve if the operator does not answer within this window — an AFK run
+   * may have a TTY but no human. `0`/omitted keeps the read open indefinitely.
+   */
+  timeoutMs?: number;
   out: (msg: string) => void;
 };
 
@@ -72,5 +82,23 @@ export async function resolvePlanCheckpoint(
     );
     return "approve";
   }
-  return parseCheckpointResponse(await deps.readLine());
+  const timeoutMs = deps.timeoutMs ?? 0;
+  if (timeoutMs <= 0) {
+    return parseCheckpointResponse(await deps.readLine());
+  }
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    return parseCheckpointResponse(await deps.readLine(ac.signal));
+  } catch (err) {
+    if (ac.signal.aborted) {
+      deps.out(
+        `No response within ${Math.round(timeoutMs / 1000)}s — plan auto-approved (AFK fallback).`
+      );
+      return "approve";
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }

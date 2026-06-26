@@ -18,6 +18,7 @@ import { resolveTierLadder, type TierLadder } from "./model-tier.js";
 import { discoverPlanTasks } from "./plan-tasks.js";
 import { reviewsFanoutInsteadOfReplan } from "./plan-fanout.js";
 import {
+  formatInputSharpness,
   formatSharpeningGuidance,
   scoreInputSharpness,
 } from "./input-sharpness.js";
@@ -405,14 +406,16 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     contextCompressor = "off",
   } = opts;
 
-  // Input sharpening (issue #180 P23): in --plan mode, score the run's input once
-  // and build the bounded sharpening-guidance block injected into the plan stage
-  // via the `{{ SHARPENING }}` template var. Empty when off, not planning, or the
-  // input is already sharp — so the plan prompt is byte-identical by default.
-  const sharpeningGuidance =
-    sharpenInput && mode === "plan"
-      ? formatSharpeningGuidance(scoreInputSharpness(inputs))
-      : "";
+  // Input sharpening (issue #180 P23): in --plan mode, score the run's input once.
+  // The score drives the bounded `{{ SHARPENING }}` guidance injected into the
+  // plan stage and is recorded on the manifest as evidence (the gaps the run had
+  // to assume). Null when off or not planning ⇒ the plan prompt is byte-identical
+  // and the manifest carries no sharpness block.
+  const inputSharpness =
+    sharpenInput && mode === "plan" ? scoreInputSharpness(inputs) : null;
+  const sharpeningGuidance = inputSharpness
+    ? formatSharpeningGuidance(inputSharpness)
+    : "";
 
   // One in-run console sink per run (issue #65 P10): quiet ConsoleUi by default,
   // the full firehose under --verbose. Threaded into every stage via executeStage.
@@ -768,6 +771,15 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         exitReason: reason,
         nextAction: nextActionFor(reason),
         artifacts: [],
+        ...(inputSharpness
+          ? {
+              inputSharpness: {
+                metCount: inputSharpness.metCount,
+                maxScore: inputSharpness.maxScore,
+                unknowns: inputSharpness.unknowns,
+              },
+            }
+          : {}),
         startedAt: manifestStartedAt,
         finishedAt: nowIso(),
       };
@@ -794,6 +806,15 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         nextAction: nextActionFor(reason),
         artifacts: collectArtifacts(),
         ...(runSkillsUsed.length > 0 ? { skillsUsed: runSkillsUsed } : {}),
+        ...(inputSharpness
+          ? {
+              inputSharpness: {
+                metCount: inputSharpness.metCount,
+                maxScore: inputSharpness.maxScore,
+                unknowns: inputSharpness.unknowns,
+              },
+            }
+          : {}),
         startedAt: manifestStartedAt,
         finishedAt: nowIso(),
       });
@@ -968,6 +989,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       );
       await sleep(waitMs, activeSignal);
     }
+  }
+
+  // Input sharpening (issue #180 P23): show the operator the input-sharpness
+  // scorecard at run start so the gaps the plan author must assume are visible
+  // up front, mirroring how the plan gate prints its rubric.
+  if (inputSharpness) {
+    process.stderr.write(`${dim(formatInputSharpness(inputSharpness))}\n`);
   }
 
   try {

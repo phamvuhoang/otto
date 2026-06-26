@@ -373,6 +373,14 @@ describe("runLoop", () => {
     const prompt = String(mocks.runStage.mock.calls[0][1]);
     expect(prompt).toContain("Input sharpening");
     expect(prompt).toContain("## Decisions");
+
+    // The sharpness assessment is recorded on the manifest as evidence (#180 s3).
+    const manifest = readManifest(
+      dirs.workspaceDir,
+      listRunIds(dirs.workspaceDir)[0]
+    );
+    expect(manifest?.inputSharpness?.maxScore).toBe(5);
+    expect(manifest?.inputSharpness?.unknowns.length).toBeGreaterThan(0);
   });
 
   it("leaves the plan prompt unchanged when --sharpen-input is off (default, inert) (#180)", async () => {
@@ -399,6 +407,13 @@ describe("runLoop", () => {
     expect(prompt).not.toContain("Input sharpening");
     // The {{ SHARPENING }} var resolves to empty, never leaking as a literal tag.
     expect(prompt).not.toContain("{{ SHARPENING }}");
+
+    // Sharpening off ⇒ no sharpness block on the manifest (#180 s3).
+    const manifest = readManifest(
+      dirs.workspaceDir,
+      listRunIds(dirs.workspaceDir)[0]
+    );
+    expect(manifest?.inputSharpness).toBeUndefined();
   });
 
   it("injects a validated skill + records skillsUsed when activation is on (P18)", async () => {

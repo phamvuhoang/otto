@@ -11,6 +11,10 @@ function charsOf(b: ContextBreakdown, category: string): number {
   return b.segments.find((s) => s.category === category)?.chars ?? 0;
 }
 
+function lifecycleOf(b: ContextBreakdown, category: string): string | undefined {
+  return b.segments.find((s) => s.category === category)?.lifecycle;
+}
+
 describe("estimateTokens", () => {
   it("is ceil(chars / 4)", () => {
     expect(estimateTokens(0)).toBe(0);
@@ -53,6 +57,32 @@ describe("analyzeContext", () => {
     expect(sum).toBe(prompt.length);
     expect(b.totalChars).toBe(prompt.length);
     expect(b.estimatedTokens).toBe(estimateTokens(prompt.length));
+  });
+
+  it("derives a lifecycle class onto each segment", () => {
+    const prompt = [
+      "<commits>",
+      "abc123 fix things",
+      "</commits>",
+      "<learnings>",
+      "# Otto learnings",
+      "be careful",
+      "</learnings>",
+      "<inputs>",
+      "the plan and prd",
+      "</inputs>",
+      "# THE TASK",
+      "do the work",
+    ].join("\n");
+
+    const b = analyzeContext(prompt);
+
+    expect(lifecycleOf(b, "commits")).toBe("resolved");
+    expect(lifecycleOf(b, "learnings")).toBe("durable");
+    expect(lifecycleOf(b, "inputs")).toBe("required-now");
+    expect(lifecycleOf(b, "playbook")).toBe("required-now");
+    // every present segment carries a lifecycle
+    expect(b.segments.every((s) => typeof s.lifecycle === "string")).toBe(true);
   });
 
   it("treats afk <inputs> and ghafk <issues-summary>/<issues-full-file> as inputs", () => {

@@ -13,12 +13,23 @@
  * prompt made of") that a single usage total cannot.
  */
 
+import {
+  classifyLifecycle,
+  type ContextLifecycle,
+} from "./context-lifecycle.js";
+
 export type ContextCategory = "commits" | "learnings" | "inputs" | "playbook";
 
 export type ContextSegment = {
   category: ContextCategory;
   chars: number;
   estimatedTokens: number;
+  /**
+   * The orthogonal lifecycle class derived from `category` (see
+   * `context-lifecycle.ts`) — *why* the segment is still in the window and
+   * whether it could be freed. Optional so older serialized breakdowns parse.
+   */
+  lifecycle?: ContextLifecycle;
 };
 
 export type ContextBreakdown = {
@@ -82,6 +93,7 @@ export function analyzeContext(prompt: string): ContextBreakdown {
       category,
       chars,
       estimatedTokens: estimateTokens(chars),
+      lifecycle: classifyLifecycle(category),
     }))
     .sort((a, b) => b.chars - a.chars);
 

@@ -150,22 +150,22 @@ no template changes in this slice.
 
 **Testable success criteria (done-when):**
 
-1. `classifyLifecycle` is a total function over all four `ContextCategory` values,
-   returning `required-now` for `playbook`/`inputs`, `resolved` for `commits`,
-   `durable` for `learnings` — pinned by a table test in
-   `context-lifecycle.test.ts`.
-2. `analyzeContext(prompt).segments[i].lifecycle` is present and correct for a
-   prompt containing each block — pinned in `context-report.test.ts`.
-3. `assessFreeableContext` reports the `resolved` (commits) bytes as _retirable_
-   and any `retrievable` bytes as _compressible_, with a token estimate, and
-   reports zero freeable when only `required-now`/`durable` segments exist —
-   pinned in `context-lifecycle.test.ts`.
-4. `otto-afk --context-report` output includes a lifecycle-totals line and a
-   freeable-context line for a run whose stage records carry breakdowns — pinned
-   in `context-report-cli.test.ts`.
-5. A **large-context fixture** (commits/learnings/inputs each ≥ a few KB) yields a
-   report that names the commits block as resolved/retirable and the learnings
-   block as durable — pinned in `context-report-cli.test.ts`.
-6. No behavior change: `analyzeContext` totals/segments order are unchanged
-   (existing assertions still pass); nothing runs a stage or mutates a prompt.
-7. `pnpm -r typecheck && pnpm -r test && pnpm test` all green.
+- `classifyLifecycle` is a total function over all four `ContextCategory` values,
+  returning `required-now` for `playbook`/`inputs`, `resolved` for `commits`,
+  `durable` for `learnings` — pinned by a table test in
+  `context-lifecycle.test.ts`.
+- `analyzeContext(prompt).segments[i].lifecycle` is present and correct for a
+  prompt containing each block — pinned in `context-report.test.ts`.
+- `assessFreeableContext` reports the `resolved` (commits) bytes as _retirable_
+  and any `retrievable` bytes as _compressible_, with a token estimate, and
+  reports zero freeable when only `required-now`/`durable` segments exist —
+  pinned in `context-lifecycle.test.ts`.
+- `otto-afk --context-report` output includes a lifecycle-totals line and a
+  freeable-context line for a run whose stage records carry breakdowns — pinned
+  in `context-report-cli.test.ts`.
+- A **large-context fixture** (commits/learnings/inputs each ≥ a few KB) yields a
+  report that names the commits block as resolved/retirable and the learnings
+  block as durable — pinned in `context-report-cli.test.ts`.
+- No behavior change: `analyzeContext` totals/segments order are unchanged
+  (existing assertions still pass); nothing runs a stage or mutates a prompt.
+- `pnpm -r typecheck && pnpm -r test && pnpm test` all green.

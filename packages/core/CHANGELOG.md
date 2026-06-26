@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.28.3...otto-core-v0.29.0) (2026-06-26)
+
+
+### Features
+
+* **context:** P22 context-lifecycle reporting slice (T1–T4) ([#178](https://github.com/phamvuhoang/otto/issues/178)) ([072f444](https://github.com/phamvuhoang/otto/commit/072f4440590e5259c957a739cd24c3bf4236a0f6))
+
 ## [0.28.3](https://github.com/phamvuhoang/otto/compare/otto-core-v0.28.2...otto-core-v0.28.3) (2026-06-26)
 
 

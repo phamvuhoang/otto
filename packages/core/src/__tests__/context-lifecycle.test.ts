@@ -5,6 +5,7 @@ import {
   assessFreeableContext,
   classifyLifecycle,
   formatFreeableContext,
+  lifecycleRationale,
   summarizeLifecycle,
   type ContextLifecycle,
 } from "../context-lifecycle.js";
@@ -21,6 +22,24 @@ describe("classifyLifecycle", () => {
     for (const [category, lifecycle] of table) {
       expect(classifyLifecycle(category)).toBe(lifecycle);
     }
+  });
+});
+
+describe("lifecycleRationale", () => {
+  it("returns a distinct, non-empty 'why is this still in context?' rationale per class", () => {
+    const classes: ContextLifecycle[] = [
+      "required-now",
+      "resolved",
+      "durable",
+      "retrievable",
+    ];
+    const rationales = classes.map((c) => lifecycleRationale(c));
+    // Every class has a non-empty rationale.
+    for (const r of rationales) {
+      expect(r.length).toBeGreaterThan(0);
+    }
+    // The four rationales are all distinct.
+    expect(new Set(rationales).size).toBe(classes.length);
   });
 });
 

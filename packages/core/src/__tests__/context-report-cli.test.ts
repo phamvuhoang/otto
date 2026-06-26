@@ -62,7 +62,14 @@ describe("formatContextReportRun", () => {
 
   it("renders per-stage composition with category shares and an estimate label", () => {
     const out = formatContextReportRun("run-1", [
-      stage(1, "implementer", breakdown(1000, [["learnings", 400], ["playbook", 600]])),
+      stage(
+        1,
+        "implementer",
+        breakdown(1000, [
+          ["learnings", 400],
+          ["playbook", 600],
+        ])
+      ),
     ]);
     expect(out).toContain("iter1");
     expect(out).toContain("implementer");
@@ -160,6 +167,27 @@ describe("formatContextReportRun", () => {
     expect(out).toContain("retire resolved");
     expect(out).toContain("durable");
   });
+
+  it("names a large issue-body block as retrievable/compressible and the commits as resolved/retirable, with per-class rationale (P22 slice2 T2)", () => {
+    // A ghafk-style rendered prompt: a multi-KB pasted issue body plus a commit log.
+    const fill = (label: string) => `${label} `.repeat(2000);
+    const prompt = [
+      `<issues-full-file>\n${fill("pasted github issue body line")}\n</issues-full-file>`,
+      `<commits>\n${fill("old settled diff line")}\n</commits>`,
+      "Workflow playbook instructions for this stage.",
+    ].join("\n");
+    const b = analyzeContext(prompt);
+    const out = formatContextReportRun("run-1", [stage(1, "implementer", b)]);
+
+    // The freeable line names the issue body as compressible (retrievable) and
+    // the commit log as retirable (resolved).
+    expect(out).toContain("compress retrievable");
+    expect(out).toContain("retire resolved");
+    // A per-class "why is this still in context?" rationale is rendered.
+    expect(out).toMatch(/why is this still in context/i);
+    expect(out).toContain("retrievable");
+    expect(out).toContain("resolved");
+  });
 });
 
 describe("runContextReport", () => {
@@ -188,12 +216,24 @@ describe("runContextReport", () => {
     const ws = tmp();
     const older = "2026-06-20T00-00-00-000Z-1";
     const newer = "2026-06-20T09-00-00-000Z-1";
-    writeStageRecord(ws, older, 0, stage(1, "implementer", breakdown(800, [["playbook", 800]])));
+    writeStageRecord(
+      ws,
+      older,
+      0,
+      stage(1, "implementer", breakdown(800, [["playbook", 800]]))
+    );
     writeStageRecord(
       ws,
       newer,
       0,
-      stage(1, "implementer", breakdown(1000, [["learnings", 400], ["playbook", 600]]))
+      stage(
+        1,
+        "implementer",
+        breakdown(1000, [
+          ["learnings", 400],
+          ["playbook", 600],
+        ])
+      )
     );
     const { d, lines } = deps(ws);
     expect(await runContextReport(d)).toBe(0);

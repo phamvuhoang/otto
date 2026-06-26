@@ -63,6 +63,7 @@ export {
   assessFreeableContext,
   classifyLifecycle,
   formatFreeableContext,
+  lifecycleRationale,
   summarizeLifecycle,
   type ContextLifecycle,
   type FreeableAction,

@@ -4,6 +4,7 @@ import { summarizeToolCompression } from "./context-compressor.js";
 import {
   assessFreeableContext,
   formatFreeableContext,
+  lifecycleRationale,
   summarizeLifecycle,
 } from "./context-lifecycle.js";
 import { type ContextBreakdown } from "./context-report.js";
@@ -128,6 +129,15 @@ export function formatContextReportRun(
       .join(" · ")}`,
     `  ${formatFreeableContext(assessFreeableContext(combined))}`
   );
+  // "Why is this still in context?" — a per-class rationale for the classes
+  // actually present this run, closing P22 scope bullet 2 (the plain-language
+  // breakdown alongside the freeable estimate above).
+  if (lifecycle.byLifecycle.length > 0) {
+    lines.push("  Why is this still in context?");
+    for (const t of lifecycle.byLifecycle) {
+      lines.push(`    ${t.lifecycle}: ${lifecycleRationale(t.lifecycle)}`);
+    }
+  }
 
   // Cache efficiency (slice 4) — authoritative provider usage, independent of
   // the estimated-token composition above. Drawn from EVERY stage's usage (not

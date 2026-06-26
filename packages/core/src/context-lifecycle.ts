@@ -56,6 +56,24 @@ export function classifyLifecycle(category: ContextCategory): ContextLifecycle {
   }
 }
 
+/**
+ * Plain-language "why is this still in context?" rationale for each lifecycle
+ * class — the breakdown the P22 roadmap asks the report to surface alongside the
+ * "can be freed" estimate. Pure and total over {@link ContextLifecycle}.
+ */
+export function lifecycleRationale(lifecycle: ContextLifecycle): string {
+  switch (lifecycle) {
+    case "required-now":
+      return "the active task and stage contract — must stay in the window";
+    case "resolved":
+      return "settled prior-iteration work — reconstructable from the commit log, so retirable";
+    case "durable":
+      return "governed memory and final decisions — kept, but compactable";
+    case "retrievable":
+      return "reconstructable evidence (issue bodies, logs, command output) — re-fetchable on demand, so compressible";
+  }
+}
+
 export type LifecycleTotals = {
   lifecycle: ContextLifecycle;
   chars: number;

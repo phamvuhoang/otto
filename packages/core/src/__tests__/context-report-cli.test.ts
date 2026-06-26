@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import type { ContextBreakdown } from "../context-report.js";
+import { analyzeContext, type ContextBreakdown } from "../context-report.js";
 import {
   formatContextReportRun,
   runContextReport,
@@ -119,6 +119,46 @@ describe("formatContextReportRun", () => {
       stage(1, "implementer", breakdown(400, [["playbook", 400]])),
     ]);
     expect(out).not.toMatch(/cache efficiency/i);
+  });
+
+  it("rolls up lifecycle totals and a freeable-context line across measured stages (P11 T4)", () => {
+    const out = formatContextReportRun("run-1", [
+      stage(
+        1,
+        "implementer",
+        breakdown(2000, [
+          ["commits", 800],
+          ["learnings", 400],
+          ["inputs", 400],
+          ["playbook", 400],
+        ])
+      ),
+    ]);
+    // Lifecycle rollup: commits→resolved, learnings→durable, inputs/playbook→required-now.
+    expect(out).toMatch(/lifecycle/i);
+    expect(out).toContain("required-now");
+    expect(out).toContain("resolved");
+    expect(out).toContain("durable");
+    // Freeable dry run: resolved (commits) is retirable.
+    expect(out).toMatch(/freeable context/i);
+    expect(out).toContain("retire resolved");
+  });
+
+  it("identifies resolved (commits) and durable (learnings) in a large-context fixture (P11 T4)", () => {
+    // A rendered prompt with commits/learnings/inputs blocks each several KB.
+    const fill = (label: string) => `${label} `.repeat(2000);
+    const prompt = [
+      `<commits>\n${fill("old settled diff line")}\n</commits>`,
+      `<learnings>\n${fill("durable governed decision")}\n</learnings>`,
+      `<inputs>\n${fill("active task source")}\n</inputs>`,
+      "Workflow playbook instructions for this stage.",
+    ].join("\n");
+    const b = analyzeContext(prompt);
+    const out = formatContextReportRun("run-1", [stage(1, "implementer", b)]);
+    // commits block named resolved + retirable; learnings block named durable.
+    expect(out).toContain("resolved");
+    expect(out).toContain("retire resolved");
+    expect(out).toContain("durable");
   });
 });
 

@@ -2,6 +2,12 @@ import { resolve } from "node:path";
 
 import { summarizeToolCompression } from "./context-compressor.js";
 import {
+  assessFreeableContext,
+  formatFreeableContext,
+  summarizeLifecycle,
+} from "./context-lifecycle.js";
+import { type ContextBreakdown } from "./context-report.js";
+import {
   listRunIds,
   readStageRecords,
   type StageRecord,
@@ -103,6 +109,25 @@ export function formatContextReportRun(
       }${pct.format(deltaPct)}%, ${trend})`
     );
   }
+
+  // Lifecycle rollup + freeable-context dry run (issue #66 P11, T4) — aggregate
+  // every measured breakdown's segments by lifecycle class, so the operator sees
+  // which part of the window is required-now vs resolved/durable and what a dry
+  // run could free. Read-only: `assessFreeableContext` recommends, mutates nothing.
+  const allSegments = measured.flatMap((s) => s.contextBreakdown!.segments);
+  const combined: ContextBreakdown = {
+    totalChars: allSegments.reduce((a, b) => a + b.chars, 0),
+    estimatedTokens: allSegments.reduce((a, b) => a + b.estimatedTokens, 0),
+    segments: allSegments,
+  };
+  const lifecycle = summarizeLifecycle(combined);
+  lines.push(
+    "",
+    `  Lifecycle: ${lifecycle.byLifecycle
+      .map((t) => `${t.lifecycle} ~${num.format(t.estimatedTokens)} tokens`)
+      .join(" · ")}`,
+    `  ${formatFreeableContext(assessFreeableContext(combined))}`
+  );
 
   // Cache efficiency (slice 4) — authoritative provider usage, independent of
   // the estimated-token composition above. Drawn from EVERY stage's usage (not

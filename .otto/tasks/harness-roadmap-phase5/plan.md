@@ -39,7 +39,7 @@ and automatic retirement are out of scope (see spec Scope guard).
       Dry-run only — returns a recommendation, mutates nothing.
       verify: `pnpm -r typecheck && pnpm -r test`
 
-- [ ] **T4 — Wire lifecycle totals + freeable section into `--context-report`,
+- [x] **T4 — Wire lifecycle totals + freeable section into `--context-report`,
       with the large-context fixture.**
       Failing test first: extend
       `packages/core/src/__tests__/context-report-cli.test.ts` with (a) an assertion

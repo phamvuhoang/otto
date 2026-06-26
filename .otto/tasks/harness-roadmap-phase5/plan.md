@@ -27,7 +27,7 @@ and automatic retirement are out of scope (see spec Scope guard).
       `StageRecord.contextBreakdown` now carries lifecycle for free (serialization is
       untouched). verify: `pnpm -r typecheck && pnpm -r test`
 
-- [ ] **T3 — Freeable-context dry-run assessor + formatter (pure).**
+- [x] **T3 — Freeable-context dry-run assessor + formatter (pure).**
       Failing test first: extend `context-lifecycle.test.ts` with an
       `assessFreeableContext(breakdown)` case — a breakdown with a large `commits`
       (`resolved`) segment reports those bytes as _retirable_ with a token estimate; a

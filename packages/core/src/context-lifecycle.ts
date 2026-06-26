@@ -93,3 +93,93 @@ export function summarizeLifecycle(breakdown: ContextBreakdown): LifecycleSummar
     byLifecycle: totals,
   };
 }
+
+/**
+ * What could be done to a freeable lifecycle class without losing information
+ * the run still needs:
+ *
+ * - `retire` — settled prior-iteration discussion (`resolved`) can drop out of
+ *   the window entirely; it is reconstructable from the commit log.
+ * - `compress` — bulky reconstructable context (`retrievable`: logs, issue
+ *   bodies, command output) can be summarized/spilled rather than dropped.
+ */
+export type FreeableAction = "retire" | "compress";
+
+/** Lifecycle classes a dry-run report may name as freeable, and how. */
+const FREEABLE_ACTIONS: Partial<Record<ContextLifecycle, FreeableAction>> = {
+  resolved: "retire",
+  retrievable: "compress",
+};
+
+export type FreeableSegment = {
+  lifecycle: ContextLifecycle;
+  action: FreeableAction;
+  chars: number;
+  estimatedTokens: number;
+};
+
+export type FreeableContextAssessment = {
+  /** Chars that could be freed (retired + compressed); 0 when nothing is freeable. */
+  freeableChars: number;
+  /** Estimated tokens that could be freed; 0 when nothing is freeable. */
+  freeableTokens: number;
+  /** Per-lifecycle freeable footprint, sorted by tokens descending; empty omitted. */
+  segments: FreeableSegment[];
+};
+
+/**
+ * Dry-run "freeable context" recommendation: name the `resolved` context as
+ * _retirable_ and the `retrievable` context as _compressible_, with estimated
+ * token savings. `required-now` and `durable` are never freeable. Pure: returns
+ * a recommendation, mutates nothing — retiring/compressing for real is a later
+ * slice gated on this report being trusted. Token totals sum the per-segment
+ * estimates so they are rounding-stable against the breakdown's own segments.
+ */
+export function assessFreeableContext(
+  breakdown: ContextBreakdown
+): FreeableContextAssessment {
+  const byLifecycle = new Map<ContextLifecycle, FreeableSegment>();
+  for (const segment of breakdown.segments) {
+    const lifecycle = segment.lifecycle ?? classifyLifecycle(segment.category);
+    const action = FREEABLE_ACTIONS[lifecycle];
+    if (!action) continue;
+    const entry = byLifecycle.get(lifecycle) ?? {
+      lifecycle,
+      action,
+      chars: 0,
+      estimatedTokens: 0,
+    };
+    entry.chars += segment.chars;
+    entry.estimatedTokens += segment.estimatedTokens;
+    byLifecycle.set(lifecycle, entry);
+  }
+
+  const segments = [...byLifecycle.values()].sort(
+    (a, b) => b.estimatedTokens - a.estimatedTokens
+  );
+  return {
+    freeableChars: segments.reduce((a, b) => a + b.chars, 0),
+    freeableTokens: segments.reduce((a, b) => a + b.estimatedTokens, 0),
+    segments,
+  };
+}
+
+const num = new Intl.NumberFormat("en-US");
+
+/**
+ * Render a freeable-context assessment as a short, human-readable line. The `~`
+ * prefix marks the estimated-token figure. Names each freeable class and its
+ * action; falls back to an explicit "none" line when nothing is freeable.
+ */
+export function formatFreeableContext(a: FreeableContextAssessment): string {
+  if (a.freeableTokens === 0) {
+    return "freeable context: none — no resolved or retrievable context to free";
+  }
+  const parts = a.segments.map(
+    (s) => `${s.action} ${s.lifecycle} (~${num.format(s.estimatedTokens)} tokens)`
+  );
+  return (
+    `freeable context: ~${num.format(a.freeableTokens)} tokens ` +
+    `(${num.format(a.freeableChars)} chars) — ${parts.join(", ")}`
+  );
+}

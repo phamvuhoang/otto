@@ -60,9 +60,14 @@ export {
   type ContextSegment,
 } from "./context-report.js";
 export {
+  assessFreeableContext,
   classifyLifecycle,
+  formatFreeableContext,
   summarizeLifecycle,
   type ContextLifecycle,
+  type FreeableAction,
+  type FreeableContextAssessment,
+  type FreeableSegment,
   type LifecycleSummary,
   type LifecycleTotals,
 } from "./context-lifecycle.js";

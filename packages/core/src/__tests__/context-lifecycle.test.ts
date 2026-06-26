@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { analyzeContext, type ContextCategory } from "../context-report.js";
 import {
+  assessFreeableContext,
   classifyLifecycle,
+  formatFreeableContext,
   summarizeLifecycle,
   type ContextLifecycle,
 } from "../context-lifecycle.js";
@@ -83,5 +85,79 @@ describe("summarizeLifecycle", () => {
     expect(summary.byLifecycle).toEqual([]);
     expect(summary.totalChars).toBe(0);
     expect(summary.estimatedTokens).toBe(0);
+  });
+});
+
+describe("assessFreeableContext", () => {
+  it("names a large resolved (commits) segment as retirable with a token estimate", () => {
+    const prompt = [
+      "<commits>",
+      "abc123 settled work ".repeat(500),
+      "</commits>",
+      "<inputs>",
+      "the current task",
+      "</inputs>",
+      "# THE TASK — playbook instructions",
+    ].join("\n");
+    const breakdown = analyzeContext(prompt);
+    const assessment = assessFreeableContext(breakdown);
+
+    const resolved = assessment.segments.find((s) => s.lifecycle === "resolved");
+    expect(resolved).toBeDefined();
+    expect(resolved?.action).toBe("retire");
+
+    // The freed token estimate matches the resolved (commits) segment exactly,
+    // so the dry-run report is rounding-stable against the breakdown.
+    const commits = breakdown.segments.find((s) => s.category === "commits");
+    expect(resolved?.chars).toBe(commits?.chars);
+    expect(resolved?.estimatedTokens).toBe(commits?.estimatedTokens);
+    expect(assessment.freeableChars).toBe(commits?.chars);
+    expect(assessment.freeableTokens).toBe(commits?.estimatedTokens);
+  });
+
+  it("reports zero freeable when only required-now/durable context is present", () => {
+    const prompt = [
+      "<learnings>",
+      "# Otto learnings",
+      "durable knowledge",
+      "</learnings>",
+      "<inputs>",
+      "the current task",
+      "</inputs>",
+      "# THE TASK — playbook prose",
+    ].join("\n");
+    const breakdown = analyzeContext(prompt);
+    const assessment = assessFreeableContext(breakdown);
+
+    expect(assessment.segments).toEqual([]);
+    expect(assessment.freeableChars).toBe(0);
+    expect(assessment.freeableTokens).toBe(0);
+  });
+
+  it("returns zero freeable for an empty breakdown", () => {
+    const assessment = assessFreeableContext({
+      totalChars: 0,
+      estimatedTokens: 0,
+      segments: [],
+    });
+    expect(assessment.segments).toEqual([]);
+    expect(assessment.freeableChars).toBe(0);
+    expect(assessment.freeableTokens).toBe(0);
+  });
+
+  it("formats a one-line human summary, both freeable and none", () => {
+    const freeable = formatFreeableContext(
+      assessFreeableContext(
+        analyzeContext(["<commits>", "abc123 settled work", "</commits>"].join("\n"))
+      )
+    );
+    expect(freeable).toMatch(/^freeable context:/);
+    expect(freeable).toContain("retire");
+    expect(freeable.toLowerCase()).toContain("resolved");
+
+    const none = formatFreeableContext(
+      assessFreeableContext(analyzeContext("just playbook prose"))
+    );
+    expect(none).toMatch(/^freeable context: none/);
   });
 });

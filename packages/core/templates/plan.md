@@ -18,6 +18,8 @@
 
 </inputs>
 
+{{ SHARPENING }}
+
 # PLAN (AUTHOR THE SPEC + PLAN — DO NOT IMPLEMENT)
 
 You are PLANNING, not implementing. Turn the thin task in `<inputs>` into a

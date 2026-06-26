@@ -17,6 +17,10 @@ import {
 import { resolveTierLadder, type TierLadder } from "./model-tier.js";
 import { discoverPlanTasks } from "./plan-tasks.js";
 import { reviewsFanoutInsteadOfReplan } from "./plan-fanout.js";
+import {
+  formatSharpeningGuidance,
+  scoreInputSharpness,
+} from "./input-sharpness.js";
 import { runFanout } from "./fanout.js";
 import { reapWorktrees } from "./worktree.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
@@ -220,6 +224,12 @@ export type LoopOptions = {
   modelRouting?: boolean;
   /** tier → model ladder consulted when `modelRouting` resolves a tier. */
   tierLadder?: TierLadder;
+  /** Opt-in input sharpening (issue #180 P23): in `--plan` mode, score the run's
+   *  input and, when it omits dimensions (goal/constraints/success criteria/…),
+   *  inject a bounded sharpening-guidance block into the plan stage so the author
+   *  records an explicit assumption per gap. Off/undefined or a sharp input ⇒
+   *  nothing injected and the plan prompt is byte-identical. */
+  sharpenInput?: boolean;
   /** Opt-in runtime skill activation (issue #114 P18): inject validated,
    *  stage-scoped skill guidance into live stages. When off/undefined, no skill
    *  is selected or injected and the run is byte-for-byte unchanged. */
@@ -377,6 +387,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     modelRouting = false,
     tierLadder,
     skillActivation,
+    sharpenInput = false,
     fanOut = false,
     fanOutConcurrency = 3,
     resolveChangedPaths,
@@ -393,6 +404,15 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     verbose = false,
     contextCompressor = "off",
   } = opts;
+
+  // Input sharpening (issue #180 P23): in --plan mode, score the run's input once
+  // and build the bounded sharpening-guidance block injected into the plan stage
+  // via the `{{ SHARPENING }}` template var. Empty when off, not planning, or the
+  // input is already sharp — so the plan prompt is byte-identical by default.
+  const sharpeningGuidance =
+    sharpenInput && mode === "plan"
+      ? formatSharpeningGuidance(scoreInputSharpness(inputs))
+      : "";
 
   // One in-run console sink per run (issue #65 P10): quiet ConsoleUi by default,
   // the full firehose under --verbose. Threaded into every stage via executeStage.
@@ -1121,7 +1141,11 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           const injected = injectSkills(stage.name, skillChanged);
           const r = await executeStage({
             stage,
-            vars: { INPUTS: inputs, RESUME: resumeNote },
+            vars: {
+              INPUTS: inputs,
+              RESUME: resumeNote,
+              SHARPENING: sharpeningGuidance,
+            },
             injectedContext: injected.block,
             workspaceDir,
             packageDir,

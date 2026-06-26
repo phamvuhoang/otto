@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatInputSharpness,
+  formatSharpeningGuidance,
   scoreInputSharpness,
   INPUT_DIMENSIONS,
   type InputDimension,
@@ -80,5 +81,24 @@ describe("formatInputSharpness", () => {
     const out = formatInputSharpness(scoreInputSharpness(SHARP));
     expect(out).toMatch(/input sharpness/i);
     expect(out).toMatch(/5\/5|no (?:gaps|unknowns)/i);
+  });
+});
+
+describe("formatSharpeningGuidance", () => {
+  it("returns an empty string for a sharp input (inert — nothing to inject)", () => {
+    expect(formatSharpeningGuidance(scoreInputSharpness(SHARP))).toBe("");
+  });
+
+  it("emits a bounded guidance block naming the gaps and the AFK assumption rule", () => {
+    const score = scoreInputSharpness("make the dashboard faster");
+    const block = formatSharpeningGuidance(score);
+    expect(block).not.toBe("");
+    expect(block.toLowerCase()).toContain("sharpen");
+    // Names at least one detected gap so the plan author targets the real holes.
+    expect(block).toContain(score.unknowns[0]);
+    // Directs the author to record an assumption the plan gate can score.
+    expect(block.toLowerCase()).toMatch(/assumption|decisions/);
+    // Bounded — a guidance block, not an essay.
+    expect(block.length).toBeLessThan(1200);
   });
 });

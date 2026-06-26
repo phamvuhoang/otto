@@ -136,6 +136,35 @@ export function scoreInputSharpness(input: string): InputSharpnessScore {
 }
 
 /**
+ * Build the bounded, injectable sharpening-guidance block for the plan stage
+ * (P23 slice 2). When the input is already sharp (no unknowns) this is the empty
+ * string, so a run injects nothing and the plan prompt is byte-identical — the
+ * "inert when not needed" rule every Otto system follows. When gaps exist it
+ * names them and directs the plan author to sharpen autonomously and record an
+ * explicit assumption per gap (no human is present in AFK) in the spec's
+ * `## Decisions` section, which the plan-quality rubric already scores. Pure.
+ */
+export function formatSharpeningGuidance(score: InputSharpnessScore): string {
+  if (score.unknowns.length === 0) return "";
+  const n = score.unknowns.length;
+  return [
+    `## Input sharpening (${n} gap${n === 1 ? "" : "s"} detected)`,
+    "",
+    `Otto scored this run's input and it does not clearly state: ` +
+      `**${score.unknowns.join("**, **")}**. No human is available — sharpen the ` +
+      `input autonomously before authoring the spec:`,
+    "",
+    "- Extract each missing dimension from `<inputs>` and the existing repo; do " +
+      "not invent scope or gold-plate (YAGNI).",
+    "- Where the implementation path is genuinely ambiguous, weigh 2-3 options " +
+      "and pick the simplest viable one.",
+    "- Record an explicit assumption for each gap above in the spec's " +
+      "`## Decisions` section (question → assumption → rationale) so a reviewer " +
+      "can accept or correct it, and the plan gate can score it.",
+  ].join("\n");
+}
+
+/**
  * Render an input-sharpness score as a short scorecard: a met/max header and a
  * per-dimension checklist, then either "no gaps" or the unknowns a sharpening
  * pass should clarify. Pure.

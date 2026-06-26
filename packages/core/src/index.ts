@@ -527,6 +527,7 @@ export { reviewsFanoutInsteadOfReplan } from "./plan-fanout.js";
 export {
   INPUT_DIMENSIONS,
   formatInputSharpness,
+  formatSharpeningGuidance,
   scoreInputSharpness,
   type InputDimension,
   type InputDimensionResult,

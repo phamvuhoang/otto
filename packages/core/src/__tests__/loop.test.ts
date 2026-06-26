@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
   runStage: vi.fn(),
   getAgentRuntime: vi.fn((id: string) => ({ id })),
   sleep: vi.fn(),
+  discoverPlanTasks: vi.fn(),
+  runFanout: vi.fn(),
+  reapWorktrees: vi.fn(),
 }));
 
 vi.mock("../keepalive.js", () => ({
@@ -55,6 +58,20 @@ vi.mock("../pacing.js", () => ({
 
 vi.mock("../panel.js", () => ({
   runPanel: mocks.runPanel,
+}));
+
+vi.mock("../fanout.js", () => ({
+  runFanout: mocks.runFanout,
+}));
+
+vi.mock("../plan-tasks.js", async (importActual) => ({
+  ...(await importActual<typeof import("../plan-tasks.js")>()),
+  discoverPlanTasks: mocks.discoverPlanTasks,
+}));
+
+vi.mock("../worktree.js", async (importActual) => ({
+  ...(await importActual<typeof import("../worktree.js")>()),
+  reapWorktrees: mocks.reapWorktrees,
 }));
 
 vi.mock("../stream-render.js", () => ({
@@ -220,6 +237,11 @@ describe("runLoop", () => {
     mocks.acquire.mockReturnValue({ release: mocks.release });
     mocks.getAgentRuntime.mockImplementation((id: string) => ({ id }));
     mocks.sleep.mockResolvedValue(undefined);
+    // Fan-out off by default: no tasks discovered, so the fan-out block no-ops
+    // for every test that does not opt into `fanOut`.
+    mocks.discoverPlanTasks.mockReturnValue([]);
+    mocks.runFanout.mockResolvedValue({ outcomes: [], deferred: [] });
+    mocks.reapWorktrees.mockReturnValue(undefined);
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   });
@@ -243,6 +265,88 @@ describe("runLoop", () => {
     expect(mocks.runStage).toHaveBeenCalledTimes(1);
     expect(mocks.release).toHaveBeenCalledTimes(1);
     expect(mocks.notifyComplete).toHaveBeenCalledWith(1, true);
+  });
+
+  it("plan + fan-out that lands work reviews the aggregated diff instead of re-planning (#177)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    // Distinct templates so we can tell which stage actually ran from the prompt.
+    const planStage: Stage = { name: "plan", template: "plan.md" };
+    const reviewStage: Stage = { name: "reviewer", template: "reviewer.md" };
+    writeFileSync(
+      join(dirs.packageDir, "templates", "plan.md"),
+      "PLAN_STAGE {{ INPUTS }}",
+      "utf8"
+    );
+    writeFileSync(
+      join(dirs.packageDir, "templates", "reviewer.md"),
+      "REVIEW_STAGE {{ INPUTS }}",
+      "utf8"
+    );
+    // Fan-out discovers a task and lands it.
+    mocks.discoverPlanTasks.mockReturnValue([{ id: "t1" }]);
+    mocks.runFanout.mockResolvedValue({
+      outcomes: [{ status: "landed" }],
+      deferred: [],
+    });
+    mocks.runStage.mockResolvedValue(ok("reviewed, fixes committed"));
+
+    const outcome = await runLoop(
+      loopOptions(dirs, {
+        stages: [planStage],
+        reviewStage,
+        mode: "plan",
+        fanOut: true,
+        iterations: 1,
+      })
+    );
+
+    // Exactly one stage ran, and it was the reviewer — not the plan re-author.
+    expect(mocks.runStage).toHaveBeenCalledTimes(1);
+    const prompt = String(mocks.runStage.mock.calls[0][1]);
+    expect(prompt).toContain("REVIEW_STAGE");
+    expect(prompt).not.toContain("PLAN_STAGE");
+    // The run finalizes as a complete implementation run.
+    expect(outcome.sentinelHit).toBe(false);
+    const manifest = readManifest(
+      dirs.workspaceDir,
+      listRunIds(dirs.workspaceDir)[0]
+    );
+    expect(manifest?.exitReason).toBe("complete");
+  });
+
+  it("plan + fan-out that lands nothing still authors a plan (no reviewer substitution) (#177)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const planStage: Stage = { name: "plan", template: "plan.md" };
+    const reviewStage: Stage = { name: "reviewer", template: "reviewer.md" };
+    writeFileSync(
+      join(dirs.packageDir, "templates", "plan.md"),
+      "PLAN_STAGE {{ INPUTS }}",
+      "utf8"
+    );
+    writeFileSync(
+      join(dirs.packageDir, "templates", "reviewer.md"),
+      "REVIEW_STAGE {{ INPUTS }}",
+      "utf8"
+    );
+    // No tasks to fan out — a genuine plan-authoring run.
+    mocks.discoverPlanTasks.mockReturnValue([]);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    await runLoop(
+      loopOptions(dirs, {
+        stages: [planStage],
+        reviewStage,
+        mode: "plan",
+        fanOut: true,
+        iterations: 1,
+      })
+    );
+
+    // The plan stage ran (the reviewer was not substituted).
+    expect(mocks.runStage).toHaveBeenCalledTimes(1);
+    expect(String(mocks.runStage.mock.calls[0][1])).toContain("PLAN_STAGE");
   });
 
   it("injects a validated skill + records skillsUsed when activation is on (P18)", async () => {

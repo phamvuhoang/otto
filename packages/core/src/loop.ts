@@ -16,6 +16,7 @@ import {
 } from "./risk.js";
 import { resolveTierLadder, type TierLadder } from "./model-tier.js";
 import { discoverPlanTasks } from "./plan-tasks.js";
+import { reviewsFanoutInsteadOfReplan } from "./plan-fanout.js";
 import { runFanout } from "./fanout.js";
 import { reapWorktrees } from "./worktree.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
@@ -175,6 +176,10 @@ export type LoopOptions = {
   // First stage is the gate: its result is checked for the completion sentinel.
   // Subsequent stages always run after a non-sentinel gate result.
   stages: [Stage, ...Stage[]];
+  /** Reviewer stage run over the aggregated fan-out diff when a `--plan` run's
+   *  fan-out lands implementation work (issue #177). Without it, a `--plan` +
+   *  `--fan-out` run falls back to re-authoring the plan. Only otto-afk sets it. */
+  reviewStage?: Stage;
   inputs: string;
   iterations: number;
   /** Host repo Claude runs against (cwd). */
@@ -353,6 +358,7 @@ function installKeyboardControls(opts: {
 export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   const {
     stages,
+    reviewStage,
     inputs,
     iterations,
     workspaceDir,
@@ -957,6 +963,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       // plan's independent tasks in parallel worktrees before the sequential
       // loop. Deferred or absent work flows through the normal implementer below
       // — fan-out is an accelerator, never a correctness dependency.
+      let fanoutLanded = 0;
       if (fanOut && i === startIteration) {
         const planTasks = discoverPlanTasks(workspaceDir);
         if (planTasks.length === 0) {
@@ -982,17 +989,37 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             signal: activeSignal,
             onSubAgent: accountStage,
           });
-          const landed = fr.outcomes.filter(
+          fanoutLanded = fr.outcomes.filter(
             (o) => o.status === "landed"
           ).length;
           process.stderr.write(
-            `${dim(SYM.cont)} ${greenOut(String(landed))} landed, ${fr.deferred.length} deferred ${dim("(deferred tasks continue in the sequential loop)")}\n`
+            `${dim(SYM.cont)} ${greenOut(String(fanoutLanded))} landed, ${fr.deferred.length} deferred ${dim("(deferred tasks continue in the sequential loop)")}\n`
           );
         }
       }
 
-      for (let s = 0; s < stages.length; s++) {
-        const stage = stages[s];
+      // Issue #177: a `--plan` run whose fan-out landed implementation work was
+      // an implement, not a re-plan. Review the aggregated fan-out diff instead
+      // of re-authoring the next slice over the slice docs, then finalize as an
+      // implementation run. When this does not apply (no fan-out work, not plan
+      // mode, no reviewer), the normal stage chain runs unchanged.
+      const reviewFanout = reviewsFanoutInsteadOfReplan({
+        mode,
+        fanOut,
+        landed: fanoutLanded,
+        hasReviewStage: reviewStage != null,
+      });
+      const iterationStages: [Stage, ...Stage[]] = reviewFanout
+        ? [reviewStage!]
+        : stages;
+      if (reviewFanout) {
+        process.stderr.write(
+          `${dim("fan-out landed implementation work — reviewing the aggregated diff instead of re-planning (issue #177)")}\n`
+        );
+      }
+
+      for (let s = 0; s < iterationStages.length; s++) {
+        const stage = iterationStages[s];
 
         // Budget gate: check before running each stage.
         if (budgetUsd != null && runCostUsd >= budgetUsd) {
@@ -1001,8 +1028,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         }
 
         const banner = USE_COLOR
-          ? `${dim("━━━")} ${bold(`iteration ${i}/${total}`)} ${dim("·")} ${bold(stage.name)} ${dim(`(stage ${s + 1}/${stages.length})`)} ${dim("·")} ${bold(activeAgentDisplayName)} ${dim("━━━")}`
-          : `== iteration ${i}/${total} · ${stage.name} (stage ${s + 1}/${stages.length}) · ${activeAgentDisplayName} ==`;
+          ? `${dim("━━━")} ${bold(`iteration ${i}/${total}`)} ${dim("·")} ${bold(stage.name)} ${dim(`(stage ${s + 1}/${iterationStages.length})`)} ${dim("·")} ${bold(activeAgentDisplayName)} ${dim("━━━")}`
+          : `== iteration ${i}/${total} · ${stage.name} (stage ${s + 1}/${iterationStages.length}) · ${activeAgentDisplayName} ==`;
         process.stderr.write(`\n${banner}\n`);
         sink.setStage(i, stage.name);
 
@@ -1327,7 +1354,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           }
         }
 
-        if (s === 0) {
+        if (s === 0 && !reviewFanout) {
           if (sr!.result.includes(SENTINEL)) {
             const planDecision = await handlePlanCompletion();
             if (planDecision === "replan") {
@@ -1354,6 +1381,16 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         await keyboardControls.pauseIfRequested();
       }
       completedIterations = i;
+
+      // Issue #177: the fan-out implement-and-review path is a one-shot — the
+      // reviewer has now seen the aggregated diff, so finalize as a complete
+      // implementation run rather than continuing to the plan re-author chain.
+      if (reviewFanout) {
+        summarize("complete", i);
+        persist(i, "complete");
+        clearState(workspaceDir);
+        return outcome();
+      }
       await keyboardControls.pauseIfRequested();
 
       // Adaptive iteration control: feed this iteration's progress signals into

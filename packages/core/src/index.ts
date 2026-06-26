@@ -510,6 +510,7 @@ export {
   readPlanTasks,
   type PlanTask,
 } from "./plan-tasks.js";
+export { reviewsFanoutInsteadOfReplan } from "./plan-fanout.js";
 export { createWorktree, reapWorktrees } from "./worktree.js";
 export {
   runFanout,

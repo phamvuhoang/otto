@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.3](https://github.com/phamvuhoang/otto/compare/otto-core-v0.28.2...otto-core-v0.28.3) (2026-06-26)
+
+
+### Bug Fixes
+
+* **loop:** plan + fan-out that lands work reviews the diff instead of re-planning ([#184](https://github.com/phamvuhoang/otto/issues/184)) ([f018ed1](https://github.com/phamvuhoang/otto/commit/f018ed1631fc7b1fa862bf00755b0ef19558c883)), closes [#177](https://github.com/phamvuhoang/otto/issues/177)
+
 ## [0.28.2](https://github.com/phamvuhoang/otto/compare/otto-core-v0.28.1...otto-core-v0.28.2) (2026-06-26)
 
 

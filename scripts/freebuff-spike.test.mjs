@@ -114,7 +114,7 @@ test("detectFreebuffLimit classifies rate_limited → rate_limit with null reset
   assert.equal(hit.resetsAt, null);
 });
 
-test("detectFreebuffLimit classifies queued → headless_not_ready", () => {
+test("detectFreebuffLimit classifies queued → headless-not-ready", () => {
   const hit = detectFreebuffLimit([
     {
       type: "session.status",

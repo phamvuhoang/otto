@@ -272,7 +272,7 @@ export function parseFreebuffEvents(eventsOrLines) {
  *
  * Known Freebuff session statuses (from Codebuff source, inferred — UNVERIFIED
  * as CLI output):
- *   queued           → headless_not_ready (session not yet executing; retry or
+ *   queued           → headless-not-ready (session not yet executing; retry or
  *                      wait, but not a stage result — headless automation cannot
  *                      safely wait for an interactive queue).
  *   active           → normal; not a limit.

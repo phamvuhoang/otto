@@ -287,8 +287,8 @@ export function parseFreebuffEvents(eventsOrLines) {
  * too-many-sessions keywords).
  *
  * Returns a structured classification or null if no limit detected:
- *   { kind: "rate_limit",        message: string, resetsAt: null }
- *   { kind: "headless_not_ready", message: string }
+ *   { kind: "rate-limit",         message: string, resetsAt: null }
+ *   { kind: "headless-not-ready", message: string }
  *   { kind: "fatal",             message: string }
  *   null
  */

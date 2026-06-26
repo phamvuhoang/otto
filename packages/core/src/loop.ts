@@ -117,6 +117,9 @@ const REPORT_REWRITE_STAGE: Stage = {
 };
 
 const RATE_LIMIT_BUFFER_MS = 30_000;
+// Interactive plan checkpoint grace period: an AFK run can hold a TTY but have no
+// human, so auto-approve (record the assumption) rather than block forever.
+const PLAN_CHECKPOINT_TIMEOUT_MS = 2 * 60_000;
 const RATE_LIMIT_FALLBACK_MS = 15 * 60_000;
 const DEFAULT_MAX_WAIT_MS = 6 * 3600_000;
 
@@ -858,29 +861,29 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       updatedAt: nowIso(),
     });
 
-  const resolveCheckpointDecision = async (prompt: string) => {
-    let close: (() => void) | undefined;
-    return resolvePlanCheckpoint(prompt, {
+  const resolveCheckpointDecision = async (prompt: string) =>
+    resolvePlanCheckpoint(prompt, {
       interactive:
         Boolean(process.stdin.isTTY) &&
         Boolean(process.stdout.isTTY) &&
         !externalSignal,
+      timeoutMs: PLAN_CHECKPOINT_TIMEOUT_MS,
       out: (msg) => process.stderr.write(`${msg}\n`),
-      readLine: async () => {
+      readLine: async (signal) => {
         const { createInterface } = await import("node:readline/promises");
         const rl = createInterface({
           input: process.stdin,
           output: process.stdout,
         });
-        close = () => rl.close();
         try {
-          return await rl.question("");
+          return signal
+            ? await rl.question("", { signal })
+            : await rl.question("");
         } finally {
-          close?.();
+          rl.close();
         }
       },
     });
-  };
 
   const handlePlanCompletion = async (): Promise<
     "accept" | "replan" | "pause"

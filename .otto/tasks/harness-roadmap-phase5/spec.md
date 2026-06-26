@@ -1,171 +1,197 @@
-# Spec — Harness Roadmap Phase 5, P22 First Implementation Slice: context-lifecycle reporting
+# Spec — Harness Roadmap Phase 5, P22 slice 2: a real `retrievable` producer (report-only)
 
-Source: `docs/HARNESS_ROADMAP_PHASE5.md` (P22–P25).
-Slice authored here: the roadmap's **"First Implementation Slice"** —
-P22 context-lifecycle _reporting_, **with no behavior change**.
+Source: `docs/HARNESS_ROADMAP_PHASE5.md` (P22). This is the **second** P22 slice.
+
+**Prior slice is DONE.** The roadmap's "First Implementation Slice" — P22
+context-lifecycle _reporting_, no behavior change — landed on this branch:
+`classifyLifecycle` + taxonomy (`4be129f`), lifecycle on each `ContextSegment`
+(`6bdbab9`), the freeable dry-run assessor + formatter (`73c4656`), and the
+lifecycle rollup + freeable section in `otto-afk --context-report` (`c7b24eb`).
+Per that spec's own decision ("the maintainer approves this slice, then re-plans
+the next"), this run authors the next slice. The old slice's spec/plan are in
+git history.
 
 ## Problem
 
-AFK token cost is the adoption limiter (roadmap "Product Inputs": "Cost is still
-the adoption limiter"). Otto already _measures_ context composition — every stage
-record carries a `ContextBreakdown` attributing the rendered prompt to
-`commits / learnings / inputs / playbook` (`packages/core/src/context-report.ts`),
-surfaced by `otto-afk --context-report`
-(`packages/core/src/context-report-cli.ts`). What it cannot yet answer is **"why
-is this block still in the window, and could it be freed?"** Stale issue bodies,
-old diffs, and settled prior-iteration discussion keep reappearing with no signal
-that they are retirable.
+The freeable-context report shipped, but it can only ever name **`resolved`**
+context (the commit log) as freeable. The fourth lifecycle class the roadmap
+defines — **`retrievable`** ("logs, issue bodies, command output, screenshots")
+— is in the taxonomy but **no category produces it**. `classifyLifecycle` maps
+every `inputs` block to `required-now`, and the ghafk issue-body block tags
+(`<issue>`, `<issues-summary>`, `<issues-full-file>`) are lumped into the same
+`inputs` category (`packages/core/src/context-report.ts` `BLOCK_CATEGORY`).
 
-The person blocked is the operator deciding whether an AFK run is affordable: they
-see _how big_ the context is but not _which part is dead weight_. Until Otto can
-name retrievable/resolved context trustworthily in a **report** (a dry run that
-changes nothing), it cannot later retire or compress it safely. P22's own
-sequencing makes this explicit: "Only after the dry-run report is trustworthy
-should Otto start retiring or compressing context automatically."
+So on a ghafk run whose window is dominated by a multi-KB pasted issue body, the
+report says that bulk is `required-now` and **un-freeable** — exactly backwards.
+An issue body is reconstructable evidence (`gh issue view` re-fetches it); it is
+the textbook `retrievable`/compressible block. The operator deciding whether an
+AFK run is affordable is told the most compressible part of their window is
+load-bearing.
 
-This slice delivers that trustworthy report and nothing more.
+The roadmap gates all compression/retirement automation behind one condition:
+"Only after the dry-run report is trustworthy should Otto start retiring or
+compressing context automatically." The report is **not** trustworthy until
+`retrievable` reflects real content. This slice makes it trustworthy for
+issue-body evidence — still report-only, still no behavior change — which is the
+precondition for the P22 Headroom-selective-compression work that follows.
+
+The prior slice recorded this exact gap as deferred work (old spec Scope guard:
+"A distinct `retrievable` producer — finer `inputs` segmentation … The type
+carries the class; no current category emits it"). This slice closes it.
 
 ## Decisions
 
-Each is `question → chosen answer → rationale`. No human was available during this
-run; these are the safest defaults given existing repo patterns (recorded, not
-guessed).
+Each is `question → chosen answer → rationale`. No human was available during
+this run; these are the safest defaults given existing repo patterns (recorded,
+not guessed).
 
-- **How much of Phase 5 should this plan cover?** → **Only the P22 First
-  Implementation Slice (context-lifecycle reporting, no behavior change).** →
-  The roadmap sequences P22→P23→P24→P25 as NOW/NOW/NEXT/LATER and names this exact
-  slice as the recommended start "with no behavior change". Planning P23–P25 at
-  one-Otto-run granularity now would be speculative (YAGNI) and the tasks would
-  not be independently testable yet. The maintainer approves this slice, then
-  re-plans the next. **Blocker recorded:** the remaining initiatives are
-  intentionally deferred — see Scope guard.
+- **How much to plan now?** → **Only this one slice: a `retrievable` producer +
+  the report's "why is this still in context?" rationale, report-only.** → Keeps
+  the prior slice's YAGNI discipline. The next behavior-changing steps (Headroom
+  selective compression, prior-iteration retirement, skill/tool context caps,
+  eval-survival fixtures) each get their own spec/plan once this report is
+  trusted. Planning them now would be speculative and not independently testable.
 
-- **New lifecycle axis vs. reuse existing categories?** → **Add a new orthogonal
-  `ContextLifecycle` axis derived from the existing `ContextCategory`, do not
-  replace it.** → Mirrors the governed-memory design where `trust`/`confidence`/
-  `status` are kept as separate orthogonal axes (`.otto/LEARNINGS.md`: "three
-  orthogonal axes … don't collapse them"). Lifecycle is _derived_ from category,
-  so it needs no new prompt parsing.
+- **How to make a category classify as `retrievable` (lifecycle is derived from
+  category only)?** → **Add one new `ContextCategory` — `evidence` — and remap
+  the issue-body block tags to it; `classifyLifecycle(evidence) → retrievable`.**
+  → The whole design is "lifecycle is a pure total function of category"
+  (`context-lifecycle.ts`). The only design-consistent way to emit `retrievable`
+  is a category that maps to it. Splitting issue-body tags out of `inputs` is the
+  minimal change; the afk `<inputs>` block (the active plan/PRD task source) stays
+  `inputs`/`required-now` because it IS the current task, not retrievable evidence.
 
-- **Lifecycle → category mapping (the four roadmap classes).** → A pure total
-  function `classifyLifecycle(category)`:
-  - `playbook` (stage contract / workflow instructions) → **`required-now`**
-  - `inputs` (current task source, issue body, active diff) → **`required-now`**
-  - `commits` (prior-iteration commit log — already-settled discussion) →
-    **`resolved`**
-  - `learnings` (governed memory + final decisions) → **`durable`**
-    → The roadmap's own definitions: `required-now` = "stage contract, current task,
-    active diff"; `resolved` = "previous … discussion, completed subtasks";
-    `durable` = "governed memory and final decisions". `retrievable` ("logs, issue
-    bodies, command output, screenshots") has **no distinct existing category** at
-    this granularity, so it is part of the taxonomy/type but is not produced by the
-    current four categories. Recorded as an honest gap (Testing notes + Scope guard)
-    rather than faking a mapping — finer-grained `inputs` segmentation (issue body
-    vs. task source) is a follow-up slice.
+- **Why the name `evidence` and not `issue`?** → **`evidence`.** → The roadmap's
+  `retrievable` examples are issue bodies, logs, command output, screenshots — all
+  reconstructable _evidence_. Today only the three issue-body tags populate it, but
+  the name leaves room for future producers (command-output spills) to join the
+  same category without another rename. Honest scope: this slice only wires the
+  issue-body tags; the category is named for where it is going.
 
-- **"Freeable context" recommendation: retire vs compress?** → **A pure dry-run
-  assessor `assessFreeableContext(breakdown)` that names `resolved` segments as
-  _retirable_ and `retrievable` segments as _compressible_, with estimated token
-  savings, and changes nothing.** → The roadmap's slice step 3: "a dry-run
-  'freeable context' recommendation that reports what could be retired or
-  compressed without actually changing the prompt." Mirrors the existing
-  `assessContextBudget` pure-assessor shape (`context-budget.ts`).
+- **Does this break `context-budget.ts`?** → **No.** → `REDUCIBLE_LEVERS` is a
+  `Partial<Record<ContextCategory, …>>` keyed only on `commits`/`learnings`
+  (`context-budget.ts:66`). A new `evidence` category is simply absent from it, so
+  `assessContextBudget` ignores it — correct, since issue bodies are freed via the
+  lifecycle/Headroom path, not the commit/learnings compaction lever. Verified: the
+  only `ContextCategory` consumers are `context-report.ts`, `context-budget.ts`,
+  `context-lifecycle.ts`, `index.ts`.
 
-- **Where does lifecycle live so it persists on stage records?** → **Attach a
-  derived `lifecycle` field to each `ContextSegment` inside `analyzeContext`.** →
-  `StageRecord.contextBreakdown` is already serialized to
-  `.otto/runs/<id>/stages/*.json` (`run-report.ts`), so a new optional field on
-  the segment persists for free and is backward-compatible (older records simply
-  lack it; readers already treat `contextBreakdown` as optional).
+- **The roadmap's "why is this still in context?" breakdown — done?** → **Half.**
+  → The "can be freed" estimate shipped (the freeable line). The plain-language
+  _why each class is present_ breakdown did not. This slice adds a pure
+  `lifecycleRationale(lifecycle) → string` (required-now = active task/contract;
+  resolved = settled prior iterations; durable = governed memory; retrievable =
+  reconstructable evidence) rendered under the report's lifecycle rollup, closing
+  P22 scope bullet 2.
 
 - **Behavior change this slice?** → **None. Report-only, INERT on the loop.** →
-  Matches every prior context slice (`context-report.ts`/`context-budget.ts` are
-  documented "INERT on the loop"). Automatic retirement/compression is explicitly
-  the _next_ slice, gated on this report being trusted.
+  Matches every prior context slice. `analyzeContext` still attributes 100% of the
+  prompt (the `evidence` chars were already counted under `inputs`; they only move
+  category), nothing runs a stage or mutates a prompt. The only observable delta is
+  in `--context-report` output and the derived `lifecycle`/`category` on stage
+  records.
 
-- **How to prove the report is trustworthy?** → **One large-context fixture** (a
-  rendered prompt with substantial `commits`/`learnings`/`inputs` blocks) asserting
-  the lifecycle rollup and freeable recommendation classify resolved/durable/
-  required-now correctly. → The roadmap's slice step 4: "one large-context fixture
-  where the report must identify retrievable and resolved context correctly."
+- **How to prove trustworthiness?** → **A large issue-body fixture.** → A
+  ghafk-style rendered prompt with a multi-KB `<issues-full-file>` block plus a
+  `<commits>` block, asserting the report names the issue-body bytes as
+  `retrievable`/compressible and the commits as `resolved`/retirable. This is the
+  roadmap slice's "fixture where the report must identify retrievable and resolved
+  context correctly," now satisfiable because `retrievable` has a producer.
 
 ## Scope guard
 
 **In scope (this slice only):**
 
-- A pure lifecycle taxonomy + `classifyLifecycle` mapping.
-- A derived `lifecycle` field on `ContextSegment` (persists on stage records).
-- A pure `assessFreeableContext` dry-run recommendation + its formatter.
-- A lifecycle rollup + freeable section added to `otto-afk --context-report`.
-- One large-context fixture test pinning the classification.
+- A new `evidence` `ContextCategory`; the issue-body block tags (`issue`,
+  `issues-summary`, `issues-full-file`) remapped to it.
+- `classifyLifecycle(evidence) → retrievable` (total switch updated).
+- A pure `lifecycleRationale(lifecycle)` helper + its render in
+  `otto-afk --context-report`.
+- A large issue-body fixture proving the report classifies retrievable/resolved
+  correctly.
 
 **Explicitly OUT of scope (deferred to later plan runs):**
 
-- **Automatic context retirement or compression** — actually mutating the rendered
-  prompt, freeing prior-iteration context, or pulling Headroom. Report-only here;
-  the roadmap gates automation behind a trusted report.
-- **A distinct `retrievable` producer** — finer `inputs` segmentation (issue body
-  vs. active task vs. command output) so `retrievable` is populated from real
-  content. The type carries the class; no current category emits it.
-- **P23 Input sharpening, P24 Visual/artifact verification, P25 Multi-agent
-  coordination** — separate initiatives; each gets its own spec/plan run.
-- **Eval-backed compression survival fixtures** (P22 later scope) and the
-  Headroom selective-compression wiring.
-- Any new bin, flag default change, or change to non-context stage behavior.
-- No new dependencies; ESM `.js` import convention preserved.
+- **Headroom / actual compression of `retrievable` content** — wiring the
+  compressor to summarize/spill issue bodies. Report-only here; the roadmap gates
+  real compression behind this report being trusted. This is the very next slice.
+- **Automatic prior-iteration retirement** of `resolved` context.
+- **Skill/tool context caps and dropping unused skill excerpts** (P22 scope).
+- **Eval fixtures that prove buried facts survive compression** — those need the
+  compressor to exist first (out of scope above).
+- **Finer `evidence` producers** (command-output spills, screenshots) — only the
+  issue-body tags are wired now; the category is named to admit them later.
+- **P23 Input sharpening, P24 Visual verification, P25 Multi-agent** — separate
+  initiatives, each its own spec/plan run.
+- Any new bin, flag, or change to non-context stage behavior. No new dependencies;
+  ESM `.js` import convention preserved.
 
 ## File map
 
-Create:
-
-- `packages/core/src/context-lifecycle.ts` — new pure module: `ContextLifecycle`
-  type, `classifyLifecycle`, `summarizeLifecycle`, `assessFreeableContext`,
-  `formatFreeableContext`.
-- `packages/core/src/__tests__/context-lifecycle.test.ts` — unit tests for the
-  new module (classification table, rollup totals, freeable assessment).
+Create: _none_ (extends the modules the prior slice created).
 
 Modify:
 
-- `packages/core/src/context-report.ts` — add the derived `lifecycle` field to
-  `ContextSegment` (populated in `analyzeContext`).
-- `packages/core/src/context-report-cli.ts` — extend `formatContextReportRun`
-  with a lifecycle-totals rollup + a freeable-context section.
-- `packages/core/src/index.ts` — re-export the new `context-lifecycle.ts` symbols.
-- `packages/core/src/__tests__/context-report.test.ts` — assert segments now carry
-  `lifecycle`.
+- `packages/core/src/context-report.ts` — add `"evidence"` to the
+  `ContextCategory` union; remap `issue` / `issues-summary` / `issues-full-file`
+  in `BLOCK_CATEGORY` from `inputs` to `evidence`.
+- `packages/core/src/context-lifecycle.ts` — add the `case "evidence": return
+"retrievable"` arm to `classifyLifecycle`; add and export the pure
+  `lifecycleRationale(lifecycle)` helper.
+- `packages/core/src/context-report-cli.ts` — render a per-class rationale
+  ("why is this still in context?") under the existing lifecycle rollup in
+  `formatContextReportRun`.
+- `packages/core/src/index.ts` — re-export the new `lifecycleRationale` symbol.
+- `packages/core/src/__tests__/context-report.test.ts` — update the existing
+  "treats … as inputs" case (issue tags are now `evidence`/`retrievable`; afk
+  `<inputs>` stays `inputs`/`required-now`).
+- `packages/core/src/__tests__/context-lifecycle.test.ts` — extend the
+  `classifyLifecycle` table (`evidence → retrievable`); add a `lifecycleRationale`
+  case.
 - `packages/core/src/__tests__/context-report-cli.test.ts` — assert the report
-  renders lifecycle totals + freeable section; add the large-context fixture case.
+  renders the rationale lines; add the large issue-body fixture case.
 
-Reference only (read, not modified): `packages/core/src/run-report.ts`
-(`StageRecord.contextBreakdown` serialization), `packages/core/src/context-budget.ts`
-(assessor pattern to mirror), `packages/core/src/stage-exec.ts:209` (capture site —
-unchanged; lifecycle rides along on the breakdown it already records).
+Reference only (read, not modified): `packages/core/src/context-budget.ts`
+(`REDUCIBLE_LEVERS` — confirmed unaffected), `packages/core/src/run-report.ts`
+(`StageRecord.contextBreakdown` serialization — carries the new category/lifecycle
+for free).
 
 ## Testing notes
 
-Verification command for every task: `pnpm -r typecheck && pnpm -r test`
-(plus `pnpm test` for root contract tests on the final task). The smoke-template
-budget guard (`scripts/smoke-templates.mjs`, <20k tokens/template) is unaffected —
-no template changes in this slice.
+Verification command for every task: `pnpm -r typecheck && pnpm -r test` (plus
+`pnpm test` for root contract tests on the final task). No template changes, so
+the smoke-template budget guard (`scripts/smoke-templates.mjs`) is unaffected.
+
+The `classifyLifecycle` switch is total over the `ContextCategory` union, so
+adding `"evidence"` to the union makes `pnpm -r typecheck` **fail** until the new
+case is added — a compiler-enforced exhaustiveness guard, noted as a verify step
+in T1.
 
 **Testable success criteria (done-when):**
 
-- `classifyLifecycle` is a total function over all four `ContextCategory` values,
-  returning `required-now` for `playbook`/`inputs`, `resolved` for `commits`,
-  `durable` for `learnings` — pinned by a table test in
-  `context-lifecycle.test.ts`.
-- `analyzeContext(prompt).segments[i].lifecycle` is present and correct for a
-  prompt containing each block — pinned in `context-report.test.ts`.
-- `assessFreeableContext` reports the `resolved` (commits) bytes as _retirable_
-  and any `retrievable` bytes as _compressible_, with a token estimate, and
-  reports zero freeable when only `required-now`/`durable` segments exist —
-  pinned in `context-lifecycle.test.ts`.
-- `otto-afk --context-report` output includes a lifecycle-totals line and a
-  freeable-context line for a run whose stage records carry breakdowns — pinned
-  in `context-report-cli.test.ts`.
-- A **large-context fixture** (commits/learnings/inputs each ≥ a few KB) yields a
-  report that names the commits block as resolved/retirable and the learnings
-  block as durable — pinned in `context-report-cli.test.ts`.
-- No behavior change: `analyzeContext` totals/segments order are unchanged
-  (existing assertions still pass); nothing runs a stage or mutates a prompt.
+- `classifyLifecycle("evidence") === "retrievable"`, and the four prior mappings
+  are unchanged — pinned by the table test in `context-lifecycle.test.ts`.
+- `analyzeContext` on a prompt with `<issues-full-file>` (or `<issue>` /
+  `<issues-summary>`) yields a segment with `category: "evidence"`,
+  `lifecycle: "retrievable"`; a prompt with afk `<inputs>` still yields
+  `category: "inputs"`, `lifecycle: "required-now"` — pinned in
+  `context-report.test.ts`.
+- `analyzeContext` total chars still equal `prompt.length` (the evidence chars
+  moved category, none were lost) — existing total-attribution assertions still
+  pass.
+- `lifecycleRationale` returns a distinct non-empty rationale for each of the four
+  lifecycle classes — pinned in `context-lifecycle.test.ts`.
+- `assessFreeableContext` on a breakdown containing an `evidence`/`retrievable`
+  segment reports those bytes as `compress`-able with a token estimate (already
+  generic in the assessor; now reachable) — pinned in `context-lifecycle.test.ts`
+  or via the CLI fixture below.
+- `otto-afk --context-report` output, for a run whose stage records carry an
+  issue-body-heavy breakdown, includes a `retrievable`/`compress` freeable line
+  AND a per-class rationale line — pinned in `context-report-cli.test.ts`.
+- A **large issue-body fixture** (a `<issues-full-file>` block several KB plus a
+  `<commits>` block) yields a report naming the issue-body block as
+  retrievable/compressible and the commits block as resolved/retirable — pinned in
+  `context-report-cli.test.ts`.
+- No behavior change: nothing runs a stage or mutates a prompt; only report output
+  and the derived `category`/`lifecycle` change.
 - `pnpm -r typecheck && pnpm -r test && pnpm test` all green.

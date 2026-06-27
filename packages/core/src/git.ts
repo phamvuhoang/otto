@@ -52,7 +52,10 @@ export function headSha(cwd: string): string | null {
  * agent committed it. `sinceSha` null (no prior HEAD) → just the working-tree
  * diff. Returns a de-duplicated list; never throws.
  */
-export function changedFilesSince(cwd: string, sinceSha: string | null): string[] {
+export function changedFilesSince(
+  cwd: string,
+  sinceSha: string | null
+): string[] {
   const out = new Set<string>();
   const collect = (raw: string | null) => {
     if (!raw) return;
@@ -74,6 +77,25 @@ export function refExists(cwd: string, name: string): boolean {
       ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`],
       { cwd, stdio: "ignore" }
     );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `sha` (a 7–40 char hex string) names a commit object that actually
+ * exists in the repo at `cwd` (issue #181 re-review). Used to reject fabricated
+ * commit SHAs cited as verification artifacts. False for non-hex input or any
+ * git error (not a repo, object absent).
+ */
+export function commitExists(cwd: string, sha: string): boolean {
+  if (!/^[0-9a-f]{7,40}$/i.test(sha)) return false;
+  try {
+    execFileSync("git", ["cat-file", "-e", `${sha}^{commit}`], {
+      cwd,
+      stdio: "ignore",
+    });
     return true;
   } catch {
     return false;

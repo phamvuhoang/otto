@@ -132,9 +132,40 @@ describe("formatRunReport", () => {
     expect(out).toContain("rounding is correct");
   });
 
-  it("omits the verification gallery when no matrix was recorded (#181 P24)", () => {
+  it("omits the verification gallery for a non-verify run with no matrix (#181 P24)", () => {
     const out = formatRunReport(finalized, [implStage]);
     expect(out).not.toMatch(/Verification:/);
+  });
+
+  it("shows a visible FAIL in otto-inspect when a --verify run recorded no matrix (#181 re-review)", () => {
+    const out = formatRunReport(
+      { ...finalized, mode: "verify", verificationDropped: 2 },
+      [implStage]
+    );
+    expect(out).toMatch(/Verification:\s*FAIL/);
+    expect(out).toMatch(/no machine-readable matrix/i);
+    expect(out).toMatch(/2 malformed/i);
+  });
+
+  it("shows the coverage gate in otto-inspect for a verify run with a matrix (#181 re-review)", () => {
+    const out = formatRunReport(
+      {
+        ...finalized,
+        mode: "verify",
+        verification: [
+          {
+            requirement: "covered",
+            method: "test",
+            check: "node --test",
+            artifactPath: "x.test.ts:1",
+            result: "pass",
+            confidence: "high",
+          },
+        ],
+      },
+      [implStage]
+    );
+    expect(out).toContain("Verification Coverage Gate");
   });
 
   it("surfaces injected skills per stage and in a run-level section (P18)", () => {

@@ -208,6 +208,32 @@ describe("finalizeReportText", () => {
     expect(out).not.toContain("## Verification Coverage Gate");
   });
 
+  it("FAILs the gate when a valid passing matrix has a dropped row (#181 re-review)", () => {
+    const out = finalizeReportText(emitted, {
+      manifest: {
+        ...manifest,
+        mode: "verify",
+        verificationDropped: 1,
+        verification: [
+          {
+            requirement: "suite is green",
+            method: "test",
+            check: "node --test",
+            artifactPath: "x.test.ts:1",
+            result: "pass",
+            confidence: "high",
+          },
+        ],
+      },
+      stages: [stage],
+      headSha: "abc1234",
+      changedFiles: [],
+    });
+    expect(out).toContain("## Verification Coverage Gate");
+    expect(out).toContain("Gate: **FAIL**");
+    expect(out).toMatch(/dropped 1 malformed/i);
+  });
+
   it("shows a FAIL gate when a --verify run recorded no valid matrix (#181 review)", () => {
     const out = finalizeReportText(emitted, {
       manifest: { ...manifest, mode: "verify", verificationDropped: 2 },

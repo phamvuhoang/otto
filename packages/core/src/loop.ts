@@ -1,18 +1,11 @@
-import {
-  appendFileSync,
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
-import { basename, isAbsolute, join } from "node:path";
+import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
 import { readCoreVersion } from "./cli-help.js";
 import { acquire, type Releaser } from "./keepalive.js";
 import { notifyComplete, notifyError } from "./notify.js";
-import { changedFilesSince, headSha } from "./git.js";
+import { changedFilesSince, commitExists, headSha } from "./git.js";
 import { sleep, isThrottle, nextCooldownFactor } from "./pacing.js";
 import { decide } from "./policy.js";
 import { deriveProgress, type IterationObservation } from "./progress.js";
@@ -29,10 +22,8 @@ import {
   formatSharpeningGuidance,
   scoreInputSharpness,
 } from "./input-sharpness.js";
-import {
-  parseVerificationMatrixWithDiagnostics,
-  type VerificationEntry,
-} from "./verification-matrix.js";
+import { parseVerificationMatrixWithDiagnostics } from "./verification-matrix.js";
+import { validateVerificationEvidence } from "./verification-evidence.js";
 import { runFanout } from "./fanout.js";
 import { reapWorktrees } from "./worktree.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
@@ -51,7 +42,6 @@ import {
   hasRunReport,
   readStageRecords,
   removeStageRecords,
-  runReportDir,
   writeManifest,
   writeRunReport,
   writeStageRecord,
@@ -177,51 +167,6 @@ export function countDeferredFollowups(text: string): number {
   }
   flush();
   return n;
-}
-
-/**
- * Copy a `--verify` run's captured screenshots out of `.otto-tmp/` into the run
- * bundle (`.otto/runs/<run-id>/verification/`) and rewrite each `visual` entry's
- * path to be **report-relative**, so the screenshot links in the persisted
- * report/manifest resolve and the images are preserved as run artifacts (#181
- * review). Non-file references (`file:line`, SHAs) and missing files are left
- * untouched. Best-effort: a copy that fails leaves the original path. Pure-ish
- * (fs side effects only into the bundle).
- */
-function relocateVerificationScreenshots(
-  entries: VerificationEntry[],
-  workspaceDir: string,
-  runId: string
-): VerificationEntry[] {
-  const destDir = join(runReportDir(workspaceDir, runId), "verification");
-  const relocate = (
-    p: string | undefined,
-    label: string,
-    idx: number
-  ): string | undefined => {
-    if (!p) return p;
-    const abs = isAbsolute(p) ? p : join(workspaceDir, p);
-    if (!existsSync(abs)) return p; // a reference (file:line / SHA) or already gone
-    try {
-      mkdirSync(destDir, { recursive: true });
-      const safe = `${idx}-${label}-${basename(p)}`
-        .replace(/[^\w.-]+/g, "-")
-        .slice(0, 100);
-      copyFileSync(abs, join(destDir, safe));
-      return `verification/${safe}`; // relative to report.md / manifest.json in the bundle
-    } catch {
-      return p; // best-effort: never fail finalize over a screenshot copy
-    }
-  };
-  return entries.map((e, idx) => {
-    if (e.method !== "visual") return e;
-    const next = { ...e };
-    const after = relocate(e.artifactPath, "after", idx);
-    if (after !== undefined) next.artifactPath = after;
-    const before = relocate(e.beforePath, "before", idx);
-    if (before !== undefined) next.beforePath = before;
-    return next;
-  });
 }
 
 function deferredFollowupCount(workspaceDir: string): number {
@@ -842,11 +787,14 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         );
         verificationDropped = result.dropped;
         if (result.entries.length > 0) {
-          verification = relocateVerificationScreenshots(
-            result.entries,
+          // Validate each cited artifact against the real filesystem/git (so a
+          // nonexistent path or fabricated SHA cannot earn coverage) and relocate
+          // scratch file artifacts into the durable bundle (#181 re-review).
+          verification = validateVerificationEvidence(result.entries, {
             workspaceDir,
-            runId
-          );
+            runId,
+            commitExists: (sha) => commitExists(workspaceDir, sha),
+          });
         }
       }
       const manifestForReport: RunManifest = {

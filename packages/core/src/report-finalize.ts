@@ -226,10 +226,6 @@ function appendVerificationGallery(
     ].join("\n");
     return `${report.trimEnd()}\n\n${fail}\n`;
   }
-  const droppedNote =
-    dropped > 0
-      ? `\n\n_Note: ${dropped} malformed matrix row(s) were dropped during parsing._`
-      : "";
   const section = [
     "## Verification Gallery",
     "",
@@ -241,8 +237,9 @@ function appendVerificationGallery(
     "",
     // Coverage gate (P24): judge whether every verifiable requirement is
     // artifact-backed — the roadmap's "reports include a verification artifact
-    // where feasible" bar — with remediation on FAIL.
-    formatVerificationCoverageGate(matrix) + droppedNote,
+    // where feasible" bar. Dropped malformed rows are passed in so they FAIL the
+    // gate, not just footnote it (#181 re-review).
+    formatVerificationCoverageGate(matrix, dropped),
   ].join("\n");
   // Visual half (P24): embed any captured screenshots as a markdown gallery so a
   // non-engineer sees the rendered-UI proof, not just a path. Empty when no

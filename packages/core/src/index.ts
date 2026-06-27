@@ -141,6 +141,11 @@ export {
   type VerificationSummary,
 } from "./verification-matrix.js";
 export {
+  artifactReferenceExists,
+  validateVerificationEvidence,
+  type EvidenceDeps,
+} from "./verification-evidence.js";
+export {
   formatPlainReport,
   runExplain,
   type ExplainDeps,

@@ -36,7 +36,7 @@ describe("isValidArtifactReference", () => {
     }
   });
 
-  it("rejects bare commands, prose, placeholders, and empties", () => {
+  it("rejects bare commands, prose, placeholders, URLs, and traversal", () => {
     for (const ref of [
       "node --test",
       "read the code",
@@ -45,6 +45,12 @@ describe("isValidArtifactReference", () => {
       "see above",
       "",
       "   ",
+      "https://example.com/proof.png",
+      "http://x/y",
+      "file:///etc/passwd",
+      "../secret.txt",
+      "../../etc/passwd",
+      "src/../../escape.ts",
     ]) {
       expect(isValidArtifactReference(ref), ref).toBe(false);
     }
@@ -57,6 +63,17 @@ describe("summarizeVerification", () => {
       { ...entry({}), artifactPath: "node --test" },
     ]);
     expect(s.withArtifact).toBe(0);
+    expect(s.coverage).toBe(0);
+    expect(s.verdict).toBe("unproven");
+  });
+
+  it("does not count an artifact the loop marked non-existent (artifactExists=false)", () => {
+    const s = summarizeVerification([
+      {
+        ...entry({ artifactPath: "proof/missing.txt" }),
+        artifactExists: false,
+      },
+    ]);
     expect(s.coverage).toBe(0);
     expect(s.verdict).toBe("unproven");
   });
@@ -251,6 +268,18 @@ describe("formatVerificationCoverageGate", () => {
     ]);
     expect(out).toContain("FAIL");
     expect(out).toContain("half-done");
+  });
+
+  it("FAILs when malformed rows were dropped, even if surviving rows pass (#181 re-review)", () => {
+    const g = scoreVerificationCoverage([entry({ artifactPath: "a.ts:1" })], 1);
+    expect(g.passed).toBe(false);
+    expect(g.dropped).toBe(1);
+    const out = formatVerificationCoverageGate(
+      [entry({ artifactPath: "a.ts:1" })],
+      1
+    );
+    expect(out).toContain("Gate: **FAIL**");
+    expect(out).toMatch(/dropped|malformed/i);
   });
 
   it("is empty for an empty matrix (nothing to gate)", () => {

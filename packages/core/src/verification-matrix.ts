@@ -46,6 +46,11 @@ export type VerificationEntry = {
   /** For a `visual` entry, the optional **before** screenshot path, paired with
    *  `artifactPath` (the after) for a before/after comparison. */
   beforePath?: string;
+  /** Set by the loop's filesystem/git validation (issue #181 re-review): whether
+   *  `artifactPath` actually resolves to an existing file (with in-bounds line)
+   *  or a commit present in git. `false` ⇒ the cited proof does not exist and the
+   *  requirement is not counted as covered. Never read from agent JSON. */
+  artifactExists?: boolean;
   result: VerificationResult;
   confidence: VerificationConfidence;
   note?: string;
@@ -77,15 +82,27 @@ const CONFIDENCES: ReadonlySet<string> = new Set(["high", "medium", "low"]);
 export function isValidArtifactReference(ref: string): boolean {
   const r = ref.trim();
   if (!r) return false;
+  if (/\s/.test(r)) return false; // commands / prose carry whitespace
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(r)) return false; // URLs (scheme://)
+  if (/(?:^|[\\/])\.\.(?:[\\/]|$)/.test(r)) return false; // path traversal
   if (/^[0-9a-f]{7,40}$/i.test(r)) return true; // commit SHA
   if (/^[\w./\\-]+:\d+(?:-\d+)?$/.test(r)) return true; // file:line or file:line-range
-  if (/\s/.test(r)) return false; // commands / prose carry whitespace
   return /[/\\]/.test(r) || /\.[A-Za-z0-9]{1,8}$/.test(r); // a path, or a file with an extension
 }
 
-/** Whether an entry carries a *valid, typed* proving artifact. */
+/**
+ * Whether an entry carries a *valid, typed* proving artifact. Syntactically valid
+ * (see {@link isValidArtifactReference}) AND not marked non-existent by the loop's
+ * filesystem/git validation (`artifactExists === false`). When `artifactExists` is
+ * undefined the syntax check stands alone — the pure scorer cannot touch the
+ * filesystem, so the loop sets `artifactExists` before this matters at runtime.
+ */
 function hasArtifact(e: VerificationEntry): boolean {
-  return Boolean(e.artifactPath) && isValidArtifactReference(e.artifactPath!);
+  return (
+    Boolean(e.artifactPath) &&
+    isValidArtifactReference(e.artifactPath!) &&
+    e.artifactExists !== false
+  );
 }
 
 export type VerificationParseResult = {
@@ -228,7 +245,8 @@ export function summarizeVerification(
 }
 
 export type VerificationCoverageGate = {
-  /** True iff no requirement failed and every verifiable one is artifact-backed. */
+  /** True iff no requirement failed, every verifiable one is artifact-backed, and
+   *  no matrix rows were dropped during parsing. */
   passed: boolean;
   /** Artifact-backed share of the verifiable requirements, 0..1. */
   coverage: number;
@@ -238,21 +256,25 @@ export type VerificationCoverageGate = {
   failed: string[];
   /** Requirements left `partial` — checked but not fully passing. */
   incomplete: string[];
+  /** Malformed matrix rows dropped during parsing — unknown, unverified requirements. */
+  dropped: number;
 };
 
 /**
  * Score a verification matrix against the roadmap's coverage bar (P24): every
- * verifiable requirement must carry a valid artifact, none may fail, and none may
- * be left partial. The `unproven`/`failed`/`incomplete` lists are exactly why the
- * gate did not pass — what an operator must fix (cite a valid artifact, fix the
- * failure/partial, or mark the requirement `deferred`). Pure.
+ * verifiable requirement must carry a valid artifact, none may fail, none may be
+ * left partial, and no rows may have been dropped during parsing. `dropped` rows
+ * are unknown requirements that cannot be assumed proven, so any drop FAILs the
+ * gate (#181 re-review). The `unproven`/`failed`/`incomplete` lists + `dropped`
+ * are exactly why the gate did not pass. Pure.
  */
 export function scoreVerificationCoverage(
-  entries: VerificationEntry[]
+  entries: VerificationEntry[],
+  dropped = 0
 ): VerificationCoverageGate {
   const summary = summarizeVerification(entries);
   return {
-    passed: summary.verdict === "verified",
+    passed: summary.verdict === "verified" && dropped === 0,
     coverage: summary.coverage,
     unproven: entries
       .filter((e) => isVerifiable(e) && !hasArtifact(e))
@@ -263,6 +285,7 @@ export function scoreVerificationCoverage(
     incomplete: entries
       .filter((e) => e.result === "partial")
       .map((e) => e.requirement),
+    dropped,
   };
 }
 
@@ -273,16 +296,23 @@ export function scoreVerificationCoverage(
  * for an empty matrix, so a run with no verification adds no gate. Pure.
  */
 export function formatVerificationCoverageGate(
-  entries: VerificationEntry[]
+  entries: VerificationEntry[],
+  dropped = 0
 ): string {
-  if (entries.length === 0) return "";
-  const g = scoreVerificationCoverage(entries);
+  if (entries.length === 0 && dropped === 0) return "";
+  const g = scoreVerificationCoverage(entries, dropped);
   const lines = [
     "## Verification Coverage Gate",
     "",
     `Gate: **${g.passed ? "PASS" : "FAIL"}** — ${pct.format(g.coverage * 100)}% of verifiable requirements are artifact-backed.`,
   ];
   if (!g.passed) {
+    if (g.dropped > 0) {
+      lines.push(
+        "",
+        `Dropped ${g.dropped} malformed matrix row(s) — those requirements are unknown and unverified; fix the matrix.`
+      );
+    }
     if (g.failed.length > 0) {
       lines.push("", `Failed: ${g.failed.join(", ")}.`);
     }
@@ -301,6 +331,7 @@ export function formatVerificationCoverageGate(
     // A FAIL with no failed/incomplete/unproven items would be unexplained; make
     // the residual reason explicit rather than leaving an empty gate (#181 review).
     if (
+      g.dropped === 0 &&
       g.failed.length === 0 &&
       g.incomplete.length === 0 &&
       g.unproven.length === 0

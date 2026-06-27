@@ -10,7 +10,10 @@ import {
   type StageRecord,
 } from "./run-report.js";
 import { formatTokenUsage } from "./tokens.js";
-import { formatVerificationMatrix } from "./verification-matrix.js";
+import {
+  formatVerificationCoverageGate,
+  formatVerificationMatrix,
+} from "./verification-matrix.js";
 
 /**
  * Injectable host surface for {@link runInspect} so the reader stays
@@ -108,11 +111,24 @@ export function formatRunReport(
   }
 
   // Verification gallery (issue #181 P24): the structured matrix a --verify run
-  // produced — what was proven, how, and with which artifact — with failures and
-  // unproven requirements surfaced as explicit risks.
-  if (manifest.verification && manifest.verification.length > 0) {
+  // produced — what was proven, how, and with which artifact — with failures,
+  // unproven requirements, and the coverage gate surfaced. A --verify run that
+  // recorded no/malformed matrix shows the same visible failure as the report,
+  // not nothing (#181 re-review).
+  const matrix = manifest.verification ?? [];
+  const dropped = manifest.verificationDropped ?? 0;
+  if (matrix.length > 0) {
     lines.push("");
-    lines.push(formatVerificationMatrix(manifest.verification));
+    lines.push(formatVerificationMatrix(matrix));
+    lines.push("");
+    lines.push(formatVerificationCoverageGate(matrix, dropped));
+  } else if (manifest.mode === "verify") {
+    lines.push("");
+    lines.push(
+      `Verification: FAIL — no machine-readable matrix was recorded` +
+        (dropped > 0 ? ` (${dropped} malformed row(s) dropped)` : "") +
+        "; this run's claims are unproven."
+    );
   }
 
   // Injected skills (issue #114 P18): the validated skills that shaped this run,

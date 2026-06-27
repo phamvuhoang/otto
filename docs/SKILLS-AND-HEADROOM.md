@@ -131,19 +131,24 @@ otto-skills audit --external   # unpinned refs, missing licenses, dup names, dri
 otto-skills audit              # validated / unvalidated / stale / needs-revalidation
 otto-tools audit               # unreachable tools, missing health checks, policy conflicts
 
-git status --short .otto/      # exactly what the import/init added (new files show as "??")
+git status --short .otto/      # exactly what the import/init touched:
+#   "??" = a NEW (untracked) file → safe to delete
+#   " M" = a TRACKED file was edited/overwritten → restore it, don't delete it
 
-# Roll back surgically — restore any files that PRE-existed, then delete only the new ones:
-git checkout -- .otto/skills/sources.json .otto/skills.lock.json   # if these were tracked already
-# `sync` writes ONE dir per imported skill at .otto/skills/<skill-name>/ (NOT one dir per
-# source — a source usually produces several siblings). Delete the exact <skill-name> dirs
-# git status listed as new ("??"), e.g.:
-rm -rf .otto/skills/<skill-a>/ .otto/skills/<skill-b>/
-git checkout -- .otto/skills/<overwritten-skill>/   # restore any tracked skill the import overwrote
-rm -f  .otto/tools/<imported-tool>.json             # any tool an `otto-extensions init` wrote
+# 1. Restore every tracked file the import EDITED or overwrote. `otto-extensions init` merges
+#    into .otto/config.json and union-merges .otto/policy.json, and can overwrite an existing
+#    tool or a skill dir — so include whatever git status marked " M":
+git checkout -- .otto/config.json .otto/policy.json \
+                .otto/skills/sources.json .otto/skills.lock.json \
+                .otto/tools/<edited-tool>.json .otto/skills/<overwritten-skill>/
+
+# 2. Delete ONLY the paths git status marked new ("??"). `sync` writes one
+#    .otto/skills/<skill-name>/ dir PER imported skill (often several per source):
+rm -rf .otto/skills/<new-skill-a>/ .otto/skills/<new-skill-b>/
+rm -f  .otto/tools/<new-tool>.json    # only if `??` — never rm a tool you already had
 ```
 
-> ⚠️ **Don't `git clean -fd .otto/`** to undo an import — it deletes _every_ untracked file there, including your own hand-authored skills, and it still won't revert tracked edits to `sources.json` / `skills.lock.json`. Paths first, always.
+> ⚠️ **Don't `git clean -fd .otto/`** to undo an import — it deletes _every_ untracked file there, including your own hand-authored skills, and it still won't revert the **tracked** edits an `init` makes to `config.json` / `policy.json` / `sources.json` / `skills.lock.json`. Restore tracked files with `git checkout`; delete only the `??` paths. Paths first, always.
 
 - **Never auto-trusted:** a famous source is still imported `unverified`; the **gate**, not the repo's reputation, decides eligibility.
 - **Drift:** re-`sync` an upstream change and `otto-skills audit` flags it for revalidation; `--use-skills` won't inject a drifted skill until you re-`validate`.

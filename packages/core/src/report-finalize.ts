@@ -4,7 +4,10 @@ import {
   type RunManifest,
   type StageRecord,
 } from "./run-report.js";
-import { formatVerificationMatrix } from "./verification-matrix.js";
+import {
+  formatVerificationCoverageGate,
+  formatVerificationMatrix,
+} from "./verification-matrix.js";
 
 const SENTINEL_RE = /\n?<promise>NO MORE TASKS<\/promise>\s*/g;
 const H2_RE = /^##\s+/m;
@@ -216,6 +219,11 @@ function appendVerificationGallery(
     "```text",
     formatVerificationMatrix(matrix),
     "```",
+    "",
+    // Coverage gate (P24): judge whether every verifiable requirement is
+    // artifact-backed — the roadmap's "reports include a verification artifact
+    // where feasible" bar — with remediation on FAIL.
+    formatVerificationCoverageGate(matrix),
   ].join("\n");
   return `${report.trimEnd()}\n\n${section}\n`;
 }

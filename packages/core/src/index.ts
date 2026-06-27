@@ -124,9 +124,12 @@ export {
 } from "./run-report.js";
 export { formatRunReport, runInspect, type InspectDeps } from "./inspect.js";
 export {
+  formatVerificationCoverageGate,
   formatVerificationMatrix,
   parseVerificationMatrix,
+  scoreVerificationCoverage,
   summarizeVerification,
+  type VerificationCoverageGate,
   type VerificationConfidence,
   type VerificationEntry,
   type VerificationMethod,

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatVerificationCoverageGate,
   formatVerificationMatrix,
   parseVerificationMatrix,
+  scoreVerificationCoverage,
   summarizeVerification,
   type VerificationEntry,
 } from "../verification-matrix.js";
@@ -134,5 +136,53 @@ describe("parseVerificationMatrix", () => {
     expect(parseVerificationMatrix("not json")).toEqual([]);
     expect(parseVerificationMatrix("{}")).toEqual([]);
     expect(parseVerificationMatrix("")).toEqual([]);
+  });
+});
+
+describe("scoreVerificationCoverage", () => {
+  it("passes when every verifiable requirement is artifact-backed and none failed", () => {
+    const g = scoreVerificationCoverage([
+      entry({ artifactPath: "a.ts:1" }),
+      entry({ result: "deferred" }), // deferred is exempt from the bar
+    ]);
+    expect(g.passed).toBe(true);
+    expect(g.coverage).toBeCloseTo(1, 5);
+    expect(g.unproven).toEqual([]);
+    expect(g.failed).toEqual([]);
+  });
+
+  it("fails and lists unproven + failed requirements below the bar", () => {
+    const g = scoreVerificationCoverage([
+      entry({ requirement: "proven", artifactPath: "a.ts:1" }),
+      entry({ requirement: "no-artifact", artifactPath: undefined }),
+      entry({ requirement: "broke", result: "fail" }),
+    ]);
+    expect(g.passed).toBe(false);
+    expect(g.unproven).toContain("no-artifact");
+    expect(g.failed).toContain("broke");
+  });
+});
+
+describe("formatVerificationCoverageGate", () => {
+  it("renders a PASS gate for a fully artifact-backed matrix", () => {
+    const out = formatVerificationCoverageGate([
+      entry({ artifactPath: "a:1" }),
+    ]);
+    expect(out).toMatch(/verification coverage/i);
+    expect(out).toContain("PASS");
+  });
+
+  it("renders a FAIL gate naming the unproven requirements + a remediation", () => {
+    const out = formatVerificationCoverageGate([
+      entry({ requirement: "needs-proof", artifactPath: undefined }),
+    ]);
+    expect(out).toContain("FAIL");
+    expect(out).toContain("needs-proof");
+    // Tells the operator how to clear it.
+    expect(out.toLowerCase()).toMatch(/artifact|deferred/);
+  });
+
+  it("is empty for an empty matrix (nothing to gate)", () => {
+    expect(formatVerificationCoverageGate([])).toBe("");
   });
 });

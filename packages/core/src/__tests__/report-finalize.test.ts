@@ -166,6 +166,9 @@ describe("finalizeReportText", () => {
     // The failed requirement is surfaced as a risk.
     expect(out.toLowerCase()).toContain("risk");
     expect(out).toContain("edge case handled");
+    // The coverage gate judges the matrix (a failure ⇒ FAIL) with remediation.
+    expect(out).toContain("## Verification Coverage Gate");
+    expect(out).toContain("Gate: **FAIL**");
   });
 
   it("adds no gallery when the run carried no verification matrix (#181 P24)", () => {

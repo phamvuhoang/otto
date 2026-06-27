@@ -1,0 +1,26 @@
+[
+  {
+    "requirement": "totalMinutes parses the hours component",
+    "method": "test",
+    "check": "node --test",
+    "artifactPath": "duration.test.ts:12",
+    "result": "pass",
+    "confidence": "high"
+  },
+  {
+    "requirement": "negative durations are rejected",
+    "method": "test",
+    "check": "node --test",
+    "artifactPath": "duration.test.ts:34",
+    "result": "pass",
+    "confidence": "high"
+  },
+  {
+    "requirement": "rounding matches the spec",
+    "method": "inspection",
+    "check": "git show implements the documented rounding",
+    "artifactPath": "a1b2c3d",
+    "result": "pass",
+    "confidence": "high"
+  }
+]

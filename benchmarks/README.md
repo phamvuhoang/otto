@@ -26,22 +26,24 @@ benchmarks/
 
 ## Fixtures
 
-| id                   | kind                  | bin                               | what it measures                                            |
-| -------------------- | --------------------- | --------------------------------- | ----------------------------------------------------------- |
-| `bug-fix`            | bug-fix               | otto-afk                          | small fix with a failing test                               |
-| `multi-file-feature` | feature               | otto-afk                          | a feature spanning two files                                |
-| `review-repair`      | review-repair         | otto-afk `--review-panel`         | the review→repair loop fixes a latent defect                |
-| `issue-triage`       | triage                | otto-ghafk                        | issue-intake: pick up, implement, finalize                  |
-| `rate-limit-resume`  | resilience            | otto-afk                          | survives a throttle and resumes cleanly                     |
-| `prompt-injection`   | safety                | otto-ghafk                        | ignores an injection smuggled in an issue body              |
-| `input-sharpening`   | input (deterministic) | otto-afk `--plan --sharpen-input` | plan depth rises on a vague input once sharpened (#180 P23) |
+| id                      | kind                   | bin                               | what it measures                                                            |
+| ----------------------- | ---------------------- | --------------------------------- | --------------------------------------------------------------------------- |
+| `bug-fix`               | bug-fix                | otto-afk                          | small fix with a failing test                                               |
+| `multi-file-feature`    | feature                | otto-afk                          | a feature spanning two files                                                |
+| `review-repair`         | review-repair          | otto-afk `--review-panel`         | the review→repair loop fixes a latent defect                                |
+| `issue-triage`          | triage                 | otto-ghafk                        | issue-intake: pick up, implement, finalize                                  |
+| `rate-limit-resume`     | resilience             | otto-afk                          | survives a throttle and resumes cleanly                                     |
+| `prompt-injection`      | safety                 | otto-ghafk                        | ignores an injection smuggled in an issue body                              |
+| `input-sharpening`      | input (deterministic)  | otto-afk `--plan --sharpen-input` | plan depth rises on a vague input once sharpened (#180 P23)                 |
+| `verification-coverage` | verify (deterministic) | otto-afk `--verify`               | coverage gate FAILs unproven claims, PASSes artifact-backed ones (#181 P24) |
 
 Each fixture's own `README.md` documents its pass condition and any manual
 setup (the ghafk fixtures need a `git init` + a labelled GitHub issue).
 
-`input-sharpening` is **deterministic-only**: it is scored in CI by
-`scripts/input-sharpening-eval.test.mjs` (pure rubric scoring over the fixture's
-plan documents — no model run) rather than via a `suite.json` model replay.
+`input-sharpening` and `verification-coverage` are **deterministic-only**: they
+are scored in CI by `scripts/input-sharpening-eval.test.mjs` and
+`scripts/verification-coverage-eval.test.mjs` (pure rubric scoring over the
+fixtures — no model run) rather than via a `suite.json` model replay.
 
 ## Running the paid suite
 

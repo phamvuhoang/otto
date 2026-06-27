@@ -169,6 +169,69 @@ export function summarizeVerification(
   };
 }
 
+export type VerificationCoverageGate = {
+  /** True iff no requirement failed and every verifiable one is artifact-backed. */
+  passed: boolean;
+  /** Artifact-backed share of the verifiable requirements, 0..1. */
+  coverage: number;
+  /** Verifiable requirements asserted without a proving artifact. */
+  unproven: string[];
+  /** Requirements that failed verification. */
+  failed: string[];
+};
+
+/**
+ * Score a verification matrix against the roadmap's coverage bar (P24): every
+ * verifiable requirement must carry a concrete artifact and none may fail. The
+ * `unproven`/`failed` lists are what an operator must fix to clear the gate
+ * (add an artifact, or mark the requirement `deferred`). Pure.
+ */
+export function scoreVerificationCoverage(
+  entries: VerificationEntry[]
+): VerificationCoverageGate {
+  const summary = summarizeVerification(entries);
+  return {
+    passed: summary.verdict === "verified",
+    coverage: summary.coverage,
+    unproven: entries
+      .filter((e) => isVerifiable(e) && !e.artifactPath)
+      .map((e) => e.requirement),
+    failed: entries
+      .filter((e) => e.result === "fail")
+      .map((e) => e.requirement),
+  };
+}
+
+/**
+ * Render the verification-coverage gate as a report block (mirrors the emit-time
+ * legibility gate): a PASS/FAIL verdict, the artifact-backed coverage, and — on
+ * FAIL — the unproven/failed requirements plus how to clear them. Empty string
+ * for an empty matrix, so a run with no verification adds no gate. Pure.
+ */
+export function formatVerificationCoverageGate(
+  entries: VerificationEntry[]
+): string {
+  if (entries.length === 0) return "";
+  const g = scoreVerificationCoverage(entries);
+  const lines = [
+    "## Verification Coverage Gate",
+    "",
+    `Gate: **${g.passed ? "PASS" : "FAIL"}** — ${pct.format(g.coverage * 100)}% of verifiable requirements are artifact-backed.`,
+  ];
+  if (!g.passed) {
+    if (g.failed.length > 0) {
+      lines.push("", `Failed: ${g.failed.join(", ")}.`);
+    }
+    if (g.unproven.length > 0) {
+      lines.push(
+        "",
+        `Unproven (cite a concrete artifact — \`file:line\`, a commit SHA, a transcript/screenshot — or mark the requirement \`deferred\`): ${g.unproven.join(", ")}.`
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
 const RESULT_MARK: Record<VerificationResult, string> = {
   pass: "✓",
   fail: "✗",

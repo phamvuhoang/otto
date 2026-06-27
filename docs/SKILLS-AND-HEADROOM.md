@@ -34,7 +34,7 @@ Everything is plain, git-trackable files under `.otto/`. To review or undo an im
 | Add one strict, static maintainability-review pass                                 | **Cursor `thermo-nuclear-code-quality-review`** | `otto-afk --review-panel --use-skills`   |
 | Cut input tokens on long, context-heavy runs (big issue bodies, comments, diffs)   | **Headroom**                                    | `otto-afk --context-compressor headroom` |
 
-> **Not in the table on purpose:** [gstack](https://github.com/garrytan/gstack) — its roles are interactive workflows (shell setup, telemetry, `AskUserQuestion` gates, git ops), so they validate `blocked` or `interactive-only`, not direct-use AFK skills. Use it as **inspiration**, not an import — [see below](#gstack--inspiration-not-a-direct-import).
+> **Not in the table on purpose:** [gstack](https://github.com/garrytan/gstack) — its roles are interactive, side-effecting workflows (home-directory `rm -f ~/.gstack/…`, telemetry, decision gates, `git rm`/commit), so they validate **`blocked`** (the destructive `rm` trips `unsafe-shell`), not direct-use AFK skills. Use it as **inspiration**, not an import — [see below](#gstack--inspiration-not-a-direct-import).
 
 Rule of thumb: **skills sharpen _quality_** (better plan, stricter review, disciplined implement); **Headroom lowers _cost_** (fewer input tokens) while _aiming_ to preserve quality. They compose — use a planning skill **and** Headroom on the same run, then check the run's evidence to confirm nothing important was lost.
 
@@ -83,7 +83,7 @@ otto-afk --review-panel --use-skills "./docs/plans/feature.md" 20
 
 [garrytan/gstack](https://github.com/garrytan/gstack): _"23 opinionated tools that serve as CEO, Designer, Eng Manager, Release Manager, Doc Engineer, and QA."_ Each role (`/office-hours`, `/design`, `/review`, `/qa`, `/ship`, `/spec`, …) is a `SKILL.md`, the shape Otto imports — but **don't import gstack roles into Otto directly.** They are interactive Claude Code workflows, not single-pass guidance:
 
-- Even the "static-sounding" ones aren't. Its [`spec`](https://github.com/garrytan/gstack/blob/main/spec/SKILL.md) and [`review`](https://github.com/garrytan/gstack/blob/main/review/SKILL.md) skills run **shell setup** (`mkdir`, `git branch`), **append telemetry** (`~/.gstack/analytics/…`, brain-sync), present **stop-and-wait decision gates**, perform **GitHub operations** (`git add && git commit`), and **dispatch subagents**. The shell + git steps trip Otto's **unsafe-shell** check (an error finding) → **`blocked`**; and they're interactive workflows by design — either way, not a usable AFK skill.
+- Even the "static-sounding" ones aren't. Its [`review`](https://github.com/garrytan/gstack/blob/main/review/SKILL.md) skill runs **home-directory deletes** (`rm -f ~/.gstack/…`, `rm -f ~/.gstack/analytics/…`), **telemetry**, **`git rm`/commit** during migration, and human **decision gates**, plus subagents. The `rm -f ~/…` lines trip Otto's **`unsafe-shell`** check (`rm` targeting `~`/`$VAR`/`/` is an error finding) → **`blocked`**. (Note: ordinary `mkdir` / `git branch` / `git commit` would _not_ block on their own — the gate flags specific **destructive** commands, secret handling, `sudo`, `curl|sh`, `chmod 777`, and stop-and-wait language; here it's the `rm -f ~/…`.) Either way it's an interactive, side-effecting workflow, not a usable AFK skill.
 - Otto injects a **bounded, char-capped excerpt** of a skill's body. A long gstack role would be truncated — and the truncated head is the routing/setup **preamble**, not the actual workflow. So even the parts that aren't blocked wouldn't inject usefully.
 - **Don't run gstack's `./setup`** either — it installs into `~/.claude/skills/gstack` and wires machine setup + telemetry for Claude Code, not Otto.
 
@@ -135,8 +135,12 @@ git status --short .otto/      # exactly what the import/init added (new files s
 
 # Roll back surgically — restore any files that PRE-existed, then delete only the new ones:
 git checkout -- .otto/skills/sources.json .otto/skills.lock.json   # if these were tracked already
-rm -rf .otto/skills/<imported-source>/     # the imported skill package(s)
-rm -f  .otto/tools/<imported-tool>.json    # any tool an `otto-extensions init` wrote
+# `sync` writes ONE dir per imported skill at .otto/skills/<skill-name>/ (NOT one dir per
+# source — a source usually produces several siblings). Delete the exact <skill-name> dirs
+# git status listed as new ("??"), e.g.:
+rm -rf .otto/skills/<skill-a>/ .otto/skills/<skill-b>/
+git checkout -- .otto/skills/<overwritten-skill>/   # restore any tracked skill the import overwrote
+rm -f  .otto/tools/<imported-tool>.json             # any tool an `otto-extensions init` wrote
 ```
 
 > ⚠️ **Don't `git clean -fd .otto/`** to undo an import — it deletes _every_ untracked file there, including your own hand-authored skills, and it still won't revert tracked edits to `sources.json` / `skills.lock.json`. Paths first, always.

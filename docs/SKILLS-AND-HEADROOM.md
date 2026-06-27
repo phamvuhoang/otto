@@ -12,14 +12,16 @@ Otto extends a run two ways, and treats them differently:
 
 - **Skills** = methodology/knowledge **injected into a stage's prompt** (plan, implement, review, report). A skill source is just a repo of `SKILL.md` packages. Lifecycle: **import → validate → activate**.
   - `import` brings it in **unverified** (inert).
-  - `validate` (`otto-skills validate <skill>`) classifies it: **`afk-safe`** (any stage, unattended) · **`stage-scoped`** (only the stages its capability tags imply) · **`interactive-only`** (an interactive hard-stop, e.g. `AskUserQuestion` / stop-and-wait — never injected on any stage) · **`blocked`** (an **error**-severity finding: unsafe shell, secret handling, or an attempt to overrule repo policy).
+  - `validate` (`otto-skills validate <skill>`) classifies it: **`afk-safe`** (any stage, unattended) · **`stage-scoped`** (only the stages its capability tags imply) · **`interactive-only`** (the body uses recognized **stop-and-wait language** — e.g. "do not proceed until", "STOP and wait", "wait for approval" — never injected on any stage) · **`blocked`** (an **error**-severity finding: unsafe shell, secret handling, or an attempt to overrule repo policy).
   - `activate` (`--use-skills`) injects only eligible, stage-matching skills as a **bounded, attributed** block (char-capped, so a long skill is **truncated** to an excerpt), recorded in `skillsUsed[]`.
 
-  > **⚠️ The gate does _not_ block on network/browser/telemetry.** Those are **warnings** (`network-use`, `unsupported-tool`), not errors — a skill that calls the network, drives a browser, or phones home can still validate **`afk-safe`** and be injected. Only unsafe-shell / secret-handling / policy-override are auto-`blocked`. So **read the `otto-skills validate` findings and decide** — don't assume a network-touching skill is stopped for you. (What the skill _text_ tells the agent to do still runs inside Otto's sandbox + `.otto/policy.json`; the skill gate governs eligibility of the guidance, not every action it suggests.)
+  > **⚠️ The gate does _not_ block on network/browser/telemetry.** Those are **warnings** (`network-use`, `unsupported-tool`), not errors — a skill that calls the network, drives a browser, or phones home can still validate **`afk-safe`** and be injected. Only unsafe-shell / secret-handling / policy-override are auto-`blocked`. So **read the `otto-skills validate` findings and decide** — don't assume a network-touching skill is stopped for you.
+  >
+  > And the gate governs which guidance is _eligible_, not what the agent does after reading it. `.otto/policy.json` only checks **harness-rendered `!`/`@spill` commands and registered-tool calls** — it does **not** sandbox arbitrary shell/network the agent runs on its own. The agent's own actions are bounded by the **runner**: the default `OTTO_RUNNER=sandbox` confines writes to the workspace via the OS sandbox, while `OTTO_RUNNER=host` runs **unsandboxed**. Treat an injected skill like code you're about to run — point Otto only at packs you'd run yourself ([SECURITY.md](../SECURITY.md)).
 
 - **Headroom** = a **tool**, not a skill. It compresses token-heavy `@spill` content (issue bodies, comments, diffs) **before the agent reads it**, reversibly. You enable it per run with `--context-compressor headroom` (or `OTTO_CONTEXT_COMPRESSOR` / config). `otto-extensions init context-saver` _also_ drops a `.otto/tools/headroom.json` entry so you can `otto-tools list` / `health` it — but note the runtime constructs the compressor straight from that config flag; it is **not** gated per-stage through tool policy the way registered tools are.
 
-Everything is plain, git-tracked files under `.otto/`. To review or undo an import, see [Govern, lock & roll back](#govern-lock--roll-back) below — note imported files are **untracked** until you commit them, so `git diff` alone won't show them.
+Everything is plain, git-trackable files under `.otto/`. To review or undo an import, see [Govern, lock & roll back](#govern-lock--roll-back) below — note imported files are **untracked** until you commit them, so `git diff` alone won't show them.
 
 ---
 
@@ -81,7 +83,7 @@ otto-afk --review-panel --use-skills "./docs/plans/feature.md" 20
 
 [garrytan/gstack](https://github.com/garrytan/gstack): _"23 opinionated tools that serve as CEO, Designer, Eng Manager, Release Manager, Doc Engineer, and QA."_ Each role (`/office-hours`, `/design`, `/review`, `/qa`, `/ship`, `/spec`, …) is a `SKILL.md`, the shape Otto imports — but **don't import gstack roles into Otto directly.** They are interactive Claude Code workflows, not single-pass guidance:
 
-- Even the "static-sounding" ones aren't. Its [`spec`](https://github.com/garrytan/gstack/blob/main/spec/SKILL.md) and [`review`](https://github.com/garrytan/gstack/blob/main/review/SKILL.md) skills run **shell setup** (`mkdir`, `git branch`), **append telemetry** (`~/.gstack/analytics/…`, brain-sync), present **`AskUserQuestion` stop-and-wait gates**, perform **GitHub operations** (`git add && git commit`), and **dispatch subagents**. Under Otto's gate that's `blocked` (unsafe shell) or `interactive-only` — not a usable AFK skill.
+- Even the "static-sounding" ones aren't. Its [`spec`](https://github.com/garrytan/gstack/blob/main/spec/SKILL.md) and [`review`](https://github.com/garrytan/gstack/blob/main/review/SKILL.md) skills run **shell setup** (`mkdir`, `git branch`), **append telemetry** (`~/.gstack/analytics/…`, brain-sync), present **stop-and-wait decision gates**, perform **GitHub operations** (`git add && git commit`), and **dispatch subagents**. The shell + git steps trip Otto's **unsafe-shell** check (an error finding) → **`blocked`**; and they're interactive workflows by design — either way, not a usable AFK skill.
 - Otto injects a **bounded, char-capped excerpt** of a skill's body. A long gstack role would be truncated — and the truncated head is the routing/setup **preamble**, not the actual workflow. So even the parts that aren't blocked wouldn't inject usefully.
 - **Don't run gstack's `./setup`** either — it installs into `~/.claude/skills/gstack` and wires machine setup + telemetry for Claude Code, not Otto.
 
@@ -120,18 +122,24 @@ otto-afk --context-compressor headroom "./docs/plans/feature.md" 10
 
 ## Govern, lock & roll back
 
-Imports are plain `.otto/` files under your control. Because most are **newly created** (untracked until you commit them), use `git status`, not `git diff`, to see them — and remember `git checkout` only restores _tracked_ files:
+Imports are plain `.otto/` files under your control, but most are **newly created** (untracked until you commit them), so `git diff`/`git checkout` won't show or remove them.
+
+**Commit (or stash) a clean baseline _before_ importing** — then rolling back is trivial and can't touch anything else. Without a baseline, clean up **by the specific paths** the import added (from `git status`), never with a blanket `git clean`:
 
 ```bash
 otto-skills audit --external   # unpinned refs, missing licenses, dup names, drifted copies
 otto-skills audit              # validated / unvalidated / stale / needs-revalidation
 otto-tools audit               # unreachable tools, missing health checks, policy conflicts
 
-git status --short .otto/      # what an import/init added — incl. new (untracked, "??") files
-git checkout -- .otto/         # restore files that already existed (tracked edits)
-git clean -nd .otto/skills/    # PREVIEW deleting the newly-imported (untracked) skill files…
-git clean -fd .otto/skills/    # …then actually remove them to fully roll back an import
+git status --short .otto/      # exactly what the import/init added (new files show as "??")
+
+# Roll back surgically — restore any files that PRE-existed, then delete only the new ones:
+git checkout -- .otto/skills/sources.json .otto/skills.lock.json   # if these were tracked already
+rm -rf .otto/skills/<imported-source>/     # the imported skill package(s)
+rm -f  .otto/tools/<imported-tool>.json    # any tool an `otto-extensions init` wrote
 ```
+
+> ⚠️ **Don't `git clean -fd .otto/`** to undo an import — it deletes _every_ untracked file there, including your own hand-authored skills, and it still won't revert tracked edits to `sources.json` / `skills.lock.json`. Paths first, always.
 
 - **Never auto-trusted:** a famous source is still imported `unverified`; the **gate**, not the repo's reputation, decides eligibility.
 - **Drift:** re-`sync` an upstream change and `otto-skills audit` flags it for revalidation; `--use-skills` won't inject a drifted skill until you re-`validate`.

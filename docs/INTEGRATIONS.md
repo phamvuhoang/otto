@@ -36,7 +36,7 @@ otto-inspect latest                 # "Skills applied (…)" + per-stage skills 
 **What the gate decides** (`otto-skills validate`):
 
 - `afk-safe` — usable on any stage unattended.
-- `interactive-only` — the skill stops for human input; **never injected in AFK** (useful in `--plan`/human-guided modes). Superpowers' brainstorming/checkpoint skills land here — that's correct.
+- `interactive-only` — the body uses recognized stop-and-wait language; **never injected on any stage**. Otto runs the agent non-interactively, so there is **no `--plan`/human-guided path** that re-enables these. Superpowers' brainstorming/checkpoint skills land here — that's correct; run them in Claude Code directly if you want them.
 - `stage-scoped` — valid only on the stages its capabilities imply (e.g. `code-review` → review).
 - `blocked` — a policy/safety violation (unsafe shell, secret handling, an attempt to overrule repo policy). Not eligible anywhere.
 
@@ -143,20 +143,23 @@ The skill now shapes the reviewer stage; `otto-inspect latest` shows it under "S
 
 ## 4. Headroom (context-compression **tool**)
 
-Headroom is a **tool**, not a skill — it compresses token-heavy `@spill` content (issue bodies, comments, diffs) before the agent reads them, reversibly. It runs under Otto's repo-local **tool authority** (P19), never from personal config.
+Headroom is a **tool**, not a skill — it compresses token-heavy `@spill` content (issue bodies, comments, diffs) before the agent reads them, reversibly. You enable it with `--context-compressor headroom` (or `OTTO_CONTEXT_COMPRESSOR` / config). `otto-extensions init context-saver` also registers a `.otto/tools/headroom.json` entry you can `otto-tools list`/`health` — but note the runtime builds the compressor straight from that config flag; it is **not** gated per-stage through tool policy ([#192](https://github.com/phamvuhoang/otto/issues/192)).
 
 ```bash
-# 1. Install the Headroom binary (see https://github.com/headroomlabs-ai/headroom).
-#    Otto calls `headroom --version` (health) and `headroom compress` (stdin→stdout).
-#    Override the binary path with OTTO_HEADROOM_BIN if it's not on PATH.
+# 1. Install/point at a `headroom` binary. Otto's command mode expects exactly:
+#       headroom --version                 (health)
+#       headroom compress --category <c>   (content on stdin → compressed text on stdout)
+#    Upstream headroom-ai is proxy/library-first and may NOT expose `compress` — shim it
+#    onto PATH (or via OTTO_HEADROOM_BIN). See #192. Missing/mismatched → degrades cleanly.
 
 # 2. Register the tool + set the compressor default
 otto-extensions init context-saver        # writes .otto/tools/headroom.json + config
 #   (or by hand: .otto/config.json { "contextCompressor": "headroom" })
 
-# 3. Confirm authority + availability
+# 3. Confirm availability (inspection only — not a runtime gate; see #192)
 otto-tools list                            # headroom [command]
-otto-tools health                          # runs `headroom --version`
+otto-tools health                          # runs the LITERAL `headroom --version` — ignores
+#                                            OTTO_HEADROOM_BIN, so it can disagree with a run
 
 # 4. Run — compression happens at the @spill boundary
 otto-afk --context-compressor headroom "./docs/plans/feature.md" 10
@@ -169,16 +172,17 @@ otto-afk --context-compressor headroom "./docs/plans/feature.md" 10
 
 ## Govern, lock & roll back
 
-Everything above is plain, git-tracked files under `.otto/` — inspect and reverse with ordinary git:
+Everything above is plain, git-trackable files under `.otto/` (new imports are untracked until you commit them) — inspect and reverse with ordinary git:
 
 ```bash
 otto-skills audit --external    # unpinned refs, missing licenses, dup names, drifted copies
 otto-skills audit               # validated / unvalidated / stale / needs-revalidation
 otto-tools audit                # unreachable tools, missing health checks, policy conflicts
-git diff .otto/                 # exactly what an import/init changed
-git checkout .otto/             # roll it all back
+git status --short .otto/       # what an import/init added — new files are untracked ("??")
+# Roll back BY PATH: git checkout the files that pre-existed, then rm the new ones. Do NOT
+# `git clean -fd .otto/` — it deletes every untracked file there, your own skills included.
 ```
 
 - **Drift:** if an upstream skill changes and you re-`sync`, `otto-skills audit` flags it as needing revalidation; `--use-skills` won't inject a drifted skill until you re-`validate`.
-- **Lock:** commit `.otto/skills/sources.json` (the pin) and `.otto/skills.lock.json` (resolved checksums). See [EXTENSIONS.md → Update, lock & roll back](./EXTENSIONS.md#update-lock--roll-back).
+- **Lock:** commit `.otto/skills/sources.json` (the source registry — a `--type local` source has **no pinned `ref`**; pinning applies to `git` sources) and `.otto/skills.lock.json` (resolved checksums — the drift/integrity record, not a source pin). See [EXTENSIONS.md → Update, lock & roll back](./EXTENSIONS.md#update-lock--roll-back).
 - **Never auto-trusted:** a famous source is still imported `unverified`; the gate, not the repo's reputation, decides eligibility.

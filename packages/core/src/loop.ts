@@ -1,11 +1,11 @@
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
 import { readCoreVersion } from "./cli-help.js";
 import { acquire, type Releaser } from "./keepalive.js";
 import { notifyComplete, notifyError } from "./notify.js";
-import { changedFilesSince, headSha } from "./git.js";
+import { changedFilesSince, commitExists, headSha } from "./git.js";
 import { sleep, isThrottle, nextCooldownFactor } from "./pacing.js";
 import { decide } from "./policy.js";
 import { deriveProgress, type IterationObservation } from "./progress.js";
@@ -22,6 +22,8 @@ import {
   formatSharpeningGuidance,
   scoreInputSharpness,
 } from "./input-sharpness.js";
+import { parseVerificationMatrixWithDiagnostics } from "./verification-matrix.js";
+import { validateVerificationEvidence } from "./verification-evidence.js";
 import { runFanout } from "./fanout.js";
 import { reapWorktrees } from "./worktree.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
@@ -437,6 +439,21 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
   const nowIso = () => new Date().toISOString();
   const runStartSha = headSha(workspaceDir);
+  // Verification matrix (issue #181 P24): the verify stage writes this gitignored
+  // scratch file; finalize reads it back. Clear any stale matrix from a prior
+  // verify run at start so a run whose agent emits none can't inherit one.
+  const verifyMatrixPath = join(
+    workspaceDir,
+    ".otto-tmp",
+    "verify-matrix.json"
+  );
+  if (mode === "verify") {
+    try {
+      rmSync(verifyMatrixPath, { force: true });
+    } catch {
+      // best-effort: a leftover scratch file must never block the run.
+    }
+  }
   if (fresh) clearState(workspaceDir);
   const prior = fresh ? null : readState(workspaceDir);
   const resuming = matchesResume(prior, { bin, mode, inputs });
@@ -757,6 +774,37 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         planDoc && planMatchesRun
           ? detectScopeDrift(planDoc.doc, changedFiles)
           : null;
+      // Verification matrix (issue #181 P24): a --verify run's stage writes a
+      // machine-readable matrix to the scratch path; parse it back as evidence,
+      // relocate its screenshots into the bundle, and keep the parse diagnostics
+      // so a missing/malformed/partial matrix surfaces a visible verification
+      // failure rather than silently omitting the gate (#181 review).
+      let verification: RunManifest["verification"];
+      let verificationDropped = 0;
+      if (mode === "verify" && existsSync(verifyMatrixPath)) {
+        // Read + parse the matrix in its OWN try so a directory / unreadable /
+        // race-deleted matrix file degrades to "no matrix" (which renders the
+        // visible verification FAIL) instead of aborting the whole finalize and
+        // dropping the report + manifest (#181 boundary review).
+        try {
+          const result = parseVerificationMatrixWithDiagnostics(
+            readFileSync(verifyMatrixPath, "utf8")
+          );
+          verificationDropped = result.dropped;
+          if (result.entries.length > 0) {
+            // Validate each cited artifact against the real filesystem/git (so a
+            // nonexistent path or fabricated SHA cannot earn coverage) and relocate
+            // scratch file artifacts into the durable bundle (#181 re-review).
+            verification = validateVerificationEvidence(result.entries, {
+              workspaceDir,
+              runId,
+              commitExists: (sha) => commitExists(workspaceDir, sha),
+            });
+          }
+        } catch {
+          // unreadable/dir/removed → treat as no matrix; the verify FAIL path renders.
+        }
+      }
       const manifestForReport: RunManifest = {
         runId,
         bin,
@@ -779,6 +827,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
                 unknowns: inputSharpness.unknowns,
               },
             }
+          : {}),
+        ...(verification ? { verification } : {}),
+        ...(mode === "verify" && verificationDropped > 0
+          ? { verificationDropped }
           : {}),
         startedAt: manifestStartedAt,
         finishedAt: nowIso(),
@@ -814,6 +866,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
                 unknowns: inputSharpness.unknowns,
               },
             }
+          : {}),
+        ...(verification ? { verification } : {}),
+        ...(mode === "verify" && verificationDropped > 0
+          ? { verificationDropped }
           : {}),
         startedAt: manifestStartedAt,
         finishedAt: nowIso(),

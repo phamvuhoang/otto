@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 
 import type { AgentRuntimeId } from "./agent-runtime.js";
 import type { ContextBreakdown } from "./context-report.js";
+import type { VerificationEntry } from "./verification-matrix.js";
 import type { PolicyViolationKind } from "./safety-policy.js";
 import type { TaintSource } from "./taint.js";
 import type { TokenUsage } from "./tokens.js";
@@ -179,6 +180,12 @@ export type RunManifest = {
     maxScore: number;
     unknowns: string[];
   };
+  /** Structured verification matrix from a `--verify` run (issue #181 P24);
+   *  absent outside verify mode or when the stage emitted none. */
+  verification?: VerificationEntry[];
+  /** Count of malformed matrix rows the parser dropped on a `--verify` run
+   *  (issue #181 review); absent/0 when the matrix was clean. */
+  verificationDropped?: number;
   startedAt: string;
   finishedAt?: string;
 };

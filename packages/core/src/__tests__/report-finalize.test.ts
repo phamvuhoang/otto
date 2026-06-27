@@ -119,15 +119,134 @@ describe("finalizeReportText", () => {
   });
 
   it("marks the rubric gate FAIL and appends a rewrite request for a low-legibility report", () => {
-    const out = finalizeReportText("# Otto quality report\n\n## Verdict\n\nAccepted\n", {
+    const out = finalizeReportText(
+      "# Otto quality report\n\n## Verdict\n\nAccepted\n",
+      {
+        manifest,
+        stages: [stage],
+        headSha: "abc1234",
+        changedFiles: [],
+      }
+    );
+    expect(out).toContain("## Emit-Time Report Rubric");
+    expect(out).toContain("Gate: **FAIL**");
+    expect(out).toContain("Rewrite request:");
+  });
+
+  it("folds a verification matrix into a Verification Gallery section (#181 P24)", () => {
+    const out = finalizeReportText(emitted, {
+      manifest: {
+        ...manifest,
+        mode: "verify",
+        verification: [
+          {
+            requirement: "suite is green",
+            method: "test",
+            check: "node --test",
+            artifactPath: "x.test.ts:1",
+            result: "pass",
+            confidence: "high",
+          },
+          {
+            requirement: "edge case handled",
+            method: "inspection",
+            check: "read code",
+            result: "fail",
+            confidence: "low",
+          },
+        ],
+      },
+      stages: [stage],
+      headSha: "abc1234",
+      changedFiles: [],
+    });
+    expect(out).toContain("## Verification Gallery");
+    expect(out).toContain("suite is green");
+    expect(out).toContain("x.test.ts:1");
+    // The failed requirement is surfaced as a risk.
+    expect(out.toLowerCase()).toContain("risk");
+    expect(out).toContain("edge case handled");
+    // The coverage gate judges the matrix (a failure ⇒ FAIL) with remediation.
+    expect(out).toContain("## Verification Coverage Gate");
+    expect(out).toContain("Gate: **FAIL**");
+  });
+
+  it("embeds captured screenshots as a Screenshot Evidence gallery (#181 P24 visual)", () => {
+    const out = finalizeReportText(emitted, {
+      manifest: {
+        ...manifest,
+        mode: "verify",
+        verification: [
+          {
+            requirement: "settings page renders",
+            method: "visual",
+            check: "screenshot the rendered page",
+            beforePath: "verification/0-before.png",
+            beforeBundled: true,
+            artifactPath: "verification/1-after.png",
+            artifactBundled: true,
+            result: "pass",
+            confidence: "high",
+          },
+        ],
+      },
+      stages: [stage],
+      headSha: "abc1234",
+      changedFiles: [],
+    });
+    expect(out).toContain("## Screenshot Evidence");
+    expect(out).toContain("![before](verification/0-before.png)");
+    expect(out).toContain("![after](verification/1-after.png)");
+  });
+
+  it("adds no gallery when a non-verify run carried no verification matrix (#181 P24)", () => {
+    const out = finalizeReportText(emitted, {
       manifest,
       stages: [stage],
       headSha: "abc1234",
       changedFiles: [],
     });
-    expect(out).toContain("## Emit-Time Report Rubric");
+    expect(out).not.toContain("## Verification Gallery");
+    expect(out).not.toContain("## Verification Coverage Gate");
+  });
+
+  it("FAILs the gate when a valid passing matrix has a dropped row (#181 re-review)", () => {
+    const out = finalizeReportText(emitted, {
+      manifest: {
+        ...manifest,
+        mode: "verify",
+        verificationDropped: 1,
+        verification: [
+          {
+            requirement: "suite is green",
+            method: "test",
+            check: "node --test",
+            artifactPath: "x.test.ts:1",
+            result: "pass",
+            confidence: "high",
+          },
+        ],
+      },
+      stages: [stage],
+      headSha: "abc1234",
+      changedFiles: [],
+    });
+    expect(out).toContain("## Verification Coverage Gate");
     expect(out).toContain("Gate: **FAIL**");
-    expect(out).toContain("Rewrite request:");
+    expect(out).toMatch(/dropped 1 malformed/i);
+  });
+
+  it("shows a FAIL gate when a --verify run recorded no valid matrix (#181 review)", () => {
+    const out = finalizeReportText(emitted, {
+      manifest: { ...manifest, mode: "verify", verificationDropped: 2 },
+      stages: [stage],
+      headSha: "abc1234",
+      changedFiles: [],
+    });
+    expect(out).toContain("## Verification Coverage Gate");
+    expect(out).toContain("Gate: **FAIL**");
+    // The dropped malformed rows are surfaced, not hidden.
+    expect(out).toContain("2 malformed matrix row(s) were dropped");
   });
 
   it("generates a fallback report when the agent emitted none", () => {

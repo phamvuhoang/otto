@@ -1,0 +1,23 @@
+[
+  {
+    "requirement": "totalMinutes parses the hours component",
+    "method": "test",
+    "check": "node --test",
+    "result": "pass",
+    "confidence": "low"
+  },
+  {
+    "requirement": "negative durations are rejected",
+    "method": "inspection",
+    "check": "read the code",
+    "result": "pass",
+    "confidence": "low"
+  },
+  {
+    "requirement": "rounding matches the spec",
+    "method": "manual",
+    "check": "eyeballed a few values",
+    "result": "fail",
+    "confidence": "low"
+  }
+]

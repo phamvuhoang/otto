@@ -4,6 +4,11 @@ import {
   type RunManifest,
   type StageRecord,
 } from "./run-report.js";
+import {
+  formatVerificationCoverageGate,
+  formatVerificationMatrix,
+  formatVisualEvidence,
+} from "./verification-matrix.js";
 
 const SENTINEL_RE = /\n?<promise>NO MORE TASKS<\/promise>\s*/g;
 const H2_RE = /^##\s+/m;
@@ -194,6 +199,56 @@ function appendAutomatedEvidence(
   return `${report.trimEnd()}\n\n${section}\n`;
 }
 
+/**
+ * Fold a `--verify` run's structured verification matrix into the run report as a
+ * "Verification Gallery" section (issue #181 P24) — so a maintainer reading the
+ * plain report, not just `otto-inspect`, sees what was proven, how, and with
+ * which artifact, with failures/unproven requirements surfaced as risks. No-op
+ * when the run carried no matrix, so non-verify reports are unchanged.
+ */
+function appendVerificationGallery(
+  report: string,
+  ctx: FinalizeReportContext
+): string {
+  const matrix = ctx.manifest.verification;
+  const dropped = ctx.manifest.verificationDropped ?? 0;
+  if (!matrix || matrix.length === 0) {
+    // A non-verify run simply has no matrix — nothing to add. But a `--verify`
+    // run that recorded no valid matrix must show a visible failure, not silently
+    // omit the gate (#181 review).
+    if (ctx.manifest.mode !== "verify") return report;
+    const droppedNote =
+      dropped > 0 ? ` (${dropped} malformed matrix row(s) were dropped)` : "";
+    const fail = [
+      "## Verification Coverage Gate",
+      "",
+      `Gate: **FAIL** — this \`--verify\` run recorded no machine-readable verification matrix${droppedNote}, so its claims are unproven. The verify stage should emit \`.otto-tmp/verify-matrix.json\`.`,
+    ].join("\n");
+    return `${report.trimEnd()}\n\n${fail}\n`;
+  }
+  const section = [
+    "## Verification Gallery",
+    "",
+    "Structured proof that each requirement was checked — its method, result, and the artifact that backs it. Failed or unproven requirements are listed as risks below the matrix.",
+    "",
+    "```text",
+    formatVerificationMatrix(matrix),
+    "```",
+    "",
+    // Coverage gate (P24): judge whether every verifiable requirement is
+    // artifact-backed — the roadmap's "reports include a verification artifact
+    // where feasible" bar. Dropped malformed rows are passed in so they FAIL the
+    // gate, not just footnote it (#181 re-review).
+    formatVerificationCoverageGate(matrix, dropped),
+  ].join("\n");
+  // Visual half (P24): embed any captured screenshots as a markdown gallery so a
+  // non-engineer sees the rendered-UI proof, not just a path. Empty when no
+  // visual evidence was captured.
+  const visual = formatVisualEvidence(matrix);
+  const withGallery = `${report.trimEnd()}\n\n${section}\n`;
+  return visual ? `${withGallery.trimEnd()}\n\n${visual}\n` : withGallery;
+}
+
 function appendLegibilityGate(report: string): string {
   const score = scoreReportLegibility(report);
   const passed = score.ratio >= DEFAULT_REPORT_LEGIBILITY_THRESHOLD;
@@ -295,5 +350,6 @@ export function finalizeReportText(
     ctx.scopeDrift
   );
   const withEvidence = appendAutomatedEvidence(withRisk, ctx);
-  return appendLegibilityGate(withEvidence);
+  const withGallery = appendVerificationGallery(withEvidence, ctx);
+  return appendLegibilityGate(withGallery);
 }

@@ -22,7 +22,7 @@
 
 You are VERIFYING, not implementing. The `<inputs>` block names a plan and PRD (conventionally file paths). `Read` them.
 
-**Make NO commits and NO source edits.** You may read files and run the test/type suites. The only file you may write is the report named at the end.
+**Make NO commits and NO source edits.** You may read files and run the test/type suites. The only files you may write are the verification report and matrix named below and any verification artifacts they cite (e.g. screenshots), all under the gitignored `.otto-tmp/` scratch dir — nothing else.
 
 # RECONCILE
 
@@ -48,6 +48,46 @@ Put every task in exactly one bucket:
 Write your report to `.otto-tmp/verify-report.md` using the `Write` tool (this path is gitignored scratch — it is the one write you may make). Use the Otto quality report contract below: fold the RECONCILE/CLASSIFY results into it — DONE tasks (with their `file:line`/SHA evidence) into **What Changed** + **Evidence**, the suite pass/fail counts into the Test/typecheck evidence line, and GAP/DEFERRED tasks into **Gaps And Follow-Ups**.
 
 @include:quality-report.md
+
+# VERIFICATION MATRIX (MACHINE-READABLE)
+
+Also write a structured verification matrix to `.otto-tmp/verify-matrix.json`
+using the `Write` tool (gitignored scratch — this, the report above, and any
+screenshot artifacts cited below are the only writes you may make). It is a JSON
+array, one entry per plan task /
+acceptance criterion you reconciled, so a maintainer (or a non-engineer) can scan
+exactly what was proven and how:
+
+```json
+[
+  {
+    "requirement": "<the task / acceptance criterion>",
+    "method": "test | command | visual | inspection | manual",
+    "check": "<the exact command run, the assertion, or the visual checked>",
+    "artifactPath": "<proof: file:line, a commit SHA, a transcript/screenshot path; omit if none>",
+    "result": "pass | fail | partial | deferred",
+    "confidence": "high | medium | low"
+  }
+]
+```
+
+Rules: one entry per task; `result` mirrors your DONE/GAP/DEFERRED classification
+(`pass` = DONE, `fail`/`partial` = GAP, `deferred` = DEFERRED); always cite an
+`artifactPath` when one exists (a `file:line`, the commit SHA that implements it,
+or the suite command) — an entry with no artifact is an unproven claim and should
+say so via `"confidence": "low"`. Use the real commands you ran; do not invent
+proof. A malformed file is ignored, so prefer omitting a field to guessing.
+
+**Visual evidence (opportunistic).** For a UI/web requirement, if a screenshot
+tool and a renderable target (a running dev server or a static built artifact)
+are actually available to you, capture a screenshot, save it under the gitignored
+`.otto-tmp/` scratch dir, and emit a `"method": "visual"` entry whose
+`artifactPath` is that screenshot path; for a before/after change set `beforePath`
+to the prior-state screenshot and `artifactPath` to the new one. **Never fabricate
+a screenshot or a path.** If you cannot render or capture the UI in this
+environment, still emit the `visual` entry but **omit `artifactPath`** and set
+`"confidence": "low"` — the coverage gate then reports the gap honestly instead of
+claiming unproven visual proof.
 
 # CROSS-RUN QUALITY SUMMARY (READ-ONLY)
 

@@ -124,6 +124,28 @@ export {
 } from "./run-report.js";
 export { formatRunReport, runInspect, type InspectDeps } from "./inspect.js";
 export {
+  formatVerificationCoverageGate,
+  formatVerificationMatrix,
+  formatVisualEvidence,
+  isValidArtifactReference,
+  parseVerificationMatrix,
+  parseVerificationMatrixWithDiagnostics,
+  scoreVerificationCoverage,
+  summarizeVerification,
+  type VerificationCoverageGate,
+  type VerificationConfidence,
+  type VerificationEntry,
+  type VerificationMethod,
+  type VerificationParseResult,
+  type VerificationResult,
+  type VerificationSummary,
+} from "./verification-matrix.js";
+export {
+  artifactReferenceExists,
+  validateVerificationEvidence,
+  type EvidenceDeps,
+} from "./verification-evidence.js";
+export {
   formatPlainReport,
   runExplain,
   type ExplainDeps,

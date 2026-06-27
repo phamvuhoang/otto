@@ -416,6 +416,122 @@ describe("runLoop", () => {
     expect(manifest?.inputSharpness).toBeUndefined();
   });
 
+  it("records a --verify run's verification matrix from the scratch file onto the manifest (#181 P24)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const verifyStage: Stage = { name: "verifier", template: "stage.md" };
+    const matrixPath = join(
+      dirs.workspaceDir,
+      ".otto-tmp",
+      "verify-matrix.json"
+    );
+    // The mocked verify agent writes the machine-readable matrix, as verify.md directs.
+    mocks.runStage.mockImplementation(async () => {
+      mkdirSync(join(dirs.workspaceDir, ".otto-tmp"), { recursive: true });
+      writeFileSync(
+        matrixPath,
+        JSON.stringify([
+          {
+            requirement: "suite is green",
+            method: "test",
+            check: "node --test",
+            artifactPath: "x.test.ts:1",
+            result: "pass",
+            confidence: "high",
+          },
+        ]),
+        "utf8"
+      );
+      return ok("verified");
+    });
+
+    await runLoop(
+      loopOptions(dirs, {
+        stages: [verifyStage],
+        mode: "verify",
+        iterations: 1,
+      })
+    );
+
+    const manifest = readManifest(
+      dirs.workspaceDir,
+      listRunIds(dirs.workspaceDir)[0]
+    );
+    expect(manifest?.verification).toHaveLength(1);
+    expect(manifest?.verification?.[0].requirement).toBe("suite is green");
+  });
+
+  it("still writes report + manifest when the verify matrix is unreadable (a directory) (#181 boundary review)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const verifyStage: Stage = { name: "verifier", template: "stage.md" };
+    mocks.runStage.mockImplementation(async () => {
+      // The matrix path is a directory → readFileSync throws EISDIR at finalize.
+      mkdirSync(join(dirs.workspaceDir, ".otto-tmp", "verify-matrix.json"), {
+        recursive: true,
+      });
+      return ok("verified");
+    });
+
+    await runLoop(
+      loopOptions(dirs, {
+        stages: [verifyStage],
+        mode: "verify",
+        iterations: 1,
+      })
+    );
+
+    // Finalize must not have aborted: the manifest exists, with no matrix.
+    const runId = listRunIds(dirs.workspaceDir)[0];
+    const manifest = readManifest(dirs.workspaceDir, runId);
+    expect(manifest).not.toBeNull();
+    expect(manifest?.verification).toBeUndefined();
+  });
+
+  it("relocates a --verify run's screenshots into the bundle with report-relative paths (#181 review)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const verifyStage: Stage = { name: "verifier", template: "stage.md" };
+    mocks.runStage.mockImplementation(async () => {
+      const tmp = join(dirs.workspaceDir, ".otto-tmp");
+      mkdirSync(join(tmp, "shots"), { recursive: true });
+      writeFileSync(join(tmp, "shots", "after.png"), "PNGDATA", "utf8");
+      writeFileSync(
+        join(tmp, "verify-matrix.json"),
+        JSON.stringify([
+          {
+            requirement: "settings page renders",
+            method: "visual",
+            check: "screenshot the page",
+            artifactPath: ".otto-tmp/shots/after.png",
+            result: "pass",
+            confidence: "high",
+          },
+        ]),
+        "utf8"
+      );
+      return ok("verified");
+    });
+
+    await runLoop(
+      loopOptions(dirs, {
+        stages: [verifyStage],
+        mode: "verify",
+        iterations: 1,
+      })
+    );
+
+    const runId = listRunIds(dirs.workspaceDir)[0];
+    const manifest = readManifest(dirs.workspaceDir, runId);
+    const path = manifest?.verification?.[0].artifactPath;
+    // Path rewritten to be relative to the bundle (where report.md/manifest live)...
+    expect(path).toMatch(/^verification\//);
+    // ...and the screenshot is actually copied into the bundle, so the link resolves.
+    expect(
+      existsSync(join(dirs.workspaceDir, ".otto", "runs", runId, path!))
+    ).toBe(true);
+  });
+
   it("injects a validated skill + records skillsUsed when activation is on (P18)", async () => {
     const dirs = makeDirs();
     roots.push(dirs.root);

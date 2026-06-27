@@ -101,6 +101,73 @@ describe("formatRunReport", () => {
     expect(out).not.toMatch(/sharpness:/);
   });
 
+  it("renders the verification gallery with risks from a --verify run (#181 P24)", () => {
+    const manifest: RunManifest = {
+      ...finalized,
+      mode: "verify",
+      verification: [
+        {
+          requirement: "totalMinutes handles hours",
+          method: "test",
+          check: "node --test",
+          artifactPath: "duration.test.ts:12",
+          result: "pass",
+          confidence: "high",
+        },
+        {
+          requirement: "rounding is correct",
+          method: "inspection",
+          check: "read code",
+          result: "fail",
+          confidence: "low",
+        },
+      ],
+    };
+    const out = formatRunReport(manifest, [implStage]);
+    expect(out).toMatch(/verification/i);
+    expect(out).toContain("totalMinutes handles hours");
+    expect(out).toContain("duration.test.ts:12");
+    // The failed requirement is surfaced as a risk, not buried.
+    expect(out.toLowerCase()).toContain("risk");
+    expect(out).toContain("rounding is correct");
+  });
+
+  it("omits the verification gallery for a non-verify run with no matrix (#181 P24)", () => {
+    const out = formatRunReport(finalized, [implStage]);
+    expect(out).not.toMatch(/Verification:/);
+  });
+
+  it("shows a visible FAIL in otto-inspect when a --verify run recorded no matrix (#181 re-review)", () => {
+    const out = formatRunReport(
+      { ...finalized, mode: "verify", verificationDropped: 2 },
+      [implStage]
+    );
+    expect(out).toMatch(/Verification:\s*FAIL/);
+    expect(out).toMatch(/no machine-readable matrix/i);
+    expect(out).toMatch(/2 malformed/i);
+  });
+
+  it("shows the coverage gate in otto-inspect for a verify run with a matrix (#181 re-review)", () => {
+    const out = formatRunReport(
+      {
+        ...finalized,
+        mode: "verify",
+        verification: [
+          {
+            requirement: "covered",
+            method: "test",
+            check: "node --test",
+            artifactPath: "x.test.ts:1",
+            result: "pass",
+            confidence: "high",
+          },
+        ],
+      },
+      [implStage]
+    );
+    expect(out).toContain("Verification Coverage Gate");
+  });
+
   it("surfaces injected skills per stage and in a run-level section (P18)", () => {
     const withSkill: StageRecord = {
       ...implStage,

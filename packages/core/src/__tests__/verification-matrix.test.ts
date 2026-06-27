@@ -207,6 +207,26 @@ describe("parseVerificationMatrix", () => {
     expect(parseVerificationMatrix("{}")).toEqual([]);
     expect(parseVerificationMatrix("")).toEqual([]);
   });
+
+  it("never trusts agent-supplied existence/bundled flags (#181 boundary review)", () => {
+    const raw = JSON.stringify([
+      {
+        requirement: "self-certified",
+        method: "visual",
+        check: "screenshot",
+        artifactPath: "verification/fake.png",
+        artifactExists: true,
+        artifactBundled: true,
+        beforeBundled: true,
+        result: "pass",
+        confidence: "high",
+      },
+    ]);
+    const e = parseVerificationMatrix(raw)[0];
+    expect(e.artifactExists).toBeUndefined();
+    expect(e.artifactBundled).toBeUndefined();
+    expect(e.beforeBundled).toBeUndefined();
+  });
 });
 
 describe("scoreVerificationCoverage", () => {
@@ -337,11 +357,12 @@ describe("formatVisualEvidence", () => {
     ...over,
   });
 
-  it("embeds a single bundle-relative screenshot as a markdown image", () => {
+  it("embeds a screenshot only when the impure layer marked it bundled", () => {
     const out = formatVisualEvidence([
       visual({
         requirement: "dashboard loads",
         artifactPath: "verification/0-dash.png",
+        artifactBundled: true,
       }),
     ]);
     expect(out).toMatch(/screenshot evidence/i);
@@ -349,36 +370,37 @@ describe("formatVisualEvidence", () => {
     expect(out).toContain("![dashboard loads](verification/0-dash.png)");
   });
 
-  it("renders a before/after pair when both are bundle-relative images", () => {
+  it("renders a before/after pair only when both are bundled images", () => {
     const out = formatVisualEvidence([
       visual({
         beforePath: "verification/0-b.png",
+        beforeBundled: true,
         artifactPath: "verification/1-a.png",
+        artifactBundled: true,
       }),
     ]);
     expect(out).toContain("![before](verification/0-b.png)");
     expect(out).toContain("![after](verification/1-a.png)");
   });
 
-  it("never embeds an invalid (URL / unrelocated / non-existent) artifact (#181 boundary review)", () => {
-    // A URL beacon, an unrelocated repo path, and a loop-rejected artifact.
+  it("never embeds an unbundled or spoofed artifact, incl. a faked verification/ prefix (#181 boundary review)", () => {
+    // None were copied into the bundle (artifactBundled falsy), so none embed —
+    // the embed keys on the impure copy flag, not the agent-supplied path string.
     expect(
       formatVisualEvidence([
         visual({ artifactPath: "https://attacker.example/beacon.png" }),
+        visual({ artifactPath: "verification/spoofed.png" }), // faked prefix, never copied
         visual({ artifactPath: "shots/not-relocated.png" }),
-        visual({
-          artifactPath: "verification/0.png",
-          artifactExists: false,
-        }),
       ])
     ).toBe("");
   });
 
-  it("drops an invalid before reference but still embeds a valid after image", () => {
+  it("drops an unbundled before reference but still embeds a bundled after image", () => {
     const out = formatVisualEvidence([
       visual({
-        beforePath: "https://attacker.example/x.png",
+        beforePath: "https://attacker.example/x.png", // not bundled
         artifactPath: "verification/1-a.png",
+        artifactBundled: true,
       }),
     ]);
     expect(out).not.toContain("attacker.example");
@@ -386,10 +408,14 @@ describe("formatVisualEvidence", () => {
     expect(out).toContain("verification/1-a.png");
   });
 
-  it("is empty when there are no embeddable visual entries", () => {
+  it("is empty when there are no bundled visual entries", () => {
     expect(
       formatVisualEvidence([
-        { ...visual({}), method: "test", artifactPath: "x.test.ts:1" },
+        {
+          ...visual({ artifactBundled: true }),
+          method: "test",
+          artifactPath: "x.test.ts:1",
+        },
         visual({ artifactPath: undefined, confidence: "low" }),
       ])
     ).toBe("");

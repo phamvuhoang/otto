@@ -51,6 +51,13 @@ export type VerificationEntry = {
    *  or a commit present in git. `false` ⇒ the cited proof does not exist and the
    *  requirement is not counted as covered. Never read from agent JSON. */
   artifactExists?: boolean;
+  /** Set true ONLY by the impure layer when `artifactPath` was actually copied
+   *  into the physical run bundle (issue #181 boundary review). Embedding trusts
+   *  this flag, not a string prefix the agent could spoof. Never read from agent JSON. */
+  artifactBundled?: boolean;
+  /** Set true ONLY by the impure layer when `beforePath` was copied into the
+   *  physical run bundle. Never read from agent JSON. */
+  beforeBundled?: boolean;
   result: VerificationResult;
   confidence: VerificationConfidence;
   note?: string;
@@ -351,16 +358,19 @@ export const BUNDLE_ARTIFACT_PREFIX = "verification/";
 const IMAGE_RE = /\.(?:png|jpe?g|gif|webp|svg|avif)$/i;
 
 /**
- * A path safe to embed as a markdown image: a bundle-relative artifact (one the
- * loop relocated into `.otto/runs/<id>/verification/`, so it resolves from the
- * report) with an image extension. Rejects URLs, absolute/`..` paths, and any
- * unrelocated reference — so an invalid `artifactPath` like
- * `https://attacker/beacon.png` is never emitted as an image (#181 boundary review).
+ * A path safe to embed as a markdown image: it was actually copied into the
+ * physical run bundle by the impure layer (`bundled === true` — not a string
+ * prefix the agent could spoof) and has an image extension. So a rejected URL, an
+ * un-relocated path, or an agent-supplied `verification/…` masquerade is never
+ * emitted as an image (#181 boundary review).
  */
-function embeddableImage(p: string | undefined): p is string {
+function embeddableImage(
+  p: string | undefined,
+  bundled: boolean | undefined
+): p is string {
   return (
+    bundled === true &&
     typeof p === "string" &&
-    p.startsWith(BUNDLE_ARTIFACT_PREFIX) &&
     !p.includes("..") &&
     IMAGE_RE.test(p)
   );
@@ -370,23 +380,23 @@ function embeddableImage(p: string | undefined): p is string {
  * Render the visual evidence (P24 visual half) as a markdown "Screenshot
  * Evidence" section that *embeds* each `visual` entry's captured screenshot —
  * a single image, or a before → after pair — so a non-engineer reading the run
- * report sees the proof, not just a path. Only **bundle-relative, validated
- * image** artifacts are embedded; a visual check the environment could not render
- * (no/invalid artifact) is left to the coverage gate to flag, never emitted as an
- * image. Empty string when no embeddable visual evidence exists. Pure.
+ * report sees the proof, not just a path. Only artifacts the impure layer actually
+ * **copied into the bundle** (`artifactBundled`/`beforeBundled`) and that are
+ * images are embedded; a visual check the environment could not render, or any
+ * unbundled/spoofed path, is left to the coverage gate to flag, never emitted as
+ * an image. Empty string when no embeddable visual evidence exists. Pure.
  */
 export function formatVisualEvidence(entries: VerificationEntry[]): string {
   const visuals = entries.filter(
     (e) =>
       e.method === "visual" &&
-      e.artifactExists !== false &&
-      embeddableImage(e.artifactPath)
+      embeddableImage(e.artifactPath, e.artifactBundled)
   );
   if (visuals.length === 0) return "";
   const lines: string[] = ["## Screenshot Evidence", ""];
   for (const e of visuals) {
     lines.push(`### ${e.requirement}`, "");
-    if (embeddableImage(e.beforePath)) {
+    if (embeddableImage(e.beforePath, e.beforeBundled)) {
       lines.push(`- Before: ![before](${e.beforePath})`);
       lines.push(`- After: ![after](${e.artifactPath})`);
     } else {

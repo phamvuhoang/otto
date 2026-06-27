@@ -115,55 +115,68 @@ export function validateVerificationEvidence(
   opts: { workspaceDir: string; runId: string } & EvidenceDeps
 ): VerificationEntry[] {
   const { workspaceDir, runId, commitExists } = opts;
-  const destDir = join(runReportDir(workspaceDir, runId), "verification");
   let counter = 0;
 
-  let wsReal: string | null = null;
-  try {
-    wsReal = realpathSync(workspaceDir);
-  } catch {
-    wsReal = null;
-  }
   let scratchRoot: string | null = null;
   try {
     scratchRoot = realpathSync(join(workspaceDir, ".otto-tmp"));
   } catch {
     scratchRoot = null; // no scratch dir ⇒ nothing to relocate
   }
-  const relocateScratch = (p: string): string => {
-    if (FILE_LINE_RE.test(p) || SHA_RE.test(p)) return p; // a reference, not a file
+
+  // The physical run-bundle verification dir. Ensure the bundle dir exists, then
+  // realpath it (stripping any symlinks ABOVE it) and require it to stay inside
+  // the workspace; the copy destination is then this exact physical dir, and the
+  // `verification/` component itself must not be a symlink (checked per copy).
+  let destDir: string | null = null;
+  try {
+    const bundlePath = runReportDir(workspaceDir, runId);
+    mkdirSync(bundlePath, { recursive: true });
+    const bundleReal = realpathSync(bundlePath);
+    const wsReal = realpathSync(workspaceDir);
+    if (bundleReal === wsReal || bundleReal.startsWith(wsReal + sep)) {
+      destDir = join(bundleReal, "verification");
+    }
+  } catch {
+    destDir = null;
+  }
+
+  const relocateScratch = (p: string): { path: string; bundled: boolean } => {
+    const keep = { path: p, bundled: false };
+    if (FILE_LINE_RE.test(p) || SHA_RE.test(p)) return keep; // a reference, not a file
     const real = safeWorkspaceFile(p, workspaceDir);
     // Only relocate scratch artifacts the verify stage wrote under `.otto-tmp/`
-    // — never an arbitrary in-repo or host file (#181 re-review, finding 1).
+    // — never an arbitrary in-repo or host file (#181 re-review).
     if (
       !real ||
-      !wsReal ||
+      !destDir ||
       !scratchRoot ||
       (real !== scratchRoot && !real.startsWith(scratchRoot + sep))
     ) {
-      return p;
+      return keep;
     }
     try {
       mkdirSync(destDir, { recursive: true });
-      // The destination must also stay inside the workspace: a symlinked
-      // `.otto/runs/<id>/verification` dir would otherwise let the copy escape
-      // the bundle (#181 boundary review).
-      const destReal = realpathSync(destDir);
-      if (destReal !== wsReal && !destReal.startsWith(wsReal + sep)) return p;
+      // The destination must be the *physical* bundle verification dir: reject a
+      // symlinked `verification/` (which could redirect the copy into a source
+      // dir even while staying inside the workspace) by requiring its realpath to
+      // equal the path itself (#181 boundary review).
+      if (lstatSync(destDir).isSymbolicLink()) return keep;
+      if (realpathSync(destDir) !== destDir) return keep;
       const safe = `${counter++}-${basename(p)}`
         .replace(/[^\w.-]+/g, "-")
         .slice(0, 100);
-      const target = join(destReal, safe);
+      const target = join(destDir, safe);
       // Reject a pre-existing symlink at the target — copyFileSync would follow it.
       try {
-        if (lstatSync(target).isSymbolicLink()) return p;
+        if (lstatSync(target).isSymbolicLink()) return keep;
       } catch {
         // absent target is the expected case
       }
       copyFileSync(real, target);
-      return `${BUNDLE_ARTIFACT_PREFIX}${safe}`; // relative to report.md / manifest.json
+      return { path: `${BUNDLE_ARTIFACT_PREFIX}${safe}`, bundled: true };
     } catch {
-      return p; // best-effort: never fail finalize over a copy
+      return keep; // best-effort: never fail finalize over a copy
     }
   };
 
@@ -173,14 +186,16 @@ export function validateVerificationEvidence(
       next.artifactExists = artifactReferenceExists(
         e.artifactPath,
         workspaceDir,
-        {
-          commitExists,
-        }
+        { commitExists }
       );
-      next.artifactPath = relocateScratch(e.artifactPath);
+      const r = relocateScratch(e.artifactPath);
+      next.artifactPath = r.path;
+      next.artifactBundled = r.bundled;
     }
     if (e.beforePath !== undefined) {
-      next.beforePath = relocateScratch(e.beforePath);
+      const r = relocateScratch(e.beforePath);
+      next.beforePath = r.path;
+      next.beforeBundled = r.bundled;
     }
     return next;
   });

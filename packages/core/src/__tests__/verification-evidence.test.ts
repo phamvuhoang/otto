@@ -95,9 +95,32 @@ describe("validateVerificationEvidence", () => {
     );
     expect(e.artifactPath).toMatch(/^verification\//);
     expect(e.artifactExists).toBe(true);
+    expect(e.artifactBundled).toBe(true);
     expect(
       existsSync(join(dir, ".otto", "runs", "run-1", e.artifactPath!))
     ).toBe(true);
+  });
+
+  it("rejects a verification/ dir symlinked elsewhere INSIDE the workspace (#181 boundary review)", () => {
+    const dir = ws();
+    mkdirSync(join(dir, ".otto-tmp"), { recursive: true });
+    writeFileSync(join(dir, ".otto-tmp", "s.png"), "PNG");
+    // A redirect target that is still inside the workspace (e.g. a source dir).
+    mkdirSync(join(dir, "src"), { recursive: true });
+    mkdirSync(join(dir, ".otto", "runs", "run-1"), { recursive: true });
+    symlinkSync(
+      join(dir, "src"),
+      join(dir, ".otto", "runs", "run-1", "verification")
+    );
+
+    const [e] = validateVerificationEvidence(
+      [entry({ method: "visual", artifactPath: ".otto-tmp/s.png" })],
+      { workspaceDir: dir, runId: "run-1", ...noGit }
+    );
+    // Not bundled, not redirected into src/.
+    expect(e.artifactBundled).toBeFalsy();
+    expect(e.artifactPath).toBe(".otto-tmp/s.png");
+    expect(readdirSync(join(dir, "src"))).toEqual([]);
   });
 
   it("never copies a file outside the workspace", () => {

@@ -461,6 +461,33 @@ describe("runLoop", () => {
     expect(manifest?.verification?.[0].requirement).toBe("suite is green");
   });
 
+  it("still writes report + manifest when the verify matrix is unreadable (a directory) (#181 boundary review)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const verifyStage: Stage = { name: "verifier", template: "stage.md" };
+    mocks.runStage.mockImplementation(async () => {
+      // The matrix path is a directory → readFileSync throws EISDIR at finalize.
+      mkdirSync(join(dirs.workspaceDir, ".otto-tmp", "verify-matrix.json"), {
+        recursive: true,
+      });
+      return ok("verified");
+    });
+
+    await runLoop(
+      loopOptions(dirs, {
+        stages: [verifyStage],
+        mode: "verify",
+        iterations: 1,
+      })
+    );
+
+    // Finalize must not have aborted: the manifest exists, with no matrix.
+    const runId = listRunIds(dirs.workspaceDir)[0];
+    const manifest = readManifest(dirs.workspaceDir, runId);
+    expect(manifest).not.toBeNull();
+    expect(manifest?.verification).toBeUndefined();
+  });
+
   it("relocates a --verify run's screenshots into the bundle with report-relative paths (#181 review)", async () => {
     const dirs = makeDirs();
     roots.push(dirs.root);

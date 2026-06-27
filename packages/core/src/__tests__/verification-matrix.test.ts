@@ -337,28 +337,56 @@ describe("formatVisualEvidence", () => {
     ...over,
   });
 
-  it("embeds a single screenshot as a markdown image under its requirement", () => {
+  it("embeds a single bundle-relative screenshot as a markdown image", () => {
     const out = formatVisualEvidence([
       visual({
         requirement: "dashboard loads",
-        artifactPath: "shots/dash.png",
+        artifactPath: "verification/0-dash.png",
       }),
     ]);
     expect(out).toMatch(/screenshot evidence/i);
     expect(out).toContain("dashboard loads");
-    expect(out).toContain("![dashboard loads](shots/dash.png)");
+    expect(out).toContain("![dashboard loads](verification/0-dash.png)");
   });
 
-  it("renders a before/after pair when beforePath is present", () => {
+  it("renders a before/after pair when both are bundle-relative images", () => {
     const out = formatVisualEvidence([
-      visual({ beforePath: "shots/b.png", artifactPath: "shots/a.png" }),
+      visual({
+        beforePath: "verification/0-b.png",
+        artifactPath: "verification/1-a.png",
+      }),
     ]);
-    expect(out).toContain("![before](shots/b.png)");
-    expect(out).toContain("![after](shots/a.png)");
+    expect(out).toContain("![before](verification/0-b.png)");
+    expect(out).toContain("![after](verification/1-a.png)");
   });
 
-  it("is empty when there are no visual entries with a captured screenshot", () => {
-    // A non-visual entry, and a visual one that could not be captured (no artifact).
+  it("never embeds an invalid (URL / unrelocated / non-existent) artifact (#181 boundary review)", () => {
+    // A URL beacon, an unrelocated repo path, and a loop-rejected artifact.
+    expect(
+      formatVisualEvidence([
+        visual({ artifactPath: "https://attacker.example/beacon.png" }),
+        visual({ artifactPath: "shots/not-relocated.png" }),
+        visual({
+          artifactPath: "verification/0.png",
+          artifactExists: false,
+        }),
+      ])
+    ).toBe("");
+  });
+
+  it("drops an invalid before reference but still embeds a valid after image", () => {
+    const out = formatVisualEvidence([
+      visual({
+        beforePath: "https://attacker.example/x.png",
+        artifactPath: "verification/1-a.png",
+      }),
+    ]);
+    expect(out).not.toContain("attacker.example");
+    expect(out).toContain("![");
+    expect(out).toContain("verification/1-a.png");
+  });
+
+  it("is empty when there are no embeddable visual entries", () => {
     expect(
       formatVisualEvidence([
         { ...visual({}), method: "test", artifactPath: "x.test.ts:1" },

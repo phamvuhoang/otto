@@ -17,6 +17,7 @@
 
 import {
   copyFileSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -26,6 +27,7 @@ import { basename, isAbsolute, join, sep } from "node:path";
 
 import { runReportDir } from "./run-report.js";
 import {
+  BUNDLE_ARTIFACT_PREFIX,
   isValidArtifactReference,
   type VerificationEntry,
 } from "./verification-matrix.js";
@@ -116,6 +118,12 @@ export function validateVerificationEvidence(
   const destDir = join(runReportDir(workspaceDir, runId), "verification");
   let counter = 0;
 
+  let wsReal: string | null = null;
+  try {
+    wsReal = realpathSync(workspaceDir);
+  } catch {
+    wsReal = null;
+  }
   let scratchRoot: string | null = null;
   try {
     scratchRoot = realpathSync(join(workspaceDir, ".otto-tmp"));
@@ -129,6 +137,7 @@ export function validateVerificationEvidence(
     // — never an arbitrary in-repo or host file (#181 re-review, finding 1).
     if (
       !real ||
+      !wsReal ||
       !scratchRoot ||
       (real !== scratchRoot && !real.startsWith(scratchRoot + sep))
     ) {
@@ -136,11 +145,23 @@ export function validateVerificationEvidence(
     }
     try {
       mkdirSync(destDir, { recursive: true });
+      // The destination must also stay inside the workspace: a symlinked
+      // `.otto/runs/<id>/verification` dir would otherwise let the copy escape
+      // the bundle (#181 boundary review).
+      const destReal = realpathSync(destDir);
+      if (destReal !== wsReal && !destReal.startsWith(wsReal + sep)) return p;
       const safe = `${counter++}-${basename(p)}`
         .replace(/[^\w.-]+/g, "-")
         .slice(0, 100);
-      copyFileSync(real, join(destDir, safe));
-      return `verification/${safe}`; // relative to report.md / manifest.json
+      const target = join(destReal, safe);
+      // Reject a pre-existing symlink at the target — copyFileSync would follow it.
+      try {
+        if (lstatSync(target).isSymbolicLink()) return p;
+      } catch {
+        // absent target is the expected case
+      }
+      copyFileSync(real, target);
+      return `${BUNDLE_ARTIFACT_PREFIX}${safe}`; // relative to report.md / manifest.json
     } catch {
       return p; // best-effort: never fail finalize over a copy
     }

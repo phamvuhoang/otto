@@ -782,19 +782,27 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       let verification: RunManifest["verification"];
       let verificationDropped = 0;
       if (mode === "verify" && existsSync(verifyMatrixPath)) {
-        const result = parseVerificationMatrixWithDiagnostics(
-          readFileSync(verifyMatrixPath, "utf8")
-        );
-        verificationDropped = result.dropped;
-        if (result.entries.length > 0) {
-          // Validate each cited artifact against the real filesystem/git (so a
-          // nonexistent path or fabricated SHA cannot earn coverage) and relocate
-          // scratch file artifacts into the durable bundle (#181 re-review).
-          verification = validateVerificationEvidence(result.entries, {
-            workspaceDir,
-            runId,
-            commitExists: (sha) => commitExists(workspaceDir, sha),
-          });
+        // Read + parse the matrix in its OWN try so a directory / unreadable /
+        // race-deleted matrix file degrades to "no matrix" (which renders the
+        // visible verification FAIL) instead of aborting the whole finalize and
+        // dropping the report + manifest (#181 boundary review).
+        try {
+          const result = parseVerificationMatrixWithDiagnostics(
+            readFileSync(verifyMatrixPath, "utf8")
+          );
+          verificationDropped = result.dropped;
+          if (result.entries.length > 0) {
+            // Validate each cited artifact against the real filesystem/git (so a
+            // nonexistent path or fabricated SHA cannot earn coverage) and relocate
+            // scratch file artifacts into the durable bundle (#181 re-review).
+            verification = validateVerificationEvidence(result.entries, {
+              workspaceDir,
+              runId,
+              commitExists: (sha) => commitExists(workspaceDir, sha),
+            });
+          }
+        } catch {
+          // unreadable/dir/removed → treat as no matrix; the verify FAIL path renders.
         }
       }
       const manifestForReport: RunManifest = {

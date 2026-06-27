@@ -2,7 +2,9 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -124,6 +126,25 @@ describe("validateVerificationEvidence", () => {
     // artifacts under .otto-tmp/ are copied into the bundle.
     expect(e.artifactExists).toBe(true);
     expect(e.artifactPath).toBe("docs/shot.png");
+  });
+
+  it("refuses to relocate through a symlinked destination dir (#181 boundary review)", () => {
+    const dir = ws();
+    const outside = mkdtempSync(join(tmpdir(), "otto-outside-"));
+    roots.push(outside);
+    mkdirSync(join(dir, ".otto-tmp"), { recursive: true });
+    writeFileSync(join(dir, ".otto-tmp", "s.png"), "PNG");
+    // Make the bundle's verification dir a symlink pointing outside the workspace.
+    mkdirSync(join(dir, ".otto", "runs", "run-1"), { recursive: true });
+    symlinkSync(outside, join(dir, ".otto", "runs", "run-1", "verification"));
+
+    const [e] = validateVerificationEvidence(
+      [entry({ method: "visual", artifactPath: ".otto-tmp/s.png" })],
+      { workspaceDir: dir, runId: "run-1", ...noGit }
+    );
+    // The copy is refused (path left un-relocated) and nothing escapes the workspace.
+    expect(e.artifactPath).toBe(".otto-tmp/s.png");
+    expect(readdirSync(outside)).toEqual([]);
   });
 
   it("relocates a non-visual transcript artifact too (#181 re-review)", () => {

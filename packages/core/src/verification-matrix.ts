@@ -345,25 +345,48 @@ export function formatVerificationCoverageGate(
   return lines.join("\n");
 }
 
+/** Path prefix of artifacts relocated into the run bundle (see
+ *  `verification-evidence.ts`); only these resolve relative to report.md. */
+export const BUNDLE_ARTIFACT_PREFIX = "verification/";
+const IMAGE_RE = /\.(?:png|jpe?g|gif|webp|svg|avif)$/i;
+
+/**
+ * A path safe to embed as a markdown image: a bundle-relative artifact (one the
+ * loop relocated into `.otto/runs/<id>/verification/`, so it resolves from the
+ * report) with an image extension. Rejects URLs, absolute/`..` paths, and any
+ * unrelocated reference — so an invalid `artifactPath` like
+ * `https://attacker/beacon.png` is never emitted as an image (#181 boundary review).
+ */
+function embeddableImage(p: string | undefined): p is string {
+  return (
+    typeof p === "string" &&
+    p.startsWith(BUNDLE_ARTIFACT_PREFIX) &&
+    !p.includes("..") &&
+    IMAGE_RE.test(p)
+  );
+}
+
 /**
  * Render the visual evidence (P24 visual half) as a markdown "Screenshot
  * Evidence" section that *embeds* each `visual` entry's captured screenshot —
  * a single image, or a before → after pair — so a non-engineer reading the run
- * report sees the proof, not just a path. Only entries with a captured screenshot
- * appear; a visual check the environment could not render carries no
- * `artifactPath` and is left to the coverage gate to flag as unproven (the
- * roadmap's "report the gap, don't invent proof"). Empty string when no visual
- * evidence was captured. Pure.
+ * report sees the proof, not just a path. Only **bundle-relative, validated
+ * image** artifacts are embedded; a visual check the environment could not render
+ * (no/invalid artifact) is left to the coverage gate to flag, never emitted as an
+ * image. Empty string when no embeddable visual evidence exists. Pure.
  */
 export function formatVisualEvidence(entries: VerificationEntry[]): string {
   const visuals = entries.filter(
-    (e) => e.method === "visual" && e.artifactPath
+    (e) =>
+      e.method === "visual" &&
+      e.artifactExists !== false &&
+      embeddableImage(e.artifactPath)
   );
   if (visuals.length === 0) return "";
   const lines: string[] = ["## Screenshot Evidence", ""];
   for (const e of visuals) {
     lines.push(`### ${e.requirement}`, "");
-    if (e.beforePath) {
+    if (embeddableImage(e.beforePath)) {
       lines.push(`- Before: ![before](${e.beforePath})`);
       lines.push(`- After: ![after](${e.artifactPath})`);
     } else {

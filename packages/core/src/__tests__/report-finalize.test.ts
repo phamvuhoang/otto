@@ -181,8 +181,8 @@ describe("finalizeReportText", () => {
             requirement: "settings page renders",
             method: "visual",
             check: "screenshot the rendered page",
-            beforePath: ".otto-tmp/shots/before.png",
-            artifactPath: ".otto-tmp/shots/after.png",
+            beforePath: "verification/0-before.png",
+            artifactPath: "verification/1-after.png",
             result: "pass",
             confidence: "high",
           },
@@ -193,8 +193,8 @@ describe("finalizeReportText", () => {
       changedFiles: [],
     });
     expect(out).toContain("## Screenshot Evidence");
-    expect(out).toContain("![before](.otto-tmp/shots/before.png)");
-    expect(out).toContain("![after](.otto-tmp/shots/after.png)");
+    expect(out).toContain("![before](verification/0-before.png)");
+    expect(out).toContain("![after](verification/1-after.png)");
   });
 
   it("adds no gallery when a non-verify run carried no verification matrix (#181 P24)", () => {

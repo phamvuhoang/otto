@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.29.0...otto-core-v0.30.0) (2026-06-27)
+
+
+### Features
+
+* **input:** input sharpening — rubric, plan-path wiring, run evidence, eval (P23 [#180](https://github.com/phamvuhoang/otto/issues/180)) ([#187](https://github.com/phamvuhoang/otto/issues/187)) ([5c1a681](https://github.com/phamvuhoang/otto/commit/5c1a68116cc1610c897590796d4f4fca76fc18ab))
+
 ## [0.29.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.28.3...otto-core-v0.29.0) (2026-06-26)
 
 

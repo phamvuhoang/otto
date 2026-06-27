@@ -469,15 +469,14 @@ otto-extensions init context-saver              # writes normal, diffable .otto/
 
 #### When to reach for Skills & Headroom
 
-**Skills sharpen _quality_; Headroom lowers _cost_** — and they compose on the same run. New to extending Otto? Start with **[docs/SKILLS-AND-HEADROOM.md](./docs/SKILLS-AND-HEADROOM.md)** — a sharp "what to use when" guide covering five packs (incl. [gstack](https://github.com/garrytan/gstack)), the import → validate → activate model, and the Headroom binary-contract gotcha.
+**Skills sharpen _quality_; Headroom lowers _cost_** — and they compose on the same run. New to extending Otto? Start with **[docs/SKILLS-AND-HEADROOM.md](./docs/SKILLS-AND-HEADROOM.md)** — a sharp "what to use when" guide for Superpowers, Product-Manager-Skills, the Cursor review skill, and Headroom (plus [gstack](https://github.com/garrytan/gstack) as a design reference), the import → validate → activate model, and the Headroom binary-contract gotcha.
 
-| You want to…                                                 | Reach for                                                                                                                             | Switch on with                                      |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| Turn a thin idea into a sharper spec/plan before any code    | [Product-Manager-Skills](https://github.com/deanpeters/Product-Manager-Skills)                                                        | `otto-afk --plan --use-skills`                      |
-| Hold implementation to TDD / systematic-debugging discipline | [Superpowers](https://github.com/obra/Superpowers)                                                                                    | `otto-afk --use-skills`                             |
-| Add one strict, static maintainability-review pass           | [Cursor review skill](https://github.com/cursor/plugins/blob/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md) | `otto-afk --review-panel --use-skills`              |
-| Cherry-pick Garry Tan's role-based workflow (spec / review)  | [gstack](https://github.com/garrytan/gstack)                                                                                          | validate first — most roles are interactive/blocked |
-| Cut input tokens on long, context-heavy runs                 | [Headroom](https://github.com/headroomlabs-ai/headroom)                                                                               | `otto-afk --context-compressor headroom`            |
+| You want to…                                                 | Reach for                                                                                                                             | Switch on with                           |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| Turn a thin idea into a sharper spec/plan before any code    | [Product-Manager-Skills](https://github.com/deanpeters/Product-Manager-Skills)                                                        | `otto-afk --plan --use-skills`           |
+| Hold implementation to TDD / systematic-debugging discipline | [Superpowers](https://github.com/obra/Superpowers)                                                                                    | `otto-afk --use-skills`                  |
+| Add one strict, static maintainability-review pass           | [Cursor review skill](https://github.com/cursor/plugins/blob/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md) | `otto-afk --review-panel --use-skills`   |
+| Cut input tokens on long, context-heavy runs                 | [Headroom](https://github.com/headroomlabs-ai/headroom)                                                                               | `otto-afk --context-compressor headroom` |
 
 ### 6. Verify & repair (read-only / surgical)
 

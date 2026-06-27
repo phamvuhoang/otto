@@ -197,7 +197,7 @@ describe("finalizeReportText", () => {
     expect(out).toContain("![after](.otto-tmp/shots/after.png)");
   });
 
-  it("adds no gallery when the run carried no verification matrix (#181 P24)", () => {
+  it("adds no gallery when a non-verify run carried no verification matrix (#181 P24)", () => {
     const out = finalizeReportText(emitted, {
       manifest,
       stages: [stage],
@@ -205,6 +205,20 @@ describe("finalizeReportText", () => {
       changedFiles: [],
     });
     expect(out).not.toContain("## Verification Gallery");
+    expect(out).not.toContain("## Verification Coverage Gate");
+  });
+
+  it("shows a FAIL gate when a --verify run recorded no valid matrix (#181 review)", () => {
+    const out = finalizeReportText(emitted, {
+      manifest: { ...manifest, mode: "verify", verificationDropped: 2 },
+      stages: [stage],
+      headSha: "abc1234",
+      changedFiles: [],
+    });
+    expect(out).toContain("## Verification Coverage Gate");
+    expect(out).toContain("Gate: **FAIL**");
+    // The dropped malformed rows are surfaced, not hidden.
+    expect(out).toContain("2 malformed matrix row(s) were dropped");
   });
 
   it("generates a fallback report when the agent emitted none", () => {

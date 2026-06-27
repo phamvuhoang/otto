@@ -22,7 +22,7 @@
 
 You are VERIFYING, not implementing. The `<inputs>` block names a plan and PRD (conventionally file paths). `Read` them.
 
-**Make NO commits and NO source edits.** You may read files and run the test/type suites. The only file you may write is the report named at the end.
+**Make NO commits and NO source edits.** You may read files and run the test/type suites. The only files you may write are the verification report and matrix named below and any verification artifacts they cite (e.g. screenshots), all under the gitignored `.otto-tmp/` scratch dir — nothing else.
 
 # RECONCILE
 
@@ -52,8 +52,9 @@ Write your report to `.otto-tmp/verify-report.md` using the `Write` tool (this p
 # VERIFICATION MATRIX (MACHINE-READABLE)
 
 Also write a structured verification matrix to `.otto-tmp/verify-matrix.json`
-using the `Write` tool (gitignored scratch — this and the report above are the
-only writes you may make). It is a JSON array, one entry per plan task /
+using the `Write` tool (gitignored scratch — this, the report above, and any
+screenshot artifacts cited below are the only writes you may make). It is a JSON
+array, one entry per plan task /
 acceptance criterion you reconciled, so a maintainer (or a non-engineer) can scan
 exactly what was proven and how:
 

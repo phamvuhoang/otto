@@ -461,6 +461,50 @@ describe("runLoop", () => {
     expect(manifest?.verification?.[0].requirement).toBe("suite is green");
   });
 
+  it("relocates a --verify run's screenshots into the bundle with report-relative paths (#181 review)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const verifyStage: Stage = { name: "verifier", template: "stage.md" };
+    mocks.runStage.mockImplementation(async () => {
+      const tmp = join(dirs.workspaceDir, ".otto-tmp");
+      mkdirSync(join(tmp, "shots"), { recursive: true });
+      writeFileSync(join(tmp, "shots", "after.png"), "PNGDATA", "utf8");
+      writeFileSync(
+        join(tmp, "verify-matrix.json"),
+        JSON.stringify([
+          {
+            requirement: "settings page renders",
+            method: "visual",
+            check: "screenshot the page",
+            artifactPath: ".otto-tmp/shots/after.png",
+            result: "pass",
+            confidence: "high",
+          },
+        ]),
+        "utf8"
+      );
+      return ok("verified");
+    });
+
+    await runLoop(
+      loopOptions(dirs, {
+        stages: [verifyStage],
+        mode: "verify",
+        iterations: 1,
+      })
+    );
+
+    const runId = listRunIds(dirs.workspaceDir)[0];
+    const manifest = readManifest(dirs.workspaceDir, runId);
+    const path = manifest?.verification?.[0].artifactPath;
+    // Path rewritten to be relative to the bundle (where report.md/manifest live)...
+    expect(path).toMatch(/^verification\//);
+    // ...and the screenshot is actually copied into the bundle, so the link resolves.
+    expect(
+      existsSync(join(dirs.workspaceDir, ".otto", "runs", runId, path!))
+    ).toBe(true);
+  });
+
   it("injects a validated skill + records skillsUsed when activation is on (P18)", async () => {
     const dirs = makeDirs();
     roots.push(dirs.root);

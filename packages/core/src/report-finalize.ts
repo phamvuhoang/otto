@@ -211,7 +211,25 @@ function appendVerificationGallery(
   ctx: FinalizeReportContext
 ): string {
   const matrix = ctx.manifest.verification;
-  if (!matrix || matrix.length === 0) return report;
+  const dropped = ctx.manifest.verificationDropped ?? 0;
+  if (!matrix || matrix.length === 0) {
+    // A non-verify run simply has no matrix — nothing to add. But a `--verify`
+    // run that recorded no valid matrix must show a visible failure, not silently
+    // omit the gate (#181 review).
+    if (ctx.manifest.mode !== "verify") return report;
+    const droppedNote =
+      dropped > 0 ? ` (${dropped} malformed matrix row(s) were dropped)` : "";
+    const fail = [
+      "## Verification Coverage Gate",
+      "",
+      `Gate: **FAIL** — this \`--verify\` run recorded no machine-readable verification matrix${droppedNote}, so its claims are unproven. The verify stage should emit \`.otto-tmp/verify-matrix.json\`.`,
+    ].join("\n");
+    return `${report.trimEnd()}\n\n${fail}\n`;
+  }
+  const droppedNote =
+    dropped > 0
+      ? `\n\n_Note: ${dropped} malformed matrix row(s) were dropped during parsing._`
+      : "";
   const section = [
     "## Verification Gallery",
     "",
@@ -224,7 +242,7 @@ function appendVerificationGallery(
     // Coverage gate (P24): judge whether every verifiable requirement is
     // artifact-backed — the roadmap's "reports include a verification artifact
     // where feasible" bar — with remediation on FAIL.
-    formatVerificationCoverageGate(matrix),
+    formatVerificationCoverageGate(matrix) + droppedNote,
   ].join("\n");
   // Visual half (P24): embed any captured screenshots as a markdown gallery so a
   // non-engineer sees the rendered-UI proof, not just a path. Empty when no

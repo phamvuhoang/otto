@@ -4,7 +4,9 @@ import {
   formatVerificationCoverageGate,
   formatVerificationMatrix,
   formatVisualEvidence,
+  isValidArtifactReference,
   parseVerificationMatrix,
+  parseVerificationMatrixWithDiagnostics,
   scoreVerificationCoverage,
   summarizeVerification,
   type VerificationEntry,
@@ -19,7 +21,55 @@ const entry = (over: Partial<VerificationEntry>): VerificationEntry => ({
   ...over,
 });
 
+describe("isValidArtifactReference", () => {
+  it("accepts file:line, paths, and commit SHAs", () => {
+    for (const ref of [
+      "duration.test.ts:12",
+      "src/cache.ts",
+      ".otto-tmp/shots/after.png",
+      "Makefile:3",
+      "a1b2c3d",
+      "0123456789abcdef0123456789abcdef01234567",
+      "verification/x.png",
+    ]) {
+      expect(isValidArtifactReference(ref), ref).toBe(true);
+    }
+  });
+
+  it("rejects bare commands, prose, placeholders, and empties", () => {
+    for (const ref of [
+      "node --test",
+      "read the code",
+      "eyeballed a few values",
+      "TODO",
+      "see above",
+      "",
+      "   ",
+    ]) {
+      expect(isValidArtifactReference(ref), ref).toBe(false);
+    }
+  });
+});
+
 describe("summarizeVerification", () => {
+  it("does not count a bare command as an artifact (coverage stays 0)", () => {
+    const s = summarizeVerification([
+      { ...entry({}), artifactPath: "node --test" },
+    ]);
+    expect(s.withArtifact).toBe(0);
+    expect(s.coverage).toBe(0);
+    expect(s.verdict).toBe("unproven");
+  });
+
+  it("treats an all-deferred matrix as vacuously verified (deferred is exempt)", () => {
+    const s = summarizeVerification([
+      entry({ result: "deferred" }),
+      entry({ result: "deferred" }),
+    ]);
+    expect(s.coverage).toBe(1);
+    expect(s.verdict).toBe("verified");
+  });
+
   it("tallies results, artifact coverage, and an overall verdict", () => {
     const s = summarizeVerification([
       entry({ artifactPath: "a.test.ts:10" }),
@@ -78,6 +128,8 @@ describe("formatVerificationMatrix", () => {
     expect(out).toContain("totalMinutes handles hours");
     expect(out).toContain("duration.test.ts:12");
     expect(out).toContain("pass");
+    // The actual check is shown, not hidden (#181 review).
+    expect(out).toContain("node --test");
   });
 
   it("surfaces failures and unproven requirements as explicit risks, not buried", () => {
@@ -152,15 +204,21 @@ describe("scoreVerificationCoverage", () => {
     expect(g.failed).toEqual([]);
   });
 
-  it("fails and lists unproven + failed requirements below the bar", () => {
+  it("fails and lists unproven + failed + incomplete requirements below the bar", () => {
     const g = scoreVerificationCoverage([
       entry({ requirement: "proven", artifactPath: "a.ts:1" }),
       entry({ requirement: "no-artifact", artifactPath: undefined }),
+      entry({ requirement: "bare-cmd", artifactPath: "node --test" }),
       entry({ requirement: "broke", result: "fail" }),
+      entry({ requirement: "half", result: "partial", artifactPath: "a.ts:9" }),
     ]);
     expect(g.passed).toBe(false);
     expect(g.unproven).toContain("no-artifact");
+    // A bare command is not a valid artifact, so its requirement is unproven.
+    expect(g.unproven).toContain("bare-cmd");
     expect(g.failed).toContain("broke");
+    // An artifact-backed partial result is incomplete, not silently dropped.
+    expect(g.incomplete).toContain("half");
   });
 });
 
@@ -183,8 +241,40 @@ describe("formatVerificationCoverageGate", () => {
     expect(out.toLowerCase()).toMatch(/artifact|deferred/);
   });
 
+  it("names incomplete (partial) requirements on FAIL", () => {
+    const out = formatVerificationCoverageGate([
+      entry({
+        requirement: "half-done",
+        result: "partial",
+        artifactPath: "a.ts:1",
+      }),
+    ]);
+    expect(out).toContain("FAIL");
+    expect(out).toContain("half-done");
+  });
+
   it("is empty for an empty matrix (nothing to gate)", () => {
     expect(formatVerificationCoverageGate([])).toBe("");
+  });
+});
+
+describe("parseVerificationMatrixWithDiagnostics", () => {
+  it("reports dropped malformed rows alongside the valid entries", () => {
+    const raw = JSON.stringify([
+      { requirement: "good", method: "test", check: "c", result: "pass" },
+      { requirement: "bad", method: "nope", check: "c", result: "pass" },
+      { method: "test", check: "c", result: "pass" }, // no requirement
+    ]);
+    const d = parseVerificationMatrixWithDiagnostics(raw);
+    expect(d.parsed).toBe(true);
+    expect(d.entries).toHaveLength(1);
+    expect(d.dropped).toBe(2);
+  });
+
+  it("flags unparseable input", () => {
+    const d = parseVerificationMatrixWithDiagnostics("not json");
+    expect(d.parsed).toBe(false);
+    expect(d.entries).toEqual([]);
   });
 });
 

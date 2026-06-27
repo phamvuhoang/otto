@@ -67,50 +67,96 @@ const RESULTS: ReadonlySet<string> = new Set([
 const CONFIDENCES: ReadonlySet<string> = new Set(["high", "medium", "low"]);
 
 /**
- * Parse an agent-emitted verification matrix (a JSON `VerificationEntry[]`,
- * e.g. the `.otto-tmp/verify-matrix.json` the verify stage writes) into validated
- * entries. Tolerant like `parsePlanTasks`: never throws, drops any entry missing
- * a non-empty `requirement` or carrying an unknown `method`/`result`, and
- * defaults an absent/invalid `confidence` to `medium`. Non-array / malformed
- * JSON ⇒ `[]`. Pure.
+ * Whether a string is a *typed*, durable artifact reference that actually proves
+ * something — a `file:line` (or `file:line-range`), a path with a separator or a
+ * file extension (a transcript / screenshot / source file), or a 7–40 char commit
+ * SHA. A bare command (`node --test`), prose (`read the code`), or a placeholder
+ * (`TODO`) is NOT proof and returns false, so the coverage signal can't be earned
+ * by an unverifiable string (#181 review). Pure.
  */
-export function parseVerificationMatrix(raw: string): VerificationEntry[] {
+export function isValidArtifactReference(ref: string): boolean {
+  const r = ref.trim();
+  if (!r) return false;
+  if (/^[0-9a-f]{7,40}$/i.test(r)) return true; // commit SHA
+  if (/^[\w./\\-]+:\d+(?:-\d+)?$/.test(r)) return true; // file:line or file:line-range
+  if (/\s/.test(r)) return false; // commands / prose carry whitespace
+  return /[/\\]/.test(r) || /\.[A-Za-z0-9]{1,8}$/.test(r); // a path, or a file with an extension
+}
+
+/** Whether an entry carries a *valid, typed* proving artifact. */
+function hasArtifact(e: VerificationEntry): boolean {
+  return Boolean(e.artifactPath) && isValidArtifactReference(e.artifactPath!);
+}
+
+export type VerificationParseResult = {
+  /** Valid entries kept. */
+  entries: VerificationEntry[];
+  /** Rows present in the JSON array that were rejected as malformed. */
+  dropped: number;
+  /** False when the input was not parseable JSON or not an array. */
+  parsed: boolean;
+};
+
+/**
+ * Parse an agent-emitted verification matrix (a JSON `VerificationEntry[]`,
+ * e.g. the `.otto-tmp/verify-matrix.json` the verify stage writes), keeping the
+ * parse diagnostics so a malformed/partial matrix is reported, not silently
+ * dropped (#181 review). Tolerant: never throws, drops any entry missing a
+ * non-empty `requirement` or carrying an unknown `method`/`result`, defaults an
+ * absent/invalid `confidence` to `medium`, and counts each dropped row. Non-array
+ * / malformed JSON ⇒ `{ entries: [], dropped: 0, parsed: false }`. Pure.
+ */
+export function parseVerificationMatrixWithDiagnostics(
+  raw: string
+): VerificationParseResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return [];
+    return { entries: [], dropped: 0, parsed: false };
   }
-  if (!Array.isArray(parsed)) return [];
+  if (!Array.isArray(parsed)) return { entries: [], dropped: 0, parsed: false };
   const entries: VerificationEntry[] = [];
+  let dropped = 0;
   for (const item of parsed) {
-    if (!item || typeof item !== "object") continue;
-    const r = item as Record<string, unknown>;
-    const requirement =
-      typeof r.requirement === "string" ? r.requirement.trim() : "";
-    if (!requirement) continue;
-    if (typeof r.method !== "string" || !METHODS.has(r.method)) continue;
-    if (typeof r.result !== "string" || !RESULTS.has(r.result)) continue;
-    const confidence =
-      typeof r.confidence === "string" && CONFIDENCES.has(r.confidence)
-        ? (r.confidence as VerificationConfidence)
-        : "medium";
-    entries.push({
-      requirement,
-      method: r.method as VerificationMethod,
-      check: typeof r.check === "string" ? r.check : "",
-      ...(typeof r.artifactPath === "string" && r.artifactPath
-        ? { artifactPath: r.artifactPath }
-        : {}),
-      ...(typeof r.beforePath === "string" && r.beforePath
-        ? { beforePath: r.beforePath }
-        : {}),
-      result: r.result as VerificationResult,
-      confidence,
-      ...(typeof r.note === "string" && r.note ? { note: r.note } : {}),
-    });
+    const entry = coerceEntry(item);
+    if (entry) entries.push(entry);
+    else dropped += 1;
   }
-  return entries;
+  return { entries, dropped, parsed: true };
+}
+
+function coerceEntry(item: unknown): VerificationEntry | null {
+  if (!item || typeof item !== "object") return null;
+  const r = item as Record<string, unknown>;
+  const requirement =
+    typeof r.requirement === "string" ? r.requirement.trim() : "";
+  if (!requirement) return null;
+  if (typeof r.method !== "string" || !METHODS.has(r.method)) return null;
+  if (typeof r.result !== "string" || !RESULTS.has(r.result)) return null;
+  const confidence =
+    typeof r.confidence === "string" && CONFIDENCES.has(r.confidence)
+      ? (r.confidence as VerificationConfidence)
+      : "medium";
+  return {
+    requirement,
+    method: r.method as VerificationMethod,
+    check: typeof r.check === "string" ? r.check : "",
+    ...(typeof r.artifactPath === "string" && r.artifactPath
+      ? { artifactPath: r.artifactPath }
+      : {}),
+    ...(typeof r.beforePath === "string" && r.beforePath
+      ? { beforePath: r.beforePath }
+      : {}),
+    result: r.result as VerificationResult,
+    confidence,
+    ...(typeof r.note === "string" && r.note ? { note: r.note } : {}),
+  };
+}
+
+/** Parse a verification matrix into valid entries (diagnostics discarded). Pure. */
+export function parseVerificationMatrix(raw: string): VerificationEntry[] {
+  return parseVerificationMatrixWithDiagnostics(raw).entries;
 }
 
 /** Whether a requirement is one we expect a concrete artifact for (i.e. not deferred). */
@@ -149,12 +195,17 @@ export function summarizeVerification(
   const partial = entries.filter((e) => e.result === "partial").length;
   const deferred = entries.filter((e) => e.result === "deferred").length;
   const verifiable = entries.filter(isVerifiable);
-  const withArtifact = entries.filter((e) => Boolean(e.artifactPath)).length;
-  const verifiableProven = verifiable.filter((e) =>
-    Boolean(e.artifactPath)
-  ).length;
+  const withArtifact = entries.filter(hasArtifact).length;
+  const verifiableProven = verifiable.filter(hasArtifact).length;
+  // Vacuous truth: an all-deferred matrix (entries, but none verifiable) is fully
+  // covered — there is nothing left to prove (#181 review). An empty matrix has
+  // nothing measured, so coverage is 0.
   const coverage =
-    verifiable.length > 0 ? verifiableProven / verifiable.length : 0;
+    total === 0
+      ? 0
+      : verifiable.length > 0
+        ? verifiableProven / verifiable.length
+        : 1;
 
   let verdict: VerificationSummary["verdict"];
   if (total === 0) verdict = "empty";
@@ -181,17 +232,20 @@ export type VerificationCoverageGate = {
   passed: boolean;
   /** Artifact-backed share of the verifiable requirements, 0..1. */
   coverage: number;
-  /** Verifiable requirements asserted without a proving artifact. */
+  /** Verifiable requirements asserted without a valid proving artifact. */
   unproven: string[];
   /** Requirements that failed verification. */
   failed: string[];
+  /** Requirements left `partial` — checked but not fully passing. */
+  incomplete: string[];
 };
 
 /**
  * Score a verification matrix against the roadmap's coverage bar (P24): every
- * verifiable requirement must carry a concrete artifact and none may fail. The
- * `unproven`/`failed` lists are what an operator must fix to clear the gate
- * (add an artifact, or mark the requirement `deferred`). Pure.
+ * verifiable requirement must carry a valid artifact, none may fail, and none may
+ * be left partial. The `unproven`/`failed`/`incomplete` lists are exactly why the
+ * gate did not pass — what an operator must fix (cite a valid artifact, fix the
+ * failure/partial, or mark the requirement `deferred`). Pure.
  */
 export function scoreVerificationCoverage(
   entries: VerificationEntry[]
@@ -201,10 +255,13 @@ export function scoreVerificationCoverage(
     passed: summary.verdict === "verified",
     coverage: summary.coverage,
     unproven: entries
-      .filter((e) => isVerifiable(e) && !e.artifactPath)
+      .filter((e) => isVerifiable(e) && !hasArtifact(e))
       .map((e) => e.requirement),
     failed: entries
       .filter((e) => e.result === "fail")
+      .map((e) => e.requirement),
+    incomplete: entries
+      .filter((e) => e.result === "partial")
       .map((e) => e.requirement),
   };
 }
@@ -229,10 +286,28 @@ export function formatVerificationCoverageGate(
     if (g.failed.length > 0) {
       lines.push("", `Failed: ${g.failed.join(", ")}.`);
     }
+    if (g.incomplete.length > 0) {
+      lines.push(
+        "",
+        `Incomplete (partial — finish or split): ${g.incomplete.join(", ")}.`
+      );
+    }
     if (g.unproven.length > 0) {
       lines.push(
         "",
-        `Unproven (cite a concrete artifact — \`file:line\`, a commit SHA, a transcript/screenshot — or mark the requirement \`deferred\`): ${g.unproven.join(", ")}.`
+        `Unproven (cite a valid artifact — \`file:line\`, a commit SHA, a transcript/screenshot path — or mark the requirement \`deferred\`): ${g.unproven.join(", ")}.`
+      );
+    }
+    // A FAIL with no failed/incomplete/unproven items would be unexplained; make
+    // the residual reason explicit rather than leaving an empty gate (#181 review).
+    if (
+      g.failed.length === 0 &&
+      g.incomplete.length === 0 &&
+      g.unproven.length === 0
+    ) {
+      lines.push(
+        "",
+        "No requirement is fully proven, yet none is individually failed/partial/unproven — review the matrix."
       );
     }
   }
@@ -277,6 +352,12 @@ const RESULT_MARK: Record<VerificationResult, string> = {
 
 const pct = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
+/** Collapse a (possibly multi-line) check to one bounded, fence-safe line. */
+function oneLine(s: string, max = 80): string {
+  const flat = s.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
 /**
  * Render a verification matrix as a scannable report: a header verdict line, one
  * row per requirement (mark · method · requirement · artifact), and an explicit
@@ -296,21 +377,25 @@ export function formatVerificationMatrix(entries: VerificationEntry[]): string {
       ` · ${pct.format(s.coverage * 100)}% artifact-backed`,
   ];
   for (const e of entries) {
-    const artifact = e.artifactPath
+    const artifact = hasArtifact(e)
       ? ` → ${e.artifactPath}`
-      : " → (no artifact)";
+      : e.artifactPath
+        ? ` → ${e.artifactPath} (not a valid artifact)`
+        : " → (no artifact)";
     const conf = e.confidence !== "high" ? ` [${e.confidence}]` : "";
+    const check = e.check ? `  · check: ${oneLine(e.check)}` : "";
     lines.push(
-      `  ${RESULT_MARK[e.result]} ${e.method}: ${e.requirement}${conf}${artifact}`
+      `  ${RESULT_MARK[e.result]} ${e.method}: ${e.requirement}${conf}${artifact}${check}`
     );
   }
   const risks = entries.filter(
-    (e) => e.result === "fail" || (isVerifiable(e) && !e.artifactPath)
+    (e) => e.result === "fail" || (isVerifiable(e) && !hasArtifact(e))
   );
   if (risks.length > 0) {
     lines.push("", `Risks (${risks.length}):`);
     for (const e of risks) {
-      const why = e.result === "fail" ? "failed" : "unproven (no artifact)";
+      const why =
+        e.result === "fail" ? "failed" : "unproven (no valid artifact)";
       lines.push(`  - ${e.requirement} — ${why}`);
     }
   }

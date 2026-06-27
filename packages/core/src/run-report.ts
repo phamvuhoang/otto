@@ -183,6 +183,9 @@ export type RunManifest = {
   /** Structured verification matrix from a `--verify` run (issue #181 P24);
    *  absent outside verify mode or when the stage emitted none. */
   verification?: VerificationEntry[];
+  /** Count of malformed matrix rows the parser dropped on a `--verify` run
+   *  (issue #181 review); absent/0 when the matrix was clean. */
+  verificationDropped?: number;
   startedAt: string;
   finishedAt?: string;
 };

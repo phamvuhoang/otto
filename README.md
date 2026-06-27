@@ -467,6 +467,18 @@ otto-extensions init context-saver              # writes normal, diffable .otto/
 
 **Bringing in a specific pack?** [**docs/INTEGRATIONS.md**](./docs/INTEGRATIONS.md) is a from-scratch, step-by-step guide for [Superpowers](https://github.com/obra/superpowers) (coding), [Product-Manager-Skills](https://github.com/deanpeters/Product-Manager-Skills) (planning), a single [Cursor review skill](https://github.com/cursor/plugins/blob/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md), and [Headroom](https://github.com/headroomlabs-ai/headroom) (context compression) — clone → register → validate → activate, with the gotchas (capability tagging, interactive-skill flagging, local-vs-git sync) called out.
 
+#### When to reach for Skills & Headroom
+
+**Skills sharpen _quality_; Headroom lowers _cost_** — and they compose on the same run. New to extending Otto? Start with **[docs/SKILLS-AND-HEADROOM.md](./docs/SKILLS-AND-HEADROOM.md)** — a sharp "what to use when" guide covering five packs (incl. [gstack](https://github.com/garrytan/gstack)), the import → validate → activate model, and the Headroom binary-contract gotcha.
+
+| You want to…                                                 | Reach for                                                                                                                             | Switch on with                                      |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Turn a thin idea into a sharper spec/plan before any code    | [Product-Manager-Skills](https://github.com/deanpeters/Product-Manager-Skills)                                                        | `otto-afk --plan --use-skills`                      |
+| Hold implementation to TDD / systematic-debugging discipline | [Superpowers](https://github.com/obra/Superpowers)                                                                                    | `otto-afk --use-skills`                             |
+| Add one strict, static maintainability-review pass           | [Cursor review skill](https://github.com/cursor/plugins/blob/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md) | `otto-afk --review-panel --use-skills`              |
+| Cherry-pick Garry Tan's role-based workflow (spec / review)  | [gstack](https://github.com/garrytan/gstack)                                                                                          | validate first — most roles are interactive/blocked |
+| Cut input tokens on long, context-heavy runs                 | [Headroom](https://github.com/headroomlabs-ai/headroom)                                                                               | `otto-afk --context-compressor headroom`            |
+
 ### 6. Verify & repair (read-only / surgical)
 
 ```bash
@@ -640,19 +652,20 @@ Requires **Node 20+** and an authenticated agent runtime: **Claude Code** (`clau
 
 ## Documentation
 
-| Doc                                                                    | What's in it                                                                                                                           |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| **[QUICKSTART.md](./QUICKSTART.md)**                                   | Zero-to-first-loop getting started.                                                                                                    |
-| **[docs/CLI.md](./docs/CLI.md)**                                       | Every command, flag, and mode — start at [Choosing a mode](./docs/CLI.md#choosing-a-mode) (afk vs ghafk vs verify vs apply-review).    |
-| **[docs/CONFIG.md](./docs/CONFIG.md)**                                 | Environment variables, runner/sandbox, branch strategy, setup.                                                                         |
-| **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)**                     | Runtime internals and data flow for library extenders.                                                                                 |
-| **[docs/EXTENSIONS.md](./docs/EXTENSIONS.md)**                         | Curated extension profiles: what each writes, the compatibility matrix, and update/lock/rollback.                                      |
-| **[docs/INTEGRATIONS.md](./docs/INTEGRATIONS.md)**                     | From-scratch, step-by-step recipes for Superpowers, Product-Manager-Skills, a single Cursor skill, and Headroom.                       |
-| **[docs/MIGRATION.md](./docs/MIGRATION.md)**                           | Task-grouped `.otto/tasks/<task-key>/` layout, old→new path mapping, branch-convention namespace, and how to migrate an existing repo. |
-| **[docs/quality-report-samples.md](./docs/quality-report-samples.md)** | Filled-in sample quality reports — what good verification output looks like per run mode.                                              |
-| **[SECURITY.md](./SECURITY.md)**                                       | Threat model and the `bypassPermissions` blast-radius story.                                                                           |
-| **[CONTRIBUTING.md](./CONTRIBUTING.md)**                               | Dev loop, tests, adding a stage, release pipeline.                                                                                     |
-| **[RELEASING.md](./RELEASING.md)**                                     | release-please flow, version policy, secrets, rollback.                                                                                |
+| Doc                                                                    | What's in it                                                                                                                            |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **[QUICKSTART.md](./QUICKSTART.md)**                                   | Zero-to-first-loop getting started.                                                                                                     |
+| **[docs/CLI.md](./docs/CLI.md)**                                       | Every command, flag, and mode — start at [Choosing a mode](./docs/CLI.md#choosing-a-mode) (afk vs ghafk vs verify vs apply-review).     |
+| **[docs/CONFIG.md](./docs/CONFIG.md)**                                 | Environment variables, runner/sandbox, branch strategy, setup.                                                                          |
+| **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)**                     | Runtime internals and data flow for library extenders.                                                                                  |
+| **[docs/EXTENSIONS.md](./docs/EXTENSIONS.md)**                         | Curated extension profiles: what each writes, the compatibility matrix, and update/lock/rollback.                                       |
+| **[docs/SKILLS-AND-HEADROOM.md](./docs/SKILLS-AND-HEADROOM.md)**       | What to use when — a sharp "best use cases" map for Superpowers, Product-Manager-Skills, the Cursor review skill, gstack, and Headroom. |
+| **[docs/INTEGRATIONS.md](./docs/INTEGRATIONS.md)**                     | From-scratch, step-by-step recipes for Superpowers, Product-Manager-Skills, a single Cursor skill, and Headroom.                        |
+| **[docs/MIGRATION.md](./docs/MIGRATION.md)**                           | Task-grouped `.otto/tasks/<task-key>/` layout, old→new path mapping, branch-convention namespace, and how to migrate an existing repo.  |
+| **[docs/quality-report-samples.md](./docs/quality-report-samples.md)** | Filled-in sample quality reports — what good verification output looks like per run mode.                                               |
+| **[SECURITY.md](./SECURITY.md)**                                       | Threat model and the `bypassPermissions` blast-radius story.                                                                            |
+| **[CONTRIBUTING.md](./CONTRIBUTING.md)**                               | Dev loop, tests, adding a stage, release pipeline.                                                                                      |
+| **[RELEASING.md](./RELEASING.md)**                                     | release-please flow, version policy, secrets, rollback.                                                                                 |
 
 ---
 

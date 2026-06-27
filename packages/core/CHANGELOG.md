@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.30.0...otto-core-v0.31.0) (2026-06-27)
+
+
+### Features
+
+* **verify:** visual + artifact-backed verification — matrix, gallery, coverage gate, screenshots (P24 [#181](https://github.com/phamvuhoang/otto/issues/181)) ([#188](https://github.com/phamvuhoang/otto/issues/188)) ([e98f077](https://github.com/phamvuhoang/otto/commit/e98f077948bb7a79899eb550f6bac43776c224ad))
+
 ## [0.30.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.29.0...otto-core-v0.30.0) (2026-06-27)
 
 

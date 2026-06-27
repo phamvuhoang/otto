@@ -10,6 +10,7 @@ import {
   type StageRecord,
 } from "./run-report.js";
 import { formatTokenUsage } from "./tokens.js";
+import { formatVerificationMatrix } from "./verification-matrix.js";
 
 /**
  * Injectable host surface for {@link runInspect} so the reader stays
@@ -104,6 +105,14 @@ export function formatRunReport(
   for (const a of manifest.artifacts) {
     const desc = a.description ? ` — ${a.description}` : "";
     lines.push(`  - ${a.kind}: ${a.path}${desc}`);
+  }
+
+  // Verification gallery (issue #181 P24): the structured matrix a --verify run
+  // produced — what was proven, how, and with which artifact — with failures and
+  // unproven requirements surfaced as explicit risks.
+  if (manifest.verification && manifest.verification.length > 0) {
+    lines.push("");
+    lines.push(formatVerificationMatrix(manifest.verification));
   }
 
   // Injected skills (issue #114 P18): the validated skills that shaped this run,

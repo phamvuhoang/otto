@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatVerificationMatrix,
+  parseVerificationMatrix,
   summarizeVerification,
   type VerificationEntry,
 } from "../verification-matrix.js";
@@ -90,5 +91,48 @@ describe("formatVerificationMatrix", () => {
   it("notes when nothing was verified", () => {
     const out = formatVerificationMatrix([]);
     expect(out).toMatch(/no verification/i);
+  });
+});
+
+describe("parseVerificationMatrix", () => {
+  it("parses a valid matrix array, keeping known fields", () => {
+    const raw = JSON.stringify([
+      {
+        requirement: "totalMinutes handles hours",
+        method: "test",
+        check: "node --test",
+        artifactPath: "duration.test.ts:12",
+        result: "pass",
+        confidence: "high",
+      },
+    ]);
+    const entries = parseVerificationMatrix(raw);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].requirement).toBe("totalMinutes handles hours");
+    expect(entries[0].artifactPath).toBe("duration.test.ts:12");
+  });
+
+  it("defaults a missing/invalid confidence to medium", () => {
+    const raw = JSON.stringify([
+      { requirement: "r", method: "command", check: "c", result: "pass" },
+    ]);
+    expect(parseVerificationMatrix(raw)[0].confidence).toBe("medium");
+  });
+
+  it("skips entries with an invalid method or result but keeps valid ones", () => {
+    const raw = JSON.stringify([
+      { requirement: "good", method: "test", check: "c", result: "pass" },
+      { requirement: "bad-method", method: "wat", check: "c", result: "pass" },
+      { requirement: "bad-result", method: "test", check: "c", result: "ok" },
+      { requirement: "", method: "test", check: "c", result: "pass" },
+    ]);
+    const entries = parseVerificationMatrix(raw);
+    expect(entries.map((e) => e.requirement)).toEqual(["good"]);
+  });
+
+  it("returns [] for malformed JSON or a non-array", () => {
+    expect(parseVerificationMatrix("not json")).toEqual([]);
+    expect(parseVerificationMatrix("{}")).toEqual([]);
+    expect(parseVerificationMatrix("")).toEqual([]);
   });
 });

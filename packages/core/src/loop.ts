@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
@@ -22,6 +22,7 @@ import {
   formatSharpeningGuidance,
   scoreInputSharpness,
 } from "./input-sharpness.js";
+import { parseVerificationMatrix } from "./verification-matrix.js";
 import { runFanout } from "./fanout.js";
 import { reapWorktrees } from "./worktree.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
@@ -437,6 +438,21 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
   const nowIso = () => new Date().toISOString();
   const runStartSha = headSha(workspaceDir);
+  // Verification matrix (issue #181 P24): the verify stage writes this gitignored
+  // scratch file; finalize reads it back. Clear any stale matrix from a prior
+  // verify run at start so a run whose agent emits none can't inherit one.
+  const verifyMatrixPath = join(
+    workspaceDir,
+    ".otto-tmp",
+    "verify-matrix.json"
+  );
+  if (mode === "verify") {
+    try {
+      rmSync(verifyMatrixPath, { force: true });
+    } catch {
+      // best-effort: a leftover scratch file must never block the run.
+    }
+  }
   if (fresh) clearState(workspaceDir);
   const prior = fresh ? null : readState(workspaceDir);
   const resuming = matchesResume(prior, { bin, mode, inputs });
@@ -757,6 +773,16 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         planDoc && planMatchesRun
           ? detectScopeDrift(planDoc.doc, changedFiles)
           : null;
+      // Verification matrix (issue #181 P24): a --verify run's stage writes a
+      // machine-readable matrix to the scratch path; parse it back as evidence.
+      // Best-effort: absent/malformed ⇒ no block, never a failed finalize.
+      let verification: RunManifest["verification"];
+      if (mode === "verify" && existsSync(verifyMatrixPath)) {
+        const entries = parseVerificationMatrix(
+          readFileSync(verifyMatrixPath, "utf8")
+        );
+        if (entries.length > 0) verification = entries;
+      }
       const manifestForReport: RunManifest = {
         runId,
         bin,
@@ -780,6 +806,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               },
             }
           : {}),
+        ...(verification ? { verification } : {}),
         startedAt: manifestStartedAt,
         finishedAt: nowIso(),
       };
@@ -815,6 +842,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               },
             }
           : {}),
+        ...(verification ? { verification } : {}),
         startedAt: manifestStartedAt,
         finishedAt: nowIso(),
       });

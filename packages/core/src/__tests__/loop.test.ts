@@ -416,6 +416,51 @@ describe("runLoop", () => {
     expect(manifest?.inputSharpness).toBeUndefined();
   });
 
+  it("records a --verify run's verification matrix from the scratch file onto the manifest (#181 P24)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const verifyStage: Stage = { name: "verifier", template: "stage.md" };
+    const matrixPath = join(
+      dirs.workspaceDir,
+      ".otto-tmp",
+      "verify-matrix.json"
+    );
+    // The mocked verify agent writes the machine-readable matrix, as verify.md directs.
+    mocks.runStage.mockImplementation(async () => {
+      mkdirSync(join(dirs.workspaceDir, ".otto-tmp"), { recursive: true });
+      writeFileSync(
+        matrixPath,
+        JSON.stringify([
+          {
+            requirement: "suite is green",
+            method: "test",
+            check: "node --test",
+            artifactPath: "x.test.ts:1",
+            result: "pass",
+            confidence: "high",
+          },
+        ]),
+        "utf8"
+      );
+      return ok("verified");
+    });
+
+    await runLoop(
+      loopOptions(dirs, {
+        stages: [verifyStage],
+        mode: "verify",
+        iterations: 1,
+      })
+    );
+
+    const manifest = readManifest(
+      dirs.workspaceDir,
+      listRunIds(dirs.workspaceDir)[0]
+    );
+    expect(manifest?.verification).toHaveLength(1);
+    expect(manifest?.verification?.[0].requirement).toBe("suite is green");
+  });
+
   it("injects a validated skill + records skillsUsed when activation is on (P18)", async () => {
     const dirs = makeDirs();
     roots.push(dirs.root);

@@ -47,6 +47,65 @@ export type VerificationEntry = {
   note?: string;
 };
 
+const METHODS: ReadonlySet<string> = new Set([
+  "test",
+  "command",
+  "visual",
+  "inspection",
+  "manual",
+]);
+const RESULTS: ReadonlySet<string> = new Set([
+  "pass",
+  "fail",
+  "partial",
+  "deferred",
+]);
+const CONFIDENCES: ReadonlySet<string> = new Set(["high", "medium", "low"]);
+
+/**
+ * Parse an agent-emitted verification matrix (a JSON `VerificationEntry[]`,
+ * e.g. the `.otto-tmp/verify-matrix.json` the verify stage writes) into validated
+ * entries. Tolerant like `parsePlanTasks`: never throws, drops any entry missing
+ * a non-empty `requirement` or carrying an unknown `method`/`result`, and
+ * defaults an absent/invalid `confidence` to `medium`. Non-array / malformed
+ * JSON ⇒ `[]`. Pure.
+ */
+export function parseVerificationMatrix(raw: string): VerificationEntry[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const entries: VerificationEntry[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") continue;
+    const r = item as Record<string, unknown>;
+    const requirement =
+      typeof r.requirement === "string" ? r.requirement.trim() : "";
+    if (!requirement) continue;
+    if (typeof r.method !== "string" || !METHODS.has(r.method)) continue;
+    if (typeof r.result !== "string" || !RESULTS.has(r.result)) continue;
+    const confidence =
+      typeof r.confidence === "string" && CONFIDENCES.has(r.confidence)
+        ? (r.confidence as VerificationConfidence)
+        : "medium";
+    entries.push({
+      requirement,
+      method: r.method as VerificationMethod,
+      check: typeof r.check === "string" ? r.check : "",
+      ...(typeof r.artifactPath === "string" && r.artifactPath
+        ? { artifactPath: r.artifactPath }
+        : {}),
+      result: r.result as VerificationResult,
+      confidence,
+      ...(typeof r.note === "string" && r.note ? { note: r.note } : {}),
+    });
+  }
+  return entries;
+}
+
 /** Whether a requirement is one we expect a concrete artifact for (i.e. not deferred). */
 function isVerifiable(e: VerificationEntry): boolean {
   return e.result !== "deferred";

@@ -81,6 +81,26 @@ describe("formatRunReport", () => {
     expect(out).toContain(".otto/review-followups.md");
   });
 
+  it("surfaces the input-sharpness assessment and the assumed gaps (#180 P23)", () => {
+    const manifest: RunManifest = {
+      ...finalized,
+      inputSharpness: {
+        metCount: 2,
+        maxScore: 5,
+        unknowns: ["Constraints / requirements", "Scope / non-goals"],
+      },
+    };
+    const out = formatRunReport(manifest, [implStage]);
+    expect(out).toMatch(/sharpness:\s*2\/5/);
+    expect(out).toContain("Constraints / requirements");
+    expect(out).toContain("Scope / non-goals");
+  });
+
+  it("omits the sharpness line when no assessment was recorded (#180 P23)", () => {
+    const out = formatRunReport(finalized, [implStage]);
+    expect(out).not.toMatch(/sharpness:/);
+  });
+
   it("surfaces injected skills per stage and in a run-level section (P18)", () => {
     const withSkill: StageRecord = {
       ...implStage,

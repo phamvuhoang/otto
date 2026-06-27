@@ -17,6 +17,11 @@ import {
 import { resolveTierLadder, type TierLadder } from "./model-tier.js";
 import { discoverPlanTasks } from "./plan-tasks.js";
 import { reviewsFanoutInsteadOfReplan } from "./plan-fanout.js";
+import {
+  formatInputSharpness,
+  formatSharpeningGuidance,
+  scoreInputSharpness,
+} from "./input-sharpness.js";
 import { runFanout } from "./fanout.js";
 import { reapWorktrees } from "./worktree.js";
 import { RateLimitError, computeWaitMs } from "./rate-limit.js";
@@ -220,6 +225,12 @@ export type LoopOptions = {
   modelRouting?: boolean;
   /** tier → model ladder consulted when `modelRouting` resolves a tier. */
   tierLadder?: TierLadder;
+  /** Opt-in input sharpening (issue #180 P23): in `--plan` mode, score the run's
+   *  input and, when it omits dimensions (goal/constraints/success criteria/…),
+   *  inject a bounded sharpening-guidance block into the plan stage so the author
+   *  records an explicit assumption per gap. Off/undefined or a sharp input ⇒
+   *  nothing injected and the plan prompt is byte-identical. */
+  sharpenInput?: boolean;
   /** Opt-in runtime skill activation (issue #114 P18): inject validated,
    *  stage-scoped skill guidance into live stages. When off/undefined, no skill
    *  is selected or injected and the run is byte-for-byte unchanged. */
@@ -377,6 +388,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     modelRouting = false,
     tierLadder,
     skillActivation,
+    sharpenInput = false,
     fanOut = false,
     fanOutConcurrency = 3,
     resolveChangedPaths,
@@ -393,6 +405,17 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     verbose = false,
     contextCompressor = "off",
   } = opts;
+
+  // Input sharpening (issue #180 P23): in --plan mode, score the run's input once.
+  // The score drives the bounded `{{ SHARPENING }}` guidance injected into the
+  // plan stage and is recorded on the manifest as evidence (the gaps the run had
+  // to assume). Null when off or not planning ⇒ the plan prompt is byte-identical
+  // and the manifest carries no sharpness block.
+  const inputSharpness =
+    sharpenInput && mode === "plan" ? scoreInputSharpness(inputs) : null;
+  const sharpeningGuidance = inputSharpness
+    ? formatSharpeningGuidance(inputSharpness)
+    : "";
 
   // One in-run console sink per run (issue #65 P10): quiet ConsoleUi by default,
   // the full firehose under --verbose. Threaded into every stage via executeStage.
@@ -748,6 +771,15 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         exitReason: reason,
         nextAction: nextActionFor(reason),
         artifacts: [],
+        ...(inputSharpness
+          ? {
+              inputSharpness: {
+                metCount: inputSharpness.metCount,
+                maxScore: inputSharpness.maxScore,
+                unknowns: inputSharpness.unknowns,
+              },
+            }
+          : {}),
         startedAt: manifestStartedAt,
         finishedAt: nowIso(),
       };
@@ -774,6 +806,15 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         nextAction: nextActionFor(reason),
         artifacts: collectArtifacts(),
         ...(runSkillsUsed.length > 0 ? { skillsUsed: runSkillsUsed } : {}),
+        ...(inputSharpness
+          ? {
+              inputSharpness: {
+                metCount: inputSharpness.metCount,
+                maxScore: inputSharpness.maxScore,
+                unknowns: inputSharpness.unknowns,
+              },
+            }
+          : {}),
         startedAt: manifestStartedAt,
         finishedAt: nowIso(),
       });
@@ -950,6 +991,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     }
   }
 
+  // Input sharpening (issue #180 P23): show the operator the input-sharpness
+  // scorecard at run start so the gaps the plan author must assume are visible
+  // up front, mirroring how the plan gate prints its rubric.
+  if (inputSharpness) {
+    process.stderr.write(`${dim(formatInputSharpness(inputSharpness))}\n`);
+  }
+
   try {
     for (let i = startIteration; i <= total; i++) {
       persist(i, "running");
@@ -1121,7 +1169,11 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           const injected = injectSkills(stage.name, skillChanged);
           const r = await executeStage({
             stage,
-            vars: { INPUTS: inputs, RESUME: resumeNote },
+            vars: {
+              INPUTS: inputs,
+              RESUME: resumeNote,
+              SHARPENING: sharpeningGuidance,
+            },
             injectedContext: injected.block,
             workspaceDir,
             packageDir,

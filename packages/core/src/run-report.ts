@@ -171,6 +171,14 @@ export type RunManifest = {
   skillsUsed?: SkillUsage[];
   /** External tools invoked during the run (issue #111, INERT); absent = none. */
   toolsUsed?: ToolUsage[];
+  /** Input-sharpness assessment when `--sharpen-input` ran in `--plan` mode
+   *  (issue #180 P23); absent when sharpening was off. The `unknowns` are the
+   *  input dimensions the run had to assume rather than read from the input. */
+  inputSharpness?: {
+    metCount: number;
+    maxScore: number;
+    unknowns: string[];
+  };
   startedAt: string;
   finishedAt?: string;
 };

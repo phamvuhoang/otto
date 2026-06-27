@@ -291,6 +291,13 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     );
   const fanOutConcurrency = flags.fanOutConcurrency;
 
+  // Input sharpening (issue #180 P23): opt-in; only acts in --plan mode.
+  const sharpenInput =
+    flags.sharpenInput ||
+    ["1", "true", "yes", "on"].includes(
+      (process.env.OTTO_SHARPEN_INPUT ?? "").trim().toLowerCase()
+    );
+
   const DEFAULT_LENSES = ["correctness", "security", "tests"];
   const envLenses = (process.env.OTTO_REVIEW_LENSES ?? "")
     .split(",")
@@ -456,6 +463,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
       explainRouting,
       modelRouting,
       tierLadder: modelRouting ? tierLadder : undefined,
+      sharpenInput,
       fanOut,
       fanOutConcurrency,
       watch: flags.watch,
@@ -697,6 +705,7 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
     // aggregated diff instead of re-authoring the plan. `--plan` swaps `stages`
     // to `[planStage]`, so the reviewer must come from `cfg.stages`.
     reviewStage: cfg.stages.find((s) => s.name === "reviewer"),
+    sharpenInput,
     iterations,
     workspaceDir: effectiveWorkspaceDir,
     packageDir,

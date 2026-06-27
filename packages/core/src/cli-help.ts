@@ -66,6 +66,10 @@ export type CliFlags = {
    *  validated, stage-scoped skill guidance into live stages (or OTTO_USE_SKILLS=1
    *  / `.otto/config.json` `skills.enabled`). Off = byte-for-byte unchanged runs. */
   useSkills: boolean;
+  /** `--sharpen-input` toggle (default false; opt-in, issue #180 P23). In --plan
+   *  mode, injects bounded sharpening guidance into the plan stage when the input
+   *  omits dimensions. Off or a sharp input ⇒ the plan prompt is unchanged. */
+  sharpenInput: boolean;
   /** `--fan-out` toggle (default false; opt-in, issue #66 P11). Runs independent
    *  plan tasks as isolated worktree sub-agents before the sequential loop. */
   fanOut: boolean;
@@ -221,6 +225,7 @@ export function parseFlags(
   let explainRouting = false;
   let modelRouting = false;
   let useSkills = false;
+  let sharpenInput = false;
   let fanOut = false;
   let fanOutConcurrency = 3;
   let expectingFanOutConcurrency = false;
@@ -397,6 +402,7 @@ export function parseFlags(
     else if (a === "--explain-routing") explainRouting = true;
     else if (a === "--model-routing") modelRouting = true;
     else if (a === "--use-skills") useSkills = true;
+    else if (a === "--sharpen-input") sharpenInput = true;
     else if (a === "--context-compressor") expectingContextCompressor = true;
     else if (a === "--fan-out") fanOut = true;
     else if (a === "--fan-out-concurrency") expectingFanOutConcurrency = true;
@@ -491,6 +497,7 @@ export function parseFlags(
     explainRouting,
     modelRouting,
     useSkills,
+    sharpenInput,
     fanOut,
     fanOutConcurrency,
     watch,
@@ -574,6 +581,7 @@ Flags:
   --explain-routing   print the adaptive router's per-iteration reasoning (change class, risk, chosen depth/lenses); requires --adaptive-router (or OTTO_EXPLAIN_ROUTING=1; default: off)
   --model-routing     route each stage to a model tier by difficulty + change risk, escalating on repeated failure; a pinned --model/OTTO_MODEL overrides it (or OTTO_MODEL_ROUTING=1; default: off)
   --use-skills        inject validated, stage-scoped skill guidance (from .otto/skills) into live stages, bounded + attributed (or OTTO_USE_SKILLS=1 / config "skills.enabled"; default: off)
+  --sharpen-input     in --plan mode, when the input omits dimensions (goal/constraints/success criteria/…), inject bounded sharpening guidance so the plan author records an explicit assumption per gap (or OTTO_SHARPEN_INPUT=1; default: off)
   --fan-out           run independent plan tasks (from a .otto/tasks/<key>/tasks.json) as isolated worktree sub-agents before the sequential loop (or OTTO_FAN_OUT=1; default: off)
   --fan-out-concurrency <n>  max concurrent sub-agents per fan-out wave (default: 3)
   --branch <mode>     where Otto commits: current (default) | branch (new branch) | worktree (isolated checkout)
@@ -667,6 +675,8 @@ export type PrintConfigOptions = {
   modelRouting?: boolean;
   /** Resolved tier → model ladder, shown when model routing is on (issue #66 P11). */
   tierLadder?: TierLadder;
+  /** Input sharpening enabled (issue #180 P23). */
+  sharpenInput?: boolean;
   /** Sub-agent fan-out enabled (issue #66 P11). */
   fanOut?: boolean;
   /** Max concurrent sub-agents per fan-out wave (issue #66 P11). */
@@ -727,6 +737,7 @@ export function printConfig(
     explainRouting = false,
     modelRouting = false,
     tierLadder,
+    sharpenInput = false,
     fanOut = false,
     fanOutConcurrency = 3,
     watch = false,
@@ -832,6 +843,7 @@ export function printConfig(
   review                ${reviewStatus}
   routing               ${routingStatus}
   model routing         ${modelRoutingStatus}
+  sharpen input         ${sharpenInput ? "on" : "off"}
   fan-out               ${fanOut ? `on (concurrency ${fanOutConcurrency})` : "off"}
   branch                ${branchStatus}
   watch                 ${watchStatus}

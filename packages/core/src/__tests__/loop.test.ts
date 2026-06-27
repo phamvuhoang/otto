@@ -349,6 +349,73 @@ describe("runLoop", () => {
     expect(String(mocks.runStage.mock.calls[0][1])).toContain("PLAN_STAGE");
   });
 
+  it("injects input-sharpening guidance into the plan prompt for a thin input when --sharpen-input is on (#180)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const planStage: Stage = { name: "plan", template: "plan.md" };
+    writeFileSync(
+      join(dirs.packageDir, "templates", "plan.md"),
+      "<inputs>\n{{ INPUTS }}\n</inputs>\n{{ SHARPENING }}\n# PLAN",
+      "utf8"
+    );
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    await runLoop(
+      loopOptions(dirs, {
+        stages: [planStage],
+        mode: "plan",
+        sharpenInput: true,
+        inputs: "make the dashboard faster",
+        iterations: 1,
+      })
+    );
+
+    const prompt = String(mocks.runStage.mock.calls[0][1]);
+    expect(prompt).toContain("Input sharpening");
+    expect(prompt).toContain("## Decisions");
+
+    // The sharpness assessment is recorded on the manifest as evidence (#180 s3).
+    const manifest = readManifest(
+      dirs.workspaceDir,
+      listRunIds(dirs.workspaceDir)[0]
+    );
+    expect(manifest?.inputSharpness?.maxScore).toBe(5);
+    expect(manifest?.inputSharpness?.unknowns.length).toBeGreaterThan(0);
+  });
+
+  it("leaves the plan prompt unchanged when --sharpen-input is off (default, inert) (#180)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const planStage: Stage = { name: "plan", template: "plan.md" };
+    writeFileSync(
+      join(dirs.packageDir, "templates", "plan.md"),
+      "<inputs>\n{{ INPUTS }}\n</inputs>\n{{ SHARPENING }}\n# PLAN",
+      "utf8"
+    );
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    await runLoop(
+      loopOptions(dirs, {
+        stages: [planStage],
+        mode: "plan",
+        inputs: "make the dashboard faster",
+        iterations: 1,
+      })
+    );
+
+    const prompt = String(mocks.runStage.mock.calls[0][1]);
+    expect(prompt).not.toContain("Input sharpening");
+    // The {{ SHARPENING }} var resolves to empty, never leaking as a literal tag.
+    expect(prompt).not.toContain("{{ SHARPENING }}");
+
+    // Sharpening off ⇒ no sharpness block on the manifest (#180 s3).
+    const manifest = readManifest(
+      dirs.workspaceDir,
+      listRunIds(dirs.workspaceDir)[0]
+    );
+    expect(manifest?.inputSharpness).toBeUndefined();
+  });
+
   it("injects a validated skill + records skillsUsed when activation is on (P18)", async () => {
     const dirs = makeDirs();
     roots.push(dirs.root);

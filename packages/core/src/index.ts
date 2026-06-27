@@ -524,6 +524,15 @@ export {
   type PlanTask,
 } from "./plan-tasks.js";
 export { reviewsFanoutInsteadOfReplan } from "./plan-fanout.js";
+export {
+  INPUT_DIMENSIONS,
+  formatInputSharpness,
+  formatSharpeningGuidance,
+  scoreInputSharpness,
+  type InputDimension,
+  type InputDimensionResult,
+  type InputSharpnessScore,
+} from "./input-sharpness.js";
 export { createWorktree, reapWorktrees } from "./worktree.js";
 export {
   runFanout,

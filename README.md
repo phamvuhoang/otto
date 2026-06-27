@@ -612,7 +612,7 @@ otto-afk --print-config     # resolved config + a preflight check of run prerequ
 - **Process & UX** — `--detach`, `--log <path>`, `--notify`, `--no-keep-alive`, `--explain-routing`, `--verbose`, `--print-config`, `--context-report`, `--plan-report`, `--help`, `--version`
 - **Branch** — `--branch <current|branch|worktree>`, `--branch-convention <c>`, `--branch-prefix <p>`
 - **Targeting** (`otto-ghafk` / `otto-linear-afk`) — `--watch`, `--watch-interval <sec>`, `--repo <owner/name>`, `--project <name>`, `--issue <ref>`, `--include-sub-issues` (otto-ghafk; with `--issue`)
-- **Modes** (`otto-afk`) — `--plan` (author spec + plan, no edits), `--verify` (read-only reconcile), `--apply-review <doc>`
+- **Modes** (`otto-afk`) — `--plan` (author spec + plan, no edits), `--sharpen-input` (with `--plan`: when the input omits goal/constraints/success-criteria/non-goals, inject bounded guidance so the plan author records an explicit assumption per gap), `--verify` (read-only reconcile), `--apply-review <doc>`
 
 **Environment variables** (per-shell defaults): `OTTO_WORKSPACE`, `OTTO_RUNNER`, `OTTO_SANDBOX_NET`, `OTTO_RESULT_GRACE_MS`, `OTTO_AGENT`, `OTTO_FALLBACK_AGENT`, `OTTO_AUTO_SWITCH_ON_LIMIT`, `OTTO_MODEL`, `OTTO_CLAUDE_MODEL`, `OTTO_CODEX_MODEL`, `OTTO_TOKEN_MODE`, `OTTO_CONTEXT_COMPRESSOR`, `OTTO_HEADROOM_BIN`, `OTTO_REVIEW_LENSES`, `OTTO_ADAPTIVE_ROUTER`, `OTTO_EXPLAIN_ROUTING`, `OTTO_MAX_WAIT`, `OTTO_WATCH_LABEL`, `OTTO_GITHUB_REPO(S)`, `OTTO_INCLUDE_SUB_ISSUES`, `OTTO_BRANCH`, `OTTO_BRANCH_PREFIX`, `OTTO_BRANCH_CONVENTION`, `OTTO_LINEAR_API_KEY` / `LINEAR_API_KEY`, `OTTO_LINEAR_LABEL`, `OTTO_LINEAR_TEAM`, `OTTO_LINEAR_PROJECT(S)`, `OTTO_LINEAR_DONE_STATE`, and `NO_COLOR` / `TERM=dumb`.
 

@@ -69,6 +69,12 @@ export function formatRunReport(
       lines.push(`  next:        ${manifest.nextAction}`);
     }
   }
+  if (manifest.inputSharpness) {
+    const s = manifest.inputSharpness;
+    const gaps =
+      s.unknowns.length > 0 ? ` — assumed: ${s.unknowns.join(", ")}` : "";
+    lines.push(`  sharpness:   ${s.metCount}/${s.maxScore}${gaps}`);
+  }
 
   lines.push("");
   lines.push(`Stages (${stages.length}):`);

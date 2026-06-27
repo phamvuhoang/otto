@@ -126,6 +126,7 @@ export { formatRunReport, runInspect, type InspectDeps } from "./inspect.js";
 export {
   formatVerificationCoverageGate,
   formatVerificationMatrix,
+  formatVisualEvidence,
   parseVerificationMatrix,
   scoreVerificationCoverage,
   summarizeVerification,

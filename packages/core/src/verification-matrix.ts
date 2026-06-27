@@ -40,8 +40,12 @@ export type VerificationEntry = {
   /** The concrete check: the command run, the assertion, or the visual checked. */
   check: string;
   /** Pointer to the proving artifact: `file:line`, a commit SHA, a transcript or
-   *  screenshot path. Absent ⇒ the requirement is asserted but not artifact-backed. */
+   *  screenshot path. Absent ⇒ the requirement is asserted but not artifact-backed.
+   *  For a `visual` before/after entry this is the **after** screenshot. */
   artifactPath?: string;
+  /** For a `visual` entry, the optional **before** screenshot path, paired with
+   *  `artifactPath` (the after) for a before/after comparison. */
+  beforePath?: string;
   result: VerificationResult;
   confidence: VerificationConfidence;
   note?: string;
@@ -97,6 +101,9 @@ export function parseVerificationMatrix(raw: string): VerificationEntry[] {
       check: typeof r.check === "string" ? r.check : "",
       ...(typeof r.artifactPath === "string" && r.artifactPath
         ? { artifactPath: r.artifactPath }
+        : {}),
+      ...(typeof r.beforePath === "string" && r.beforePath
+        ? { beforePath: r.beforePath }
         : {}),
       result: r.result as VerificationResult,
       confidence,
@@ -230,6 +237,35 @@ export function formatVerificationCoverageGate(
     }
   }
   return lines.join("\n");
+}
+
+/**
+ * Render the visual evidence (P24 visual half) as a markdown "Screenshot
+ * Evidence" section that *embeds* each `visual` entry's captured screenshot —
+ * a single image, or a before → after pair — so a non-engineer reading the run
+ * report sees the proof, not just a path. Only entries with a captured screenshot
+ * appear; a visual check the environment could not render carries no
+ * `artifactPath` and is left to the coverage gate to flag as unproven (the
+ * roadmap's "report the gap, don't invent proof"). Empty string when no visual
+ * evidence was captured. Pure.
+ */
+export function formatVisualEvidence(entries: VerificationEntry[]): string {
+  const visuals = entries.filter(
+    (e) => e.method === "visual" && e.artifactPath
+  );
+  if (visuals.length === 0) return "";
+  const lines: string[] = ["## Screenshot Evidence", ""];
+  for (const e of visuals) {
+    lines.push(`### ${e.requirement}`, "");
+    if (e.beforePath) {
+      lines.push(`- Before: ![before](${e.beforePath})`);
+      lines.push(`- After: ![after](${e.artifactPath})`);
+    } else {
+      lines.push(`![${e.requirement}](${e.artifactPath})`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
 }
 
 const RESULT_MARK: Record<VerificationResult, string> = {

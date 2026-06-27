@@ -171,6 +171,32 @@ describe("finalizeReportText", () => {
     expect(out).toContain("Gate: **FAIL**");
   });
 
+  it("embeds captured screenshots as a Screenshot Evidence gallery (#181 P24 visual)", () => {
+    const out = finalizeReportText(emitted, {
+      manifest: {
+        ...manifest,
+        mode: "verify",
+        verification: [
+          {
+            requirement: "settings page renders",
+            method: "visual",
+            check: "screenshot the rendered page",
+            beforePath: ".otto-tmp/shots/before.png",
+            artifactPath: ".otto-tmp/shots/after.png",
+            result: "pass",
+            confidence: "high",
+          },
+        ],
+      },
+      stages: [stage],
+      headSha: "abc1234",
+      changedFiles: [],
+    });
+    expect(out).toContain("## Screenshot Evidence");
+    expect(out).toContain("![before](.otto-tmp/shots/before.png)");
+    expect(out).toContain("![after](.otto-tmp/shots/after.png)");
+  });
+
   it("adds no gallery when the run carried no verification matrix (#181 P24)", () => {
     const out = finalizeReportText(emitted, {
       manifest,

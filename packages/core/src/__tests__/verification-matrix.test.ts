@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatVerificationCoverageGate,
   formatVerificationMatrix,
+  formatVisualEvidence,
   parseVerificationMatrix,
   scoreVerificationCoverage,
   summarizeVerification,
@@ -184,5 +185,66 @@ describe("formatVerificationCoverageGate", () => {
 
   it("is empty for an empty matrix (nothing to gate)", () => {
     expect(formatVerificationCoverageGate([])).toBe("");
+  });
+});
+
+describe("parseVerificationMatrix — visual before/after", () => {
+  it("keeps beforePath for a before/after visual entry", () => {
+    const raw = JSON.stringify([
+      {
+        requirement: "settings page renders",
+        method: "visual",
+        check: "screenshot the rendered page",
+        beforePath: ".otto-tmp/shots/before.png",
+        artifactPath: ".otto-tmp/shots/after.png",
+        result: "pass",
+        confidence: "high",
+      },
+    ]);
+    const e = parseVerificationMatrix(raw)[0];
+    expect(e.beforePath).toBe(".otto-tmp/shots/before.png");
+    expect(e.artifactPath).toBe(".otto-tmp/shots/after.png");
+  });
+});
+
+describe("formatVisualEvidence", () => {
+  const visual = (over: Partial<VerificationEntry>): VerificationEntry => ({
+    requirement: "page renders",
+    method: "visual",
+    check: "screenshot",
+    artifactPath: ".otto-tmp/shots/after.png",
+    result: "pass",
+    confidence: "high",
+    ...over,
+  });
+
+  it("embeds a single screenshot as a markdown image under its requirement", () => {
+    const out = formatVisualEvidence([
+      visual({
+        requirement: "dashboard loads",
+        artifactPath: "shots/dash.png",
+      }),
+    ]);
+    expect(out).toMatch(/screenshot evidence/i);
+    expect(out).toContain("dashboard loads");
+    expect(out).toContain("![dashboard loads](shots/dash.png)");
+  });
+
+  it("renders a before/after pair when beforePath is present", () => {
+    const out = formatVisualEvidence([
+      visual({ beforePath: "shots/b.png", artifactPath: "shots/a.png" }),
+    ]);
+    expect(out).toContain("![before](shots/b.png)");
+    expect(out).toContain("![after](shots/a.png)");
+  });
+
+  it("is empty when there are no visual entries with a captured screenshot", () => {
+    // A non-visual entry, and a visual one that could not be captured (no artifact).
+    expect(
+      formatVisualEvidence([
+        { ...visual({}), method: "test", artifactPath: "x.test.ts:1" },
+        visual({ artifactPath: undefined, confidence: "low" }),
+      ])
+    ).toBe("");
   });
 });

@@ -77,6 +77,17 @@ or the suite command) — an entry with no artifact is an unproven claim and sho
 say so via `"confidence": "low"`. Use the real commands you ran; do not invent
 proof. A malformed file is ignored, so prefer omitting a field to guessing.
 
+**Visual evidence (opportunistic).** For a UI/web requirement, if a screenshot
+tool and a renderable target (a running dev server or a static built artifact)
+are actually available to you, capture a screenshot, save it under the gitignored
+`.otto-tmp/` scratch dir, and emit a `"method": "visual"` entry whose
+`artifactPath` is that screenshot path; for a before/after change set `beforePath`
+to the prior-state screenshot and `artifactPath` to the new one. **Never fabricate
+a screenshot or a path.** If you cannot render or capture the UI in this
+environment, still emit the `visual` entry but **omit `artifactPath`** and set
+`"confidence": "low"` — the coverage gate then reports the gap honestly instead of
+claiming unproven visual proof.
+
 # CROSS-RUN QUALITY SUMMARY (READ-ONLY)
 
 Beyond _this_ run, give the maintainer a quality rollup **across** runs so they can

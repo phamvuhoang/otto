@@ -7,6 +7,7 @@ import {
 import {
   formatVerificationCoverageGate,
   formatVerificationMatrix,
+  formatVisualEvidence,
 } from "./verification-matrix.js";
 
 const SENTINEL_RE = /\n?<promise>NO MORE TASKS<\/promise>\s*/g;
@@ -225,7 +226,12 @@ function appendVerificationGallery(
     // where feasible" bar — with remediation on FAIL.
     formatVerificationCoverageGate(matrix),
   ].join("\n");
-  return `${report.trimEnd()}\n\n${section}\n`;
+  // Visual half (P24): embed any captured screenshots as a markdown gallery so a
+  // non-engineer sees the rendered-UI proof, not just a path. Empty when no
+  // visual evidence was captured.
+  const visual = formatVisualEvidence(matrix);
+  const withGallery = `${report.trimEnd()}\n\n${section}\n`;
+  return visual ? `${withGallery.trimEnd()}\n\n${visual}\n` : withGallery;
 }
 
 function appendLegibilityGate(report: string): string {

@@ -4,6 +4,7 @@ import {
   type RunManifest,
   type StageRecord,
 } from "./run-report.js";
+import { formatVerificationMatrix } from "./verification-matrix.js";
 
 const SENTINEL_RE = /\n?<promise>NO MORE TASKS<\/promise>\s*/g;
 const H2_RE = /^##\s+/m;
@@ -194,6 +195,31 @@ function appendAutomatedEvidence(
   return `${report.trimEnd()}\n\n${section}\n`;
 }
 
+/**
+ * Fold a `--verify` run's structured verification matrix into the run report as a
+ * "Verification Gallery" section (issue #181 P24) — so a maintainer reading the
+ * plain report, not just `otto-inspect`, sees what was proven, how, and with
+ * which artifact, with failures/unproven requirements surfaced as risks. No-op
+ * when the run carried no matrix, so non-verify reports are unchanged.
+ */
+function appendVerificationGallery(
+  report: string,
+  ctx: FinalizeReportContext
+): string {
+  const matrix = ctx.manifest.verification;
+  if (!matrix || matrix.length === 0) return report;
+  const section = [
+    "## Verification Gallery",
+    "",
+    "Structured proof that each requirement was checked — its method, result, and the artifact that backs it. Failed or unproven requirements are listed as risks below the matrix.",
+    "",
+    "```text",
+    formatVerificationMatrix(matrix),
+    "```",
+  ].join("\n");
+  return `${report.trimEnd()}\n\n${section}\n`;
+}
+
 function appendLegibilityGate(report: string): string {
   const score = scoreReportLegibility(report);
   const passed = score.ratio >= DEFAULT_REPORT_LEGIBILITY_THRESHOLD;
@@ -295,5 +321,6 @@ export function finalizeReportText(
     ctx.scopeDrift
   );
   const withEvidence = appendAutomatedEvidence(withRisk, ctx);
-  return appendLegibilityGate(withEvidence);
+  const withGallery = appendVerificationGallery(withEvidence, ctx);
+  return appendLegibilityGate(withGallery);
 }

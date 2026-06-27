@@ -119,15 +119,63 @@ describe("finalizeReportText", () => {
   });
 
   it("marks the rubric gate FAIL and appends a rewrite request for a low-legibility report", () => {
-    const out = finalizeReportText("# Otto quality report\n\n## Verdict\n\nAccepted\n", {
+    const out = finalizeReportText(
+      "# Otto quality report\n\n## Verdict\n\nAccepted\n",
+      {
+        manifest,
+        stages: [stage],
+        headSha: "abc1234",
+        changedFiles: [],
+      }
+    );
+    expect(out).toContain("## Emit-Time Report Rubric");
+    expect(out).toContain("Gate: **FAIL**");
+    expect(out).toContain("Rewrite request:");
+  });
+
+  it("folds a verification matrix into a Verification Gallery section (#181 P24)", () => {
+    const out = finalizeReportText(emitted, {
+      manifest: {
+        ...manifest,
+        mode: "verify",
+        verification: [
+          {
+            requirement: "suite is green",
+            method: "test",
+            check: "node --test",
+            artifactPath: "x.test.ts:1",
+            result: "pass",
+            confidence: "high",
+          },
+          {
+            requirement: "edge case handled",
+            method: "inspection",
+            check: "read code",
+            result: "fail",
+            confidence: "low",
+          },
+        ],
+      },
+      stages: [stage],
+      headSha: "abc1234",
+      changedFiles: [],
+    });
+    expect(out).toContain("## Verification Gallery");
+    expect(out).toContain("suite is green");
+    expect(out).toContain("x.test.ts:1");
+    // The failed requirement is surfaced as a risk.
+    expect(out.toLowerCase()).toContain("risk");
+    expect(out).toContain("edge case handled");
+  });
+
+  it("adds no gallery when the run carried no verification matrix (#181 P24)", () => {
+    const out = finalizeReportText(emitted, {
       manifest,
       stages: [stage],
       headSha: "abc1234",
       changedFiles: [],
     });
-    expect(out).toContain("## Emit-Time Report Rubric");
-    expect(out).toContain("Gate: **FAIL**");
-    expect(out).toContain("Rewrite request:");
+    expect(out).not.toContain("## Verification Gallery");
   });
 
   it("generates a fallback report when the agent emitted none", () => {

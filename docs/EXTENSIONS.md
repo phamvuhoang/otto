@@ -9,7 +9,7 @@ Curated, lockable bundles that combine the Phase-4 primitives — skill sources 
 - `.otto/config.json` — activation / compressor defaults
 - `.otto/policy.json` — safety-policy additions (union-merged, never relaxed)
 
-A profile is **generated config, not hidden behavior**: inspect it, edit it, diff it, roll it back. Enabling a profile does **not** auto-trust anything — a registered source is still imported `unverified` and must clear the P17 gate before P18 will inject it; a tool is still policy-scoped.
+A profile is **generated config, not hidden behavior**: inspect it, edit it, diff it, roll it back. Enabling a profile does **not** auto-trust anything — a registered source is still imported `unverified` and must clear the P17 gate before P18 will inject it; a registered tool's **invocations** are policy-scoped. (One exception: the Headroom **runtime compressor** is enabled straight from `contextCompressor` config — it is **not** gated per-stage through tool policy; see [#192](https://github.com/phamvuhoang/otto/issues/192).)
 
 > Want a from-scratch, per-pack walkthrough (Superpowers, Product-Manager-Skills, a single Cursor skill, Headroom) — clone → register → validate → activate, with the gotchas? See **[INTEGRATIONS.md](./INTEGRATIONS.md)**.
 
@@ -17,7 +17,8 @@ A profile is **generated config, not hidden behavior**: inspect it, edit it, dif
 otto-extensions list                       # show the curated profiles
 otto-extensions init context-saver --dry-run   # preview every file it would write
 otto-extensions init context-saver         # write it
-git diff .otto/                            # review exactly what changed
+git status --short .otto/                  # review what changed — new files are untracked
+#                                            ("??"); `git diff` alone won't list them
 ```
 
 ## Profiles
@@ -51,22 +52,25 @@ otto-skills validate <skill>          # gate → afk-safe | interactive-only | s
 otto-afk --use-skills "./plan.md" 10  # only validated, eligible skills are injected
 ```
 
-For `context-saver`, install the binary and confirm authority:
+For `context-saver`, install the binary and confirm it resolves:
 
 ```bash
 otto-extensions init context-saver
-otto-tools health                     # runs `headroom --version`
+otto-tools health                     # runs the LITERAL `headroom --version` — ignores
+#                                       OTTO_HEADROOM_BIN (#192), so it can disagree with a run
 otto-afk "./plan.md" 10               # the compressor is now the config default
 ```
 
+The `.otto/tools/headroom.json` entry is an **inspection/health** surface. The runtime enables the compressor straight from the `contextCompressor` config — it is **not** gated per-stage through tool policy ([#192](https://github.com/phamvuhoang/otto/issues/192)).
+
 ## Update, lock & roll back
 
-Profiles are just files under `.otto/`, tracked in git — so update/lock/rollback are ordinary git + edit operations.
+Profiles are just files under `.otto/`, **git-trackable** (new files are untracked until you commit them) — so update/lock/rollback are ordinary git + edit operations.
 
-- **Inspect** what a profile changed: `git diff .otto/` right after `init`.
-- **Lock**: commit `.otto/skills/sources.json` (pinned ref) and `.otto/skills.lock.json` (resolved checksums from `otto-skills sync`). The lockfile is the reproducible record; the source's `ref` is the upstream pin.
-- **Update**: bump the `ref` in `.otto/skills/sources.json`, re-run `otto-skills sync` (then `validate`), and review the lock diff. A changed upstream body fails revalidation (`otto-skills audit` flags drift) until you re-`validate`.
-- **Roll back**: `git checkout .otto/` (or revert the init commit). Because nothing is hidden, the previous state is exactly the previous files.
+- **Inspect** what a profile changed: `git status --short .otto/` right after `init` (new files show as untracked `??`; `git diff` alone won't list them).
+- **Lock**: commit `.otto/skills/sources.json` (the source **registry** — a `--type local` source has **no pinned `ref`**; pinning applies to `git` sources) and `.otto/skills.lock.json` (resolved **checksums** from `otto-skills sync` — the drift/integrity record, not a source pin).
+- **Update**: for a `git` source, bump its `ref` in `.otto/skills/sources.json`, re-run `otto-skills sync` (then `validate`), and review the lock diff. A changed upstream body fails revalidation (`otto-skills audit` flags drift) until you re-`validate`.
+- **Roll back** by path: `git checkout` the files that pre-existed, then `rm` the new ones `git status` listed (`sync` writes one `.otto/skills/<skill-name>/` per imported skill). **Don't** `git clean -fd .otto/` — it deletes every untracked file there, your own hand-authored skills included.
 
 ## Verify a fresh repo
 

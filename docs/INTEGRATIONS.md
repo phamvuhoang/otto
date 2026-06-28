@@ -143,14 +143,17 @@ The skill now shapes the reviewer stage; `otto-inspect latest` shows it under "S
 
 ## 4. Headroom (context-compression **tool**)
 
-Headroom is a **tool**, not a skill — it compresses token-heavy `@spill` content (issue bodies, comments, diffs) before the agent reads them, reversibly. You enable it with `--context-compressor headroom` (or `OTTO_CONTEXT_COMPRESSOR` / config). `otto-extensions init context-saver` also registers a `.otto/tools/headroom.json` entry you can `otto-tools list`/`health` — but note the runtime builds the compressor straight from that config flag; it is **not** gated per-stage through tool policy ([#192](https://github.com/phamvuhoang/otto/issues/192)).
+Headroom is a **tool**, not a skill — it compresses token-heavy `@spill` content (issue bodies, comments, diffs) before the agent reads them, reversibly. You enable it with `--context-compressor headroom` (or `OTTO_CONTEXT_COMPRESSOR` / config). Otto drives Headroom's real `compress()` **library** directly (no shim) — but `compress()` is **model-backed** (an LLM call per compression), so it needs the library installed **and** a model key. `otto-extensions init context-saver` also registers a `.otto/tools/headroom.json` entry you can `otto-tools list`/`health` — but the runtime builds the compressor straight from that config flag; it is **not** gated per-stage through tool policy ([#192](https://github.com/phamvuhoang/otto/issues/192)).
 
 ```bash
-# 1. Install/point at a `headroom` binary. Otto's command mode expects exactly:
-#       headroom --version                 (health)
-#       headroom compress --category <c>   (content on stdin → compressed text on stdout)
-#    Upstream headroom-ai is proxy/library-first and may NOT expose `compress` — shim it
-#    onto PATH (or via OTTO_HEADROOM_BIN). See #192. Missing/mismatched → degrades cleanly.
+# 1. Install the real library + give it a model key. Otto (library mode, the default)
+#    spawns `python3 -c` calling `from headroom import compress`.
+pip install "headroom-ai[all]"
+export OPENAI_API_KEY=sk-...               # compression is a model call
+export HEADROOM_MODEL=gpt-4o-mini          # cheap compressor model (default)
+#    Override the interpreter with OTTO_HEADROOM_PYTHON (e.g. a venv python).
+#    Escape hatch: set OTTO_HEADROOM_BIN=<bin> to use a custom compressor instead —
+#    Otto then runs `<bin> compress --category <c>` (stdin → compressed stdout).
 
 # 2. Register the tool + set the compressor default
 otto-extensions init context-saver        # writes .otto/tools/headroom.json + config
@@ -158,15 +161,18 @@ otto-extensions init context-saver        # writes .otto/tools/headroom.json + c
 
 # 3. Confirm availability (inspection only — not a runtime gate; see #192)
 otto-tools list                            # headroom [command]
-otto-tools health                          # runs the LITERAL `headroom --version` — ignores
-#                                            OTTO_HEADROOM_BIN, so it can disagree with a run
+otto-tools health                          # runs the LITERAL `python3 -c "import headroom"` —
+#                                            ignores OTTO_HEADROOM_PYTHON/BIN, so it can
+#                                            disagree with a run; trust --context-report
 
 # 4. Run — compression happens at the @spill boundary
 otto-afk --context-compressor headroom "./docs/plans/feature.md" 10
 #   or persistently: OTTO_CONTEXT_COMPRESSOR=headroom, or the config above
 ```
 
-**Inspectability:** originals are retained under `.otto/runs/<id>/compressed/`; tokens before/after, savings, and latency are recorded and surfaced in `otto-afk --context-report`. A missing or failing `headroom` **degrades cleanly** to normal behavior with a warning — never a broken run.
+**Mind the token math:** because each compression is an LLM call, Headroom is a **net win on large spills** (big diffs, long issue bodies) with a cheap `HEADROOM_MODEL`, and a **net loss on small ones**. Confirm real savings in `--context-report`.
+
+**Inspectability:** originals are retained under `.otto/runs/<id>/compressed/`; tokens before/after, savings, and latency are recorded and surfaced in `otto-afk --context-report`. A missing library/key (or a mismatched custom binary) **degrades cleanly** to normal behavior with a warning — never a broken run.
 
 ---
 

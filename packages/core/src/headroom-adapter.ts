@@ -15,20 +15,30 @@ import type { ToolDefinition } from "./tools.js";
  * gates any tool gates the compressor — it can only run in allowed stages, with
  * the declared scope.
  *
- * This slice implements **local-first command mode** (the roadmap's preferred,
- * service-free path): Otto shells out to a local `headroom` binary, piping the
- * content on stdin and reading the compressed result on stdout. MCP mode and the
- * TypeScript library path slot in behind the same {@link ContextCompressor}
- * interface without changing callers; proxy/wrapper mode stays an explicit
- * advanced option because it alters provider transport.
+ * Otto drives Headroom's real `compress(messages, model)` library through a
+ * synchronous subprocess (the render/`@spill` boundary cannot await). Two runners
+ * sit behind one {@link HeadroomRunner} contract:
  *
- * Everything is injectable ({@link HeadroomRunner}) so tests never spawn a real
- * process, and a missing binary degrades cleanly (the compressor reports
- * unavailable and the orchestrator keeps the original content).
+ * - **library mode (default):** spawn `python3 -c <bridge>` calling
+ *   `from headroom import compress` — Headroom's documented, model-backed API.
+ *   Each compression is an LLM call, so it needs a model key (e.g.
+ *   `OPENAI_API_KEY`) and `HEADROOM_MODEL` (default `gpt-4o-mini`); the
+ *   interpreter is overridable via `OTTO_HEADROOM_PYTHON`.
+ * - **command mode:** when `OTTO_HEADROOM_BIN` is set, shell out to that binary
+ *   with `compress --category <c>` (stdin → compressed stdout) — an escape hatch
+ *   for a custom compressor that already speaks this contract.
+ *
+ * {@link resolveHeadroomRunner} picks the mode. Everything is injectable (the
+ * runner and its `spawn`) so tests never spawn a real process, and a missing
+ * interpreter / library / key degrades cleanly (the compressor reports
+ * unavailable or `ok: false` and the orchestrator keeps the original content).
  */
 
-/** The default binary, overridable via `OTTO_HEADROOM_BIN`. */
-export const HEADROOM_VERSION = "headroom-cmd-1";
+/** Compressor identity recorded on each compression (mode-agnostic). */
+export const HEADROOM_VERSION = "headroom-1";
+
+/** The injectable process spawner (defaults to `spawnSync`); tests pass a fake. */
+type Spawn = typeof spawnSync;
 
 /**
  * The low-level transport the adapter drives. The default shells out to the
@@ -46,42 +56,145 @@ function headroomBin(env: NodeJS.ProcessEnv): string {
   return typeof b === "string" && b.length > 0 ? b : "headroom";
 }
 
+/** Resolve the Python interpreter for library mode (env override, else `python3`). */
+function pythonBin(env: NodeJS.ProcessEnv): string {
+  const p = env.OTTO_HEADROOM_PYTHON;
+  return typeof p === "string" && p.length > 0 ? p : "python3";
+}
+
 /**
- * Default command-mode runner: `headroom --version` for availability, and
- * `headroom compress --category <c>` (content on stdin → compressed stdout) for
- * one compression. A non-zero exit / spawn error is a recoverable failure
- * (`ok: false`), which the orchestrator turns into a degraded passthrough.
+ * The Python bridge driven in library mode: read the spill text on stdin, run it
+ * through Headroom's `compress(messages, model)`, and write the compressed text to
+ * stdout. Built line-by-line (Python is whitespace-sensitive) so it survives as a
+ * `python3 -c` argument. Exit codes are diagnostic only — any non-zero exit is a
+ * recoverable failure the orchestrator turns into a degraded passthrough:
+ *   2 = library not importable, 1 = compress() raised (e.g. missing key),
+ *   3 = empty output (never blank out a non-empty spill).
+ */
+export const HEADROOM_BRIDGE = [
+  "import sys, os",
+  "try:",
+  "    from headroom import compress",
+  "except Exception as e:",
+  "    sys.stderr.write('headroom import failed: %s' % e); sys.exit(2)",
+  "text = sys.stdin.read()",
+  "model = os.environ.get('HEADROOM_MODEL', 'gpt-4o-mini')",
+  "try:",
+  "    result = compress([{'role': 'user', 'content': text}], model=model)",
+  "except Exception as e:",
+  "    sys.stderr.write('headroom compress failed: %s' % e); sys.exit(1)",
+  "msgs = getattr(result, 'messages', None)",
+  "if msgs is None:",
+  "    msgs = result if isinstance(result, list) else []",
+  "parts = []",
+  "for m in msgs:",
+  "    c = m.get('content') if isinstance(m, dict) else getattr(m, 'content', '')",
+  "    if c:",
+  "        parts.append(c)",
+  "out = '\\n'.join(parts)",
+  "if not out.strip():",
+  "    sys.stderr.write('headroom returned empty output'); sys.exit(3)",
+  "sys.stdout.write(out)",
+].join("\n");
+
+/** Map a finished spawn result onto the runner's `{ok,text,note}` contract. */
+function fromSpawn(
+  r: ReturnType<Spawn>,
+  fallbackText: string
+): { ok: boolean; text: string; note?: string } {
+  if (r.status !== 0 || typeof r.stdout !== "string") {
+    const stderr =
+      typeof r.stderr === "string" && r.stderr.trim() ? r.stderr.trim() : "";
+    return {
+      ok: false,
+      text: fallbackText,
+      note: r.error?.message ?? (stderr || `headroom exit ${r.status}`),
+    };
+  }
+  return { ok: true, text: r.stdout };
+}
+
+/**
+ * Library-mode runner (default): probe `python3 -c "import headroom"` for
+ * availability, then run {@link HEADROOM_BRIDGE} per compression. Honors
+ * `OTTO_HEADROOM_PYTHON`; the LLM call inside `compress()` needs a model key.
+ */
+export function libraryHeadroomRunner(
+  env: NodeJS.ProcessEnv = process.env,
+  timeoutMs = 30_000,
+  spawn: Spawn = spawnSync
+): HeadroomRunner {
+  const py = pythonBin(env);
+  return {
+    available: () => {
+      try {
+        return (
+          spawn(py, ["-c", "import headroom"], { timeout: 5_000 }).status === 0
+        );
+      } catch {
+        return false;
+      }
+    },
+    run: (input) =>
+      fromSpawn(
+        spawn(py, ["-c", HEADROOM_BRIDGE], {
+          input: input.text,
+          encoding: "utf8",
+          timeout: timeoutMs,
+          maxBuffer: 64 * 1024 * 1024,
+        }),
+        input.text
+      ),
+  };
+}
+
+/**
+ * Command-mode runner: `<bin> --version` for availability, and
+ * `<bin> compress --category <c>` (content on stdin → compressed stdout) for one
+ * compression. Selected only when `OTTO_HEADROOM_BIN` is set — a custom compressor
+ * already speaking this contract. A non-zero exit / spawn error degrades cleanly.
  */
 export function defaultHeadroomRunner(
   env: NodeJS.ProcessEnv = process.env,
-  timeoutMs = 30_000
+  timeoutMs = 30_000,
+  spawn: Spawn = spawnSync
 ): HeadroomRunner {
   const bin = headroomBin(env);
   return {
     available: () => {
       try {
-        return spawnSync(bin, ["--version"], { timeout: 5_000 }).status === 0;
+        return spawn(bin, ["--version"], { timeout: 5_000 }).status === 0;
       } catch {
         return false;
       }
     },
-    run: (input) => {
-      const r = spawnSync(bin, ["compress", "--category", input.category], {
-        input: input.text,
-        encoding: "utf8",
-        timeout: timeoutMs,
-        maxBuffer: 64 * 1024 * 1024,
-      });
-      if (r.status !== 0 || typeof r.stdout !== "string") {
-        return {
-          ok: false,
-          text: input.text,
-          note: r.error?.message ?? `headroom exit ${r.status}`,
-        };
-      }
-      return { ok: true, text: r.stdout };
-    },
+    run: (input) =>
+      fromSpawn(
+        spawn(bin, ["compress", "--category", input.category], {
+          input: input.text,
+          encoding: "utf8",
+          timeout: timeoutMs,
+          maxBuffer: 64 * 1024 * 1024,
+        }),
+        input.text
+      ),
   };
+}
+
+/**
+ * Pick the runner: command mode when `OTTO_HEADROOM_BIN` is set (custom binary),
+ * else library mode (Headroom's `compress()` via the Python bridge). The default
+ * for both compressor factories.
+ */
+export function resolveHeadroomRunner(
+  env: NodeJS.ProcessEnv = process.env,
+  timeoutMs = 30_000,
+  spawn: Spawn = spawnSync
+): HeadroomRunner {
+  const bin = env.OTTO_HEADROOM_BIN;
+  return typeof bin === "string" && bin.length > 0
+    ? defaultHeadroomRunner(env, timeoutMs, spawn)
+    : libraryHeadroomRunner(env, timeoutMs, spawn);
 }
 
 /**
@@ -90,7 +203,7 @@ export function defaultHeadroomRunner(
  * `headroom --version` for every compression.
  */
 export function createHeadroomCompressor(
-  runner: HeadroomRunner = defaultHeadroomRunner()
+  runner: HeadroomRunner = resolveHeadroomRunner()
 ): ContextCompressor {
   let probed: boolean | undefined;
   return {
@@ -111,7 +224,7 @@ export function createHeadroomCompressor(
  * needs no event loop — exactly what `renderTemplate` requires.
  */
 export function createHeadroomSyncCompressor(
-  runner: HeadroomRunner = defaultHeadroomRunner()
+  runner: HeadroomRunner = resolveHeadroomRunner()
 ): SyncContextCompressor {
   return {
     name: "headroom",
@@ -132,17 +245,18 @@ export function headroomToolDefinition(): ToolDefinition {
   return {
     name: "headroom",
     kind: "command",
-    description: "Local-first context compressor (Headroom command mode).",
+    description:
+      "Context compressor (Headroom library mode, model-backed): compresses token-heavy @spill content via headroom-ai's compress(); needs a model API key.",
     capabilities: ["compression", "context-engineering"],
     stages: [],
-    command: "headroom compress",
-    env: ["OTTO_HEADROOM_BIN"],
+    command: "python3 -c 'from headroom import compress'",
+    env: ["OTTO_HEADROOM_BIN", "OTTO_HEADROOM_PYTHON", "HEADROOM_MODEL"],
     networkDomains: [],
     writeRoots: [],
     secretRefs: [],
     approvalActions: [],
     timeoutMs: 30_000,
-    healthCheck: "headroom --version",
+    healthCheck: 'python3 -c "import headroom"',
     enabled: true,
   };
 }

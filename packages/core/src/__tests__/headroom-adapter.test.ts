@@ -6,6 +6,8 @@ import {
   createHeadroomCompressor,
   createHeadroomSyncCompressor,
   headroomToolDefinition,
+  libraryHeadroomRunner,
+  resolveHeadroomRunner,
   type HeadroomRunner,
 } from "../headroom-adapter.js";
 
@@ -15,6 +17,13 @@ function runner(over: Partial<HeadroomRunner> = {}): HeadroomRunner {
     run: (input) => ({ ok: true, text: input.text.slice(0, 5) }),
     ...over,
   };
+}
+
+// A fake spawnSync: returns a fixed SpawnSyncReturns-shaped object. Typed loosely
+// because tests only read status/stdout/stderr/error.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function fakeSpawn(result: Record<string, unknown>): any {
+  return vi.fn(() => result);
 }
 
 describe("createHeadroomCompressor", () => {
@@ -91,8 +100,95 @@ describe("createHeadroomSyncCompressor", () => {
   });
 });
 
+describe("libraryHeadroomRunner", () => {
+  const input = {
+    key: "k",
+    category: "issue-body" as const,
+    text: "verbose original text",
+  };
+
+  it("probes availability via `python3 -c import headroom`", () => {
+    const spawn = fakeSpawn({ status: 0 });
+    const r = libraryHeadroomRunner({}, 30_000, spawn);
+    expect(r.available()).toBe(true);
+    expect(spawn).toHaveBeenCalledWith(
+      "python3",
+      ["-c", "import headroom"],
+      expect.objectContaining({ timeout: 5_000 })
+    );
+  });
+
+  it("available() is false on non-zero exit or a spawn throw", () => {
+    expect(
+      libraryHeadroomRunner({}, 30_000, fakeSpawn({ status: 1 })).available()
+    ).toBe(false);
+    const throwing = vi.fn(() => {
+      throw new Error("no python");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }) as any;
+    expect(libraryHeadroomRunner({}, 30_000, throwing).available()).toBe(false);
+  });
+
+  it("run() drives the bridge on stdin and returns compressed stdout", () => {
+    const spawn = fakeSpawn({ status: 0, stdout: "short" });
+    const out = libraryHeadroomRunner({}, 30_000, spawn).run(input);
+    expect(out).toEqual({ ok: true, text: "short" });
+    const [bin, argv, opts] = spawn.mock.calls[0];
+    expect(bin).toBe("python3");
+    expect(argv[0]).toBe("-c");
+    expect(argv[1]).toContain("from headroom import compress");
+    expect(opts.input).toBe(input.text);
+  });
+
+  it("run() degrades (ok:false, original text) on failure, surfacing stderr", () => {
+    const spawn = fakeSpawn({
+      status: 1,
+      stdout: "",
+      stderr: "headroom compress failed: missing api key",
+    });
+    const out = libraryHeadroomRunner({}, 30_000, spawn).run(input);
+    expect(out.ok).toBe(false);
+    expect(out.text).toBe(input.text);
+    expect(out.note).toContain("missing api key");
+  });
+
+  it("honors OTTO_HEADROOM_PYTHON", () => {
+    const spawn = fakeSpawn({ status: 0, stdout: "z" });
+    libraryHeadroomRunner(
+      { OTTO_HEADROOM_PYTHON: "py3.12" },
+      30_000,
+      spawn
+    ).run(input);
+    expect(spawn.mock.calls[0][0]).toBe("py3.12");
+  });
+});
+
+describe("resolveHeadroomRunner", () => {
+  const input = { key: "k", category: "issue-body" as const, text: "t" };
+
+  it("uses command mode when OTTO_HEADROOM_BIN is set", () => {
+    const spawn = fakeSpawn({ status: 0, stdout: "c" });
+    resolveHeadroomRunner(
+      { OTTO_HEADROOM_BIN: "/my/headroom" },
+      30_000,
+      spawn
+    ).run(input);
+    const [bin, argv] = spawn.mock.calls[0];
+    expect(bin).toBe("/my/headroom");
+    expect(argv).toEqual(["compress", "--category", "issue-body"]);
+  });
+
+  it("uses library mode (python bridge) when OTTO_HEADROOM_BIN is unset", () => {
+    const spawn = fakeSpawn({ status: 0, stdout: "c" });
+    resolveHeadroomRunner({}, 30_000, spawn).run(input);
+    const [bin, argv] = spawn.mock.calls[0];
+    expect(bin).toBe("python3");
+    expect(argv[1]).toContain("from headroom import compress");
+  });
+});
+
 describe("headroomToolDefinition", () => {
-  it("is an opt-in, locally-scoped command tool under the P19 contract", () => {
+  it("is an opt-in, locally-scoped tool under the P19 contract", () => {
     const t = headroomToolDefinition();
     expect(t).toMatchObject({
       name: "headroom",
@@ -100,8 +196,8 @@ describe("headroomToolDefinition", () => {
       enabled: true,
     });
     expect(t.stages).toEqual([]); // opt-in: a repo enables it per stage
-    expect(t.networkDomains).toEqual([]); // local command mode: no network
     expect(t.capabilities).toContain("compression");
-    expect(t.healthCheck).toBe("headroom --version");
+    expect(t.env).toContain("HEADROOM_MODEL"); // model-backed library mode
+    expect(t.healthCheck).toBe('python3 -c "import headroom"');
   });
 });

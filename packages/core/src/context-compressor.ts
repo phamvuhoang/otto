@@ -298,7 +298,8 @@ export async function compressContent(
  * Synchronous compression for the sync render/`@spill` path, where `renderTemplate`
  * cannot await. Same reversible measurement and degrade rules as
  * {@link compressContent}; backed by a {@link SyncContextCompressor} (the Headroom
- * command runner is itself synchronous). `compressor === null` → original verbatim.
+ * runner is synchronous — it drives `compress()` via a blocking subprocess).
+ * `compressor === null` → original verbatim.
  */
 export function compressContentSync(
   compressor: SyncContextCompressor | null,

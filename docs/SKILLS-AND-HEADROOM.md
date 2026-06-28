@@ -95,26 +95,30 @@ otto-afk --review-panel --use-skills "./docs/plans/feature.md" 20
 
 [headroomlabs-ai/headroom](https://github.com/headroomlabs-ai/headroom): _"the context compression layer for AI agents"_ — Headroom reports **60–95% token reduction** on tool outputs/logs/diffs while _aiming to preserve answer quality_ (a benchmark figure, **not** a per-run guarantee), **reversible** (originals cached). **Best when** your runs are long and dominated by re-injected bulk: pasted GitHub/Linear issue bodies, comment threads, large diffs. It lowers input-token cost and degrades cleanly if absent — but Otto does **not** evaluate compressed-output quality each run, so treat it as a cost lever and confirm via the run's evidence (below) and your own evals.
 
+Otto drives Headroom's real `compress()` library directly (no shim needed), so setup is **install the library + give it a model key**:
+
 ```bash
+pip install "headroom-ai[all]"            # the real library
+export OPENAI_API_KEY=sk-...              # compression is a model call (see below)
+export HEADROOM_MODEL=gpt-4o-mini         # cheap compressor model (this is the default)
+
 otto-extensions init context-saver        # writes .otto/tools/headroom.json + sets contextCompressor: headroom
-otto-tools health                         # runs the literal `headroom --version` (see the binary note)
+otto-tools health                         # runs `python3 -c "import headroom"` (see the binary note)
 otto-afk --context-compressor headroom "./docs/plans/feature.md" 10
 #   or persistently: OTTO_CONTEXT_COMPRESSOR=headroom, or .otto/config.json {"contextCompressor":"headroom"}
 ```
 
 **Inspectability:** originals are retained under `.otto/runs/<id>/compressed/`; tokens before/after, savings, and latency show up in `otto-afk --context-report`.
 
-> **⚠️ Binary contract — check this once.** Otto's command-mode adapter shells out to a local `headroom` binary expecting exactly:
+> **⚠️ It's model-backed — mind the token math.** Headroom's `compress()` is **an LLM call per compression**, not free local compression. So it's a **net win when spills are large** (big diffs, long issue bodies) and `HEADROOM_MODEL` is cheap — you spend a few hundred mini-model tokens to drop thousands from the main agent's context — and a **net loss on small spills**. Confirm real savings in `--context-report` (look for `tokensSaved > 0`, not `degraded`).
 >
-> - `headroom --version` → health probe
-> - `headroom compress --category <category>` → **content on stdin, compressed text on stdout**
+> **How Otto talks to it:**
 >
-> Two mismatches to know about:
+> - **Library mode (default).** Otto spawns `python3 -c <bridge>` calling `from headroom import compress`. Override the interpreter with `OTTO_HEADROOM_PYTHON` (e.g. a venv's python). Needs the library importable **and** a model key — missing either degrades cleanly to no compression.
+> - **Command mode (escape hatch).** Set `OTTO_HEADROOM_BIN=<binary>` to use a custom compressor instead of the library; Otto then runs `<binary> compress --category <c>` (stdin→stdout).
+> - **Health caveat ([#192](https://github.com/phamvuhoang/otto/issues/192)).** `otto-tools health` runs the **literal** `python3 -c "import headroom"` and does **not** honor `OTTO_HEADROOM_PYTHON`/`OTTO_HEADROOM_BIN`, so it can disagree with a run. Trust `--context-report` over `otto-tools health`.
 >
-> 1. **Upstream interface.** `headroom-ai` (`pip install "headroom-ai[all]"` / `npm install headroom-ai`) is **proxy/library-first** (`headroom proxy`, `headroom wrap`, …) and may not expose that exact `compress` sub-command. If it doesn't, give Otto a tiny shim named `headroom` (or point `OTTO_HEADROOM_BIN` at it) that maps `compress --category <c>` (stdin→stdout) onto Headroom's library.
-> 2. **`OTTO_HEADROOM_BIN` vs `otto-tools health`.** The **runtime** compressor honors `OTTO_HEADROOM_BIN`, but `otto-tools health` runs the **literal** `headroom --version` from `.otto/tools/headroom.json` and ignores the override — so if you relocate the binary via `OTTO_HEADROOM_BIN`, `otto-tools health` can report red while a run still compresses (or vice-versa). Trust the actual run's `--context-report` over `otto-tools health`.
->
-> If the binary is missing or the contract doesn't match, the run **degrades cleanly** to no compression — never a broken run.
+> If the library/key is missing or a custom binary's contract doesn't match, the run **degrades cleanly** to no compression — never a broken run.
 
 → Full steps: **[INTEGRATIONS.md §4](./INTEGRATIONS.md#4-headroom-context-compression-tool)**.
 

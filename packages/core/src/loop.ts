@@ -36,7 +36,12 @@ import {
   type RetrievalStore,
   type SyncContextCompressor,
 } from "./context-compressor.js";
-import { createHeadroomSyncCompressor } from "./headroom-adapter.js";
+import {
+  authorizeCompressor,
+  createHeadroomSyncCompressor,
+} from "./headroom-adapter.js";
+import { readSafetyPolicy } from "./safety-policy.js";
+import { readToolConfig, readTools } from "./tools.js";
 import {
   allocateRunId,
   hasRunReport,
@@ -508,13 +513,29 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // uncompressed (degrade clean) rather than failing the run or emitting a
   // degraded record at every spill.
   const compressorMode: CompressorMode = contextCompressor;
-  let compressor: SyncContextCompressor | null =
-    compressorMode === "headroom" ? createHeadroomSyncCompressor() : null;
-  if (compressor && !compressor.available) {
-    process.stderr.write(
-      `${dim("note: --context-compressor headroom requested but Headroom is unavailable (need `pip install headroom-ai` + a model key, or set OTTO_HEADROOM_BIN) — continuing without compression")}\n`
+  let compressor: SyncContextCompressor | null = null;
+  if (compressorMode === "headroom") {
+    // Governance gate (#192 part 2): a registered `.otto/tools/headroom.json`
+    // entry's `enabled` flag + repo policy can deny the compressor. With no tool
+    // registered this is config/flag-driven exactly as before.
+    const gate = authorizeCompressor(
+      readTools(workspaceDir),
+      readToolConfig(workspaceDir),
+      readSafetyPolicy(workspaceDir)
     );
-    compressor = null;
+    if (!gate.allowed) {
+      process.stderr.write(
+        `${dim(`note: --context-compressor headroom requested but ${gate.reason} — continuing without compression`)}\n`
+      );
+    } else {
+      compressor = createHeadroomSyncCompressor();
+      if (!compressor.available) {
+        process.stderr.write(
+          `${dim("note: --context-compressor headroom requested but Headroom is unavailable (need `pip install headroom-ai` + a model key, or set OTTO_HEADROOM_BIN) — continuing without compression")}\n`
+        );
+        compressor = null;
+      }
+    }
   }
   const retrievalStore: RetrievalStore = runRetrievalStore(workspaceDir, runId);
 

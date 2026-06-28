@@ -9,7 +9,7 @@ Curated, lockable bundles that combine the Phase-4 primitives — skill sources 
 - `.otto/config.json` — activation / compressor defaults
 - `.otto/policy.json` — safety-policy additions (union-merged, never relaxed)
 
-A profile is **generated config, not hidden behavior**: inspect it, edit it, diff it, roll it back. Enabling a profile does **not** auto-trust anything — a registered source is still imported `unverified` and must clear the P17 gate before P18 will inject it; a registered tool's **invocations** are policy-scoped. (One exception: the Headroom **runtime compressor** is enabled straight from `contextCompressor` config — it is **not** gated per-stage through tool policy; see [#192](https://github.com/phamvuhoang/otto/issues/192).)
+A profile is **generated config, not hidden behavior**: inspect it, edit it, diff it, roll it back. Enabling a profile does **not** auto-trust anything — a registered source is still imported `unverified` and must clear the P17 gate before P18 will inject it; a registered tool's **invocations** are policy-scoped. (Nuance for the Headroom **runtime compressor**: it's enabled from `contextCompressor` config and governed by the registered tool's `enabled` flag + `.otto/policy.json`, but it is **not** _stage_-gated — it runs at the render boundary, not per stage.)
 
 > Want a from-scratch, per-pack walkthrough (Superpowers, Product-Manager-Skills, a single Cursor skill, Headroom) — clone → register → validate → activate, with the gotchas? See **[INTEGRATIONS.md](./INTEGRATIONS.md)**.
 
@@ -57,12 +57,12 @@ For `context-saver`, install the Headroom library and give it a model key (`comp
 ```bash
 pip install "headroom-ai[all]" && export OPENAI_API_KEY=sk-...   # model-backed compression
 otto-extensions init context-saver
-otto-tools health                     # runs the LITERAL `python3 -c "import headroom"` — ignores
-#                                       OTTO_HEADROOM_PYTHON/BIN (#192), so it can disagree with a run
+otto-tools health                     # mirrors a run's binary resolution — honors
+#                                       OTTO_HEADROOM_BIN / OTTO_HEADROOM_PYTHON
 otto-afk "./plan.md" 10               # the compressor is now the config default
 ```
 
-The `.otto/tools/headroom.json` entry is an **inspection/health** surface. The runtime enables the compressor straight from the `contextCompressor` config — it is **not** gated per-stage through tool policy ([#192](https://github.com/phamvuhoang/otto/issues/192)).
+The `.otto/tools/headroom.json` entry is the **inspection/health** surface **and** a governance hook: disabling the tool (registry `enabled: false` or a config override) or blocking its command in `.otto/policy.json` stops the compressor. It is **not** _stage_-gated, though — the compressor runs at the render boundary, not per stage.
 
 ## Update, lock & roll back
 

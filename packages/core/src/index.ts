@@ -184,12 +184,14 @@ export {
 export {
   HEADROOM_BRIDGE,
   HEADROOM_VERSION,
+  authorizeCompressor,
   createHeadroomCompressor,
   createHeadroomSyncCompressor,
   defaultHeadroomRunner,
   headroomToolDefinition,
   libraryHeadroomRunner,
   resolveHeadroomRunner,
+  type CompressorAuthorization,
   type HeadroomRunner,
 } from "./headroom-adapter.js";
 export {

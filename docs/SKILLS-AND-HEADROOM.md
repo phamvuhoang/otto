@@ -19,7 +19,7 @@ Otto extends a run two ways, and treats them differently:
   >
   > And the gate governs which guidance is _eligible_, not what the agent does after reading it. `.otto/policy.json` only checks **harness-rendered `!`/`@spill` commands and registered-tool calls** — it does **not** sandbox arbitrary shell/network the agent runs on its own. The agent's own actions are bounded by the **runner**: the default `OTTO_RUNNER=sandbox` confines writes to the workspace via the OS sandbox, while `OTTO_RUNNER=host` runs **unsandboxed**. Treat an injected skill like code you're about to run — point Otto only at packs you'd run yourself ([SECURITY.md](../SECURITY.md)).
 
-- **Headroom** = a **tool**, not a skill. It compresses token-heavy `@spill` content (issue bodies, comments, diffs) **before the agent reads it**, reversibly. You enable it per run with `--context-compressor headroom` (or `OTTO_CONTEXT_COMPRESSOR` / config). `otto-extensions init context-saver` _also_ drops a `.otto/tools/headroom.json` entry so you can `otto-tools list` / `health` it — but note the runtime constructs the compressor straight from that config flag; it is **not** gated per-stage through tool policy the way registered tools are.
+- **Headroom** = a **tool**, not a skill. It compresses token-heavy `@spill` content (issue bodies, comments, diffs) **before the agent reads it**, reversibly. You enable it per run with `--context-compressor headroom` (or `OTTO_CONTEXT_COMPRESSOR` / config). `otto-extensions init context-saver` _also_ drops a `.otto/tools/headroom.json` entry so you can `otto-tools list` / `health` it — and that entry governs the compressor (disable the tool, or block its command in `.otto/policy.json`, to stop it), though it is **not** _stage_-gated the way per-stage tools are.
 
 Everything is plain, git-trackable files under `.otto/`. To review or undo an import, see [Govern, lock & roll back](#govern-lock--roll-back) below — note imported files are **untracked** until you commit them, so `git diff` alone won't show them.
 
@@ -116,7 +116,7 @@ otto-afk --context-compressor headroom "./docs/plans/feature.md" 10
 >
 > - **Library mode (default).** Otto spawns `python3 -c <bridge>` calling `from headroom import compress`. Override the interpreter with `OTTO_HEADROOM_PYTHON` (e.g. a venv's python). Needs the library importable **and** a model key — missing either degrades cleanly to no compression.
 > - **Command mode (escape hatch).** Set `OTTO_HEADROOM_BIN=<binary>` to use a custom compressor instead of the library; Otto then runs `<binary> compress --category <c>` (stdin→stdout).
-> - **Health caveat ([#192](https://github.com/phamvuhoang/otto/issues/192)).** `otto-tools health` runs the **literal** `python3 -c "import headroom"` and does **not** honor `OTTO_HEADROOM_PYTHON`/`OTTO_HEADROOM_BIN`, so it can disagree with a run. Trust `--context-report` over `otto-tools health`.
+> - **Health.** `otto-tools health` mirrors a run's binary resolution — it honors `OTTO_HEADROOM_PYTHON`/`OTTO_HEADROOM_BIN`, so it agrees with what a run would probe.
 >
 > If the library/key is missing or a custom binary's contract doesn't match, the run **degrades cleanly** to no compression — never a broken run.
 

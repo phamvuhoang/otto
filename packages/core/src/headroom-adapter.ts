@@ -5,16 +5,20 @@ import type {
   ContextCompressor,
   SyncContextCompressor,
 } from "./context-compressor.js";
-import type { ToolDefinition } from "./tools.js";
+import type { SafetyPolicy } from "./safety-policy.js";
+import type { SafetyEvent } from "./run-report.js";
+import { authorizeToolInvocation } from "./tools.js";
+import type { ToolConfig, ToolDefinition } from "./tools.js";
 
 /**
  * Headroom adapter (issue #112 P20).
  * [Headroom](https://github.com/headroomlabs-ai/headroom) compresses token-heavy
  * content (tool outputs, logs, RAG chunks, files, history). A
  * {@link headroomToolDefinition} entry under `.otto/tools/` makes it
- * `otto-tools list`/`health`-visible, but the runtime builds the compressor
- * straight from `contextCompressor` config — it is **not** gated per-stage through
- * tool policy ([#192](https://github.com/phamvuhoang/otto/issues/192)).
+ * `otto-tools list`/`health`-visible and governs it: {@link authorizeCompressor}
+ * honors the tool's `enabled` flag and authorizes its command against
+ * `.otto/policy.json`. It is **not** *stage*-gated, though — the compressor runs
+ * at the render boundary, not per stage ([#192](https://github.com/phamvuhoang/otto/issues/192)).
  *
  * Otto drives Headroom's real `compress(messages, model)` library through a
  * synchronous subprocess (the render/`@spill` boundary cannot await). Two runners
@@ -236,11 +240,12 @@ export function createHeadroomSyncCompressor(
 }
 
 /**
- * The {@link ToolDefinition} a repo drops into `.otto/tools/headroom.json` to put
- * the compressor under registry/policy authority. `stages: []` keeps it opt-in
- * (a repo enables it per stage); no network/write scope by default — local
- * command mode touches neither. Returned as a value so `otto-extensions`
- * (P21 `context-saver`) can generate it.
+ * The {@link ToolDefinition} a repo drops into `.otto/tools/headroom.json`. It is
+ * the registry/`otto-tools` surface and the governance hook ({@link
+ * authorizeCompressor} reads its `enabled` flag and authorizes its `command`
+ * against policy). `stages: []` is irrelevant to the compressor — it runs at the
+ * render boundary, not per stage — so it is NOT stage-gated. Returned as a value
+ * so `otto-extensions` (P21 `context-saver`) can generate it.
  */
 export function headroomToolDefinition(): ToolDefinition {
   return {
@@ -257,7 +262,72 @@ export function headroomToolDefinition(): ToolDefinition {
     secretRefs: [],
     approvalActions: [],
     timeoutMs: 30_000,
-    healthCheck: 'python3 -c "import headroom"',
+    // Mirror runtime resolution (#192 part 3): probe the same binary a run would —
+    // `$OTTO_HEADROOM_BIN --version` in command mode, else the (overridable)
+    // interpreter's `import headroom` in library mode — so health agrees with runs.
+    healthCheck:
+      'if [ -n "$OTTO_HEADROOM_BIN" ]; then "$OTTO_HEADROOM_BIN" --version; else "${OTTO_HEADROOM_PYTHON:-python3}" -c "import headroom"; fi',
     enabled: true,
+  };
+}
+
+/** The compressor governance verdict (issue #192 part 2). */
+export type CompressorAuthorization = {
+  allowed: boolean;
+  reason: string;
+  /** Blocked `policy-violation` events when a registered tool's command is denied. */
+  events: SafetyEvent[];
+};
+
+/**
+ * Gate the compressor on tool-registry + policy authority (issue #192 part 2).
+ * The compressor is a render-boundary concern, not a per-stage tool, so it is NOT
+ * stage-gated (a registered `headroom` tool's `stages: []` is irrelevant here).
+ * But when a repo registers the `headroom` tool, the registry and policy DO govern
+ * it:
+ *
+ * - no `headroom` tool registered → allowed (config/flag-driven, unchanged — so a
+ *   bare repo that only sets `--context-compressor headroom` behaves as before);
+ * - tool disabled (registry `enabled: false` or a config override) → denied;
+ * - the tool's declared `command` blocked by `.otto/policy.json` → denied, with
+ *   the blocked {@link SafetyEvent}s for the evidence bundle.
+ *
+ * Pure: the registry, config, and policy are injected (the loop reads them from
+ * the workspace). Default policy + no override always allows.
+ */
+export function authorizeCompressor(
+  tools: ToolDefinition[],
+  config: ToolConfig,
+  policy: SafetyPolicy
+): CompressorAuthorization {
+  const tool = tools.find((t) => t.name === "headroom");
+  if (!tool) {
+    return {
+      allowed: true,
+      reason: "no headroom tool registered — config-driven",
+      events: [],
+    };
+  }
+  const enabled = config.overrides[tool.name]?.enabled ?? tool.enabled;
+  if (!enabled) {
+    return {
+      allowed: false,
+      reason: "headroom tool disabled in registry/config",
+      events: [],
+    };
+  }
+  const auth = authorizeToolInvocation(policy, tool, { command: tool.command });
+  if (!auth.allowed) {
+    const kinds = auth.violations.map((v) => v.kind).join(", ");
+    return {
+      allowed: false,
+      reason: `headroom tool command blocked by policy (${kinds})`,
+      events: auth.events,
+    };
+  }
+  return {
+    allowed: true,
+    reason: "authorized by registry + policy",
+    events: [],
   };
 }

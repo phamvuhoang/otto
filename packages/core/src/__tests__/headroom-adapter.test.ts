@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { compressContent, compressContentSync } from "../context-compressor.js";
 import {
   HEADROOM_VERSION,
+  authorizeCompressor,
   createHeadroomCompressor,
   createHeadroomSyncCompressor,
   headroomToolDefinition,
@@ -10,6 +11,8 @@ import {
   resolveHeadroomRunner,
   type HeadroomRunner,
 } from "../headroom-adapter.js";
+import { DEFAULT_POLICY } from "../safety-policy.js";
+import type { ToolConfig } from "../tools.js";
 
 function runner(over: Partial<HeadroomRunner> = {}): HeadroomRunner {
   return {
@@ -195,9 +198,57 @@ describe("headroomToolDefinition", () => {
       kind: "command",
       enabled: true,
     });
-    expect(t.stages).toEqual([]); // opt-in: a repo enables it per stage
+    expect(t.stages).toEqual([]); // not stage-gated: compressor runs at render boundary
     expect(t.capabilities).toContain("compression");
     expect(t.env).toContain("HEADROOM_MODEL"); // model-backed library mode
-    expect(t.healthCheck).toBe('python3 -c "import headroom"');
+    // #192 part 3: health mirrors runtime env resolution (both override vars).
+    expect(t.healthCheck).toContain("$OTTO_HEADROOM_BIN");
+    expect(t.healthCheck).toContain("OTTO_HEADROOM_PYTHON");
+    expect(t.healthCheck).toContain("import headroom");
+  });
+});
+
+describe("authorizeCompressor (#192 part 2)", () => {
+  const noConfig: ToolConfig = { overrides: {} };
+
+  it("allows when no headroom tool is registered (config/flag-driven, unchanged)", () => {
+    const a = authorizeCompressor([], noConfig, DEFAULT_POLICY);
+    expect(a.allowed).toBe(true);
+    expect(a.events).toEqual([]);
+  });
+
+  it("allows a registered, enabled tool under default policy", () => {
+    const a = authorizeCompressor(
+      [headroomToolDefinition()],
+      noConfig,
+      DEFAULT_POLICY
+    );
+    expect(a.allowed).toBe(true);
+    expect(a.events).toEqual([]);
+  });
+
+  it("denies when the tool is disabled in the registry", () => {
+    const tool = { ...headroomToolDefinition(), enabled: false };
+    const a = authorizeCompressor([tool], noConfig, DEFAULT_POLICY);
+    expect(a.allowed).toBe(false);
+    expect(a.reason).toContain("disabled");
+  });
+
+  it("denies when a config override disables the tool", () => {
+    const cfg: ToolConfig = { overrides: { headroom: { enabled: false } } };
+    const a = authorizeCompressor(
+      [headroomToolDefinition()],
+      cfg,
+      DEFAULT_POLICY
+    );
+    expect(a.allowed).toBe(false);
+  });
+
+  it("denies and emits events when policy blocks the tool command", () => {
+    const policy = { ...DEFAULT_POLICY, blockedCommands: ["headroom"] };
+    const a = authorizeCompressor([headroomToolDefinition()], noConfig, policy);
+    expect(a.allowed).toBe(false);
+    expect(a.reason).toContain("blocked by policy");
+    expect(a.events.length).toBeGreaterThan(0);
   });
 });

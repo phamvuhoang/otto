@@ -143,7 +143,7 @@ The skill now shapes the reviewer stage; `otto-inspect latest` shows it under "S
 
 ## 4. Headroom (context-compression **tool**)
 
-Headroom is a **tool**, not a skill — it compresses token-heavy `@spill` content (issue bodies, comments, diffs) before the agent reads them, reversibly. You enable it with `--context-compressor headroom` (or `OTTO_CONTEXT_COMPRESSOR` / config). Otto drives Headroom's real `compress()` **library** directly (no shim) — but `compress()` is **model-backed** (an LLM call per compression), so it needs the library installed **and** a model key. `otto-extensions init context-saver` also registers a `.otto/tools/headroom.json` entry you can `otto-tools list`/`health` — but the runtime builds the compressor straight from that config flag; it is **not** gated per-stage through tool policy ([#192](https://github.com/phamvuhoang/otto/issues/192)).
+Headroom is a **tool**, not a skill — it compresses token-heavy `@spill` content (issue bodies, comments, diffs) before the agent reads them, reversibly. You enable it with `--context-compressor headroom` (or `OTTO_CONTEXT_COMPRESSOR` / config). Otto drives Headroom's real `compress()` **library** directly (no shim) — but `compress()` is **model-backed** (an LLM call per compression), so it needs the library installed **and** a model key. `otto-extensions init context-saver` also registers a `.otto/tools/headroom.json` entry you can `otto-tools list`/`health` — and that entry **governs** the compressor: disabling the tool or blocking its command in `.otto/policy.json` stops it. It is **not** _stage_-gated, though — the compressor runs at the render boundary, not per stage.
 
 ```bash
 # 1. Install the real library + give it a model key. Otto (library mode, the default)
@@ -159,11 +159,10 @@ export HEADROOM_MODEL=gpt-4o-mini          # cheap compressor model (default)
 otto-extensions init context-saver        # writes .otto/tools/headroom.json + config
 #   (or by hand: .otto/config.json { "contextCompressor": "headroom" })
 
-# 3. Confirm availability (inspection only — not a runtime gate; see #192)
+# 3. Confirm availability
 otto-tools list                            # headroom [command]
-otto-tools health                          # runs the LITERAL `python3 -c "import headroom"` —
-#                                            ignores OTTO_HEADROOM_PYTHON/BIN, so it can
-#                                            disagree with a run; trust --context-report
+otto-tools health                          # mirrors a run's binary resolution — honors
+#                                            OTTO_HEADROOM_BIN / OTTO_HEADROOM_PYTHON
 
 # 4. Run — compression happens at the @spill boundary
 otto-afk --context-compressor headroom "./docs/plans/feature.md" 10

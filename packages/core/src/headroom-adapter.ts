@@ -8,12 +8,13 @@ import type {
 import type { ToolDefinition } from "./tools.js";
 
 /**
- * Headroom adapter (issue #112 P20) behind P19's external-tool contract.
+ * Headroom adapter (issue #112 P20).
  * [Headroom](https://github.com/headroomlabs-ai/headroom) compresses token-heavy
- * content (tool outputs, logs, RAG chunks, files, history). Otto talks to it as a
- * governed {@link ToolDefinition}, so the same registry/policy authority that
- * gates any tool gates the compressor — it can only run in allowed stages, with
- * the declared scope.
+ * content (tool outputs, logs, RAG chunks, files, history). A
+ * {@link headroomToolDefinition} entry under `.otto/tools/` makes it
+ * `otto-tools list`/`health`-visible, but the runtime builds the compressor
+ * straight from `contextCompressor` config — it is **not** gated per-stage through
+ * tool policy ([#192](https://github.com/phamvuhoang/otto/issues/192)).
  *
  * Otto drives Headroom's real `compress(messages, model)` library through a
  * synchronous subprocess (the render/`@spill` boundary cannot await). Two runners

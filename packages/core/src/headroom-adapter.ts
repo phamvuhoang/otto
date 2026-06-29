@@ -125,7 +125,7 @@ function fromSpawn(
 /**
  * Library-mode runner (default): probe `python3 -c "import headroom"` for
  * availability, then run {@link HEADROOM_BRIDGE} per compression. Honors
- * `OTTO_HEADROOM_PYTHON`; the LLM call inside `compress()` needs a model key.
+ * `OTTO_HEADROOM_PYTHON`; `compress()` runs locally (no network/API key).
  */
 export function libraryHeadroomRunner(
   env: NodeJS.ProcessEnv = process.env,

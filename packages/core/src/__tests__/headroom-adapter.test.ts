@@ -140,6 +140,10 @@ describe("libraryHeadroomRunner", () => {
     expect(bin).toBe("python3");
     expect(argv[0]).toBe("-c");
     expect(argv[1]).toContain("from headroom import compress");
+    // #192: opt the single user message INTO compression — Headroom's defaults
+    // (compress_user_messages=False, protect_recent=4) would preserve it.
+    expect(argv[1]).toContain("compress_user_messages=True");
+    expect(argv[1]).toContain("protect_recent=0");
     expect(opts.input).toBe(input.text);
   });
 
@@ -200,19 +204,23 @@ describe("headroomToolDefinition", () => {
     });
     expect(t.stages).toEqual([]); // not stage-gated: compressor runs at render boundary
     expect(t.capabilities).toContain("compression");
-    expect(t.env).toContain("HEADROOM_MODEL"); // model-backed library mode
-    // #192 part 3: health mirrors runtime env resolution (both override vars).
-    expect(t.healthCheck).toContain("$OTTO_HEADROOM_BIN");
+    expect(t.env).toContain("HEADROOM_MODEL"); // selects the tokenizer (local, no key)
+    // #192 part 3: health mirrors runtime env resolution, cross-platform — a
+    // `node -e` probe (no POSIX shell builtins, so it works under cmd.exe too).
+    expect(t.healthCheck).toContain("node -e");
+    expect(t.healthCheck).toContain("OTTO_HEADROOM_BIN");
     expect(t.healthCheck).toContain("OTTO_HEADROOM_PYTHON");
     expect(t.healthCheck).toContain("import headroom");
+    expect(t.healthCheck).not.toContain("if ["); // not POSIX-shell-only
   });
 });
 
 describe("authorizeCompressor (#192 part 2)", () => {
   const noConfig: ToolConfig = { overrides: {} };
+  const noEnv = {}; // no OTTO_HEADROOM_BIN → library (python) command
 
   it("allows when no headroom tool is registered (config/flag-driven, unchanged)", () => {
-    const a = authorizeCompressor([], noConfig, DEFAULT_POLICY);
+    const a = authorizeCompressor([], noConfig, DEFAULT_POLICY, noEnv);
     expect(a.allowed).toBe(true);
     expect(a.events).toEqual([]);
   });
@@ -221,7 +229,8 @@ describe("authorizeCompressor (#192 part 2)", () => {
     const a = authorizeCompressor(
       [headroomToolDefinition()],
       noConfig,
-      DEFAULT_POLICY
+      DEFAULT_POLICY,
+      noEnv
     );
     expect(a.allowed).toBe(true);
     expect(a.events).toEqual([]);
@@ -229,7 +238,7 @@ describe("authorizeCompressor (#192 part 2)", () => {
 
   it("denies when the tool is disabled in the registry", () => {
     const tool = { ...headroomToolDefinition(), enabled: false };
-    const a = authorizeCompressor([tool], noConfig, DEFAULT_POLICY);
+    const a = authorizeCompressor([tool], noConfig, DEFAULT_POLICY, noEnv);
     expect(a.allowed).toBe(false);
     expect(a.reason).toContain("disabled");
   });
@@ -239,16 +248,56 @@ describe("authorizeCompressor (#192 part 2)", () => {
     const a = authorizeCompressor(
       [headroomToolDefinition()],
       cfg,
-      DEFAULT_POLICY
+      DEFAULT_POLICY,
+      noEnv
     );
     expect(a.allowed).toBe(false);
   });
 
-  it("denies and emits events when policy blocks the tool command", () => {
+  it("denies and emits events when policy blocks the library command", () => {
     const policy = { ...DEFAULT_POLICY, blockedCommands: ["headroom"] };
-    const a = authorizeCompressor([headroomToolDefinition()], noConfig, policy);
+    const a = authorizeCompressor(
+      [headroomToolDefinition()],
+      noConfig,
+      policy,
+      noEnv
+    );
     expect(a.allowed).toBe(false);
     expect(a.reason).toContain("blocked by policy");
     expect(a.events.length).toBeGreaterThan(0);
+  });
+
+  // The bug this closes: policy must authorize the command the run ACTUALLY
+  // executes (resolved from env), not the static tool.command.
+  it("denies an OTTO_HEADROOM_BIN that policy blocks (authorizes the resolved command)", () => {
+    const policy = { ...DEFAULT_POLICY, blockedCommands: ["evil-compressor"] };
+    const tool = headroomToolDefinition(); // static command is python, not evil
+    const blocked = authorizeCompressor([tool], noConfig, policy, {
+      OTTO_HEADROOM_BIN: "evil-compressor",
+    });
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.events.length).toBeGreaterThan(0);
+    // Same policy, no override → the default library command is not blocked.
+    const allowed = authorizeCompressor([tool], noConfig, policy, noEnv);
+    expect(allowed.allowed).toBe(true);
+  });
+});
+
+// Real Headroom, no fake spawn — proves library mode actually compresses with the
+// kwargs above. Skipped where `headroom-ai` is not importable (most CI), so it can
+// never flake; run it locally after `pip install headroom-ai` to verify savings.
+describe("library mode end-to-end", () => {
+  const realRunner = libraryHeadroomRunner();
+  const present = realRunner.available();
+  const maybe = present ? it : it.skip;
+
+  maybe("reduces the payload on bulky, compressible content", () => {
+    const text =
+      "stale tool output: repeated filler line that headroom should shrink\n".repeat(
+        300
+      );
+    const out = realRunner.run({ key: "e2e", category: "command-log", text });
+    expect(out.ok).toBe(true);
+    expect(out.text.length).toBeLessThan(text.length); // actual token savings
   });
 });

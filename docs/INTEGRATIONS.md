@@ -143,14 +143,13 @@ The skill now shapes the reviewer stage; `otto-inspect latest` shows it under "S
 
 ## 4. Headroom (context-compression **tool**)
 
-Headroom is a **tool**, not a skill — it compresses token-heavy `@spill` content (issue bodies, comments, diffs) before the agent reads them, reversibly. You enable it with `--context-compressor headroom` (or `OTTO_CONTEXT_COMPRESSOR` / config). Otto drives Headroom's real `compress()` **library** directly (no shim) — but `compress()` is **model-backed** (an LLM call per compression), so it needs the library installed **and** a model key. `otto-extensions init context-saver` also registers a `.otto/tools/headroom.json` entry you can `otto-tools list`/`health` — and that entry **governs** the compressor: disabling the tool or blocking its command in `.otto/policy.json` stops it. It is **not** _stage_-gated, though — the compressor runs at the render boundary, not per stage.
+Headroom is a **tool**, not a skill — it compresses token-heavy `@spill` content (issue bodies, comments, diffs) before the agent reads them, reversibly. You enable it with `--context-compressor headroom` (or `OTTO_CONTEXT_COMPRESSOR` / config). Otto drives Headroom's real `compress()` **library** directly (no shim); compression is **local and deterministic** — no network, no API key, no per-call cost (`HEADROOM_MODEL` only selects the tokenizer/context-window). `otto-extensions init context-saver` also registers a `.otto/tools/headroom.json` entry you can `otto-tools list`/`health` — and that entry **governs** the compressor: disabling the tool or blocking its command in `.otto/policy.json` stops it. It is **not** _stage_-gated, though — the compressor runs at the render boundary, not per stage.
 
 ```bash
-# 1. Install the real library + give it a model key. Otto (library mode, the default)
-#    spawns `python3 -c` calling `from headroom import compress`.
+# 1. Install the real library. Otto (library mode, the default) spawns `python3 -c`
+#    calling `from headroom import compress` — local compression, no API key.
 pip install "headroom-ai[all]"
-export OPENAI_API_KEY=sk-...               # compression is a model call
-export HEADROOM_MODEL=gpt-4o-mini          # cheap compressor model (default)
+export HEADROOM_MODEL=gpt-4o-mini          # optional: selects the tokenizer (default)
 #    Override the interpreter with OTTO_HEADROOM_PYTHON (e.g. a venv python).
 #    Escape hatch: set OTTO_HEADROOM_BIN=<bin> to use a custom compressor instead —
 #    Otto then runs `<bin> compress --category <c>` (stdin → compressed stdout).
@@ -169,7 +168,7 @@ otto-afk --context-compressor headroom "./docs/plans/feature.md" 10
 #   or persistently: OTTO_CONTEXT_COMPRESSOR=headroom, or the config above
 ```
 
-**Mind the token math:** because each compression is an LLM call, Headroom is a **net win on large spills** (big diffs, long issue bodies) with a cheap `HEADROOM_MODEL`, and a **net loss on small ones**. Confirm real savings in `--context-report`.
+**When it pays off:** compression is local (no API cost), so the only question is reduction — Headroom shrinks **large, repetitive spills** (big diffs, long issue bodies) the most, and may barely move small ones. Confirm real savings in `--context-report`.
 
 **Inspectability:** originals are retained under `.otto/runs/<id>/compressed/`; tokens before/after, savings, and latency are recorded and surfaced in `otto-afk --context-report`. A missing library/key (or a mismatched custom binary) **degrades cleanly** to normal behavior with a warning — never a broken run.
 

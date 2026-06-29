@@ -25,9 +25,9 @@ import type { ToolConfig, ToolDefinition } from "./tools.js";
  * sit behind one {@link HeadroomRunner} contract:
  *
  * - **library mode (default):** spawn `python3 -c <bridge>` calling
- *   `from headroom import compress` — Headroom's documented, model-backed API.
- *   Each compression is an LLM call, so it needs a model key (e.g.
- *   `OPENAI_API_KEY`) and `HEADROOM_MODEL` (default `gpt-4o-mini`); the
+ *   `from headroom import compress` — Headroom's documented API. Compression is
+ *   **local and deterministic** (no network, no API key); `HEADROOM_MODEL`
+ *   (default `gpt-4o-mini`) only selects the tokenizer/context-window. The
  *   interpreter is overridable via `OTTO_HEADROOM_PYTHON`.
  * - **command mode:** when `OTTO_HEADROOM_BIN` is set, shell out to that binary
  *   with `compress --category <c>` (stdin → compressed stdout) — an escape hatch
@@ -35,8 +35,8 @@ import type { ToolConfig, ToolDefinition } from "./tools.js";
  *
  * {@link resolveHeadroomRunner} picks the mode. Everything is injectable (the
  * runner and its `spawn`) so tests never spawn a real process, and a missing
- * interpreter / library / key degrades cleanly (the compressor reports
- * unavailable or `ok: false` and the orchestrator keeps the original content).
+ * interpreter / library degrades cleanly (the compressor reports unavailable or
+ * `ok: false` and the orchestrator keeps the original content).
  */
 
 /** Compressor identity recorded on each compression (mode-agnostic). */
@@ -85,7 +85,10 @@ export const HEADROOM_BRIDGE = [
   "text = sys.stdin.read()",
   "model = os.environ.get('HEADROOM_MODEL', 'gpt-4o-mini')",
   "try:",
-  "    result = compress([{'role': 'user', 'content': text}], model=model)",
+  // compress_user_messages=True + protect_recent=0: by default Headroom protects
+  // the latest message and recent context, so a single user message would be left
+  // uncompressed. We hand it ONE message and want THAT compressed, so opt in.
+  "    result = compress([{'role': 'user', 'content': text}], model=model, compress_user_messages=True, protect_recent=0)",
   "except Exception as e:",
   "    sys.stderr.write('headroom compress failed: %s' % e); sys.exit(1)",
   "msgs = getattr(result, 'messages', None)",
@@ -252,7 +255,7 @@ export function headroomToolDefinition(): ToolDefinition {
     name: "headroom",
     kind: "command",
     description:
-      "Context compressor (Headroom library mode, model-backed): compresses token-heavy @spill content via headroom-ai's compress(); needs a model API key.",
+      "Context compressor (Headroom library mode): compresses token-heavy @spill content via headroom-ai's local compress(); no API key — `model` only selects the tokenizer.",
     capabilities: ["compression", "context-engineering"],
     stages: [],
     command: "python3 -c 'from headroom import compress'",
@@ -262,13 +265,27 @@ export function headroomToolDefinition(): ToolDefinition {
     secretRefs: [],
     approvalActions: [],
     timeoutMs: 30_000,
-    // Mirror runtime resolution (#192 part 3): probe the same binary a run would —
-    // `$OTTO_HEADROOM_BIN --version` in command mode, else the (overridable)
-    // interpreter's `import headroom` in library mode — so health agrees with runs.
-    healthCheck:
-      'if [ -n "$OTTO_HEADROOM_BIN" ]; then "$OTTO_HEADROOM_BIN" --version; else "${OTTO_HEADROOM_PYTHON:-python3}" -c "import headroom"; fi',
+    // Mirror runtime resolution (#192 part 3) cross-platform: a `node -e` probe
+    // (node is always present — Otto is a Node CLI) honors the same env a run does
+    // — `$OTTO_HEADROOM_BIN --version` in command mode, else the (overridable)
+    // interpreter's `import headroom`. No POSIX shell builtins, so it works under
+    // cmd.exe too (the prior `if [ … ]` form did not).
+    healthCheck: `node -e "const{execFileSync}=require('child_process');const b=process.env.OTTO_HEADROOM_BIN;try{execFileSync(b||process.env.OTTO_HEADROOM_PYTHON||'python3',b?['--version']:['-c','import headroom'],{stdio:'ignore'})}catch(e){process.exit(1)}"`,
     enabled: true,
   };
+}
+
+/**
+ * The command a run would ACTUALLY execute, resolved from env exactly as
+ * {@link resolveHeadroomRunner} does — so policy authorizes what runs, not a
+ * static placeholder (issue #192 part 2 follow-up). Command mode: `<bin> compress`.
+ * Library mode: `<python> -c <bridge>` (the bridge text carries `headroom`, so a
+ * `blockedCommands` pattern can match the interpreter or the library).
+ */
+export function headroomCommand(env: NodeJS.ProcessEnv = process.env): string {
+  const bin = env.OTTO_HEADROOM_BIN;
+  if (typeof bin === "string" && bin.length > 0) return `${bin} compress`;
+  return `${pythonBin(env)} -c ${HEADROOM_BRIDGE}`;
 }
 
 /** The compressor governance verdict (issue #192 part 2). */
@@ -289,16 +306,20 @@ export type CompressorAuthorization = {
  * - no `headroom` tool registered → allowed (config/flag-driven, unchanged — so a
  *   bare repo that only sets `--context-compressor headroom` behaves as before);
  * - tool disabled (registry `enabled: false` or a config override) → denied;
- * - the tool's declared `command` blocked by `.otto/policy.json` → denied, with
- *   the blocked {@link SafetyEvent}s for the evidence bundle.
+ * - the command that WOULD RUN ({@link headroomCommand}, resolved from `env` like
+ *   the runtime) blocked by `.otto/policy.json` → denied, with the blocked
+ *   {@link SafetyEvent}s for the evidence bundle. Authorizing the resolved command
+ *   (not the static `tool.command`) closes the gap where `OTTO_HEADROOM_BIN`
+ *   pointed at a policy-blocked binary that authorization never saw.
  *
- * Pure: the registry, config, and policy are injected (the loop reads them from
- * the workspace). Default policy + no override always allows.
+ * Pure: the registry, config, policy, and `env` are injected (the loop passes the
+ * process env). Default policy + no override always allows.
  */
 export function authorizeCompressor(
   tools: ToolDefinition[],
   config: ToolConfig,
-  policy: SafetyPolicy
+  policy: SafetyPolicy,
+  env: NodeJS.ProcessEnv = process.env
 ): CompressorAuthorization {
   const tool = tools.find((t) => t.name === "headroom");
   if (!tool) {
@@ -316,7 +337,9 @@ export function authorizeCompressor(
       events: [],
     };
   }
-  const auth = authorizeToolInvocation(policy, tool, { command: tool.command });
+  const auth = authorizeToolInvocation(policy, tool, {
+    command: headroomCommand(env),
+  });
   if (!auth.allowed) {
     const kinds = auth.violations.map((v) => v.kind).join(", ");
     return {

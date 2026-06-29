@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 
+import { COMPRESSION_CATEGORIES } from "./context-compressor.js";
 import type {
   CompressInput,
   ContextCompressor,
@@ -25,10 +26,13 @@ import type { ToolConfig, ToolDefinition } from "./tools.js";
  * sit behind one {@link HeadroomRunner} contract:
  *
  * - **library mode (default):** spawn `python3 -c <bridge>` calling
- *   `from headroom import compress` — Headroom's documented API. Compression is
- *   **local and deterministic** (no network, no API key); `HEADROOM_MODEL`
- *   (default `gpt-4o-mini`) only selects the tokenizer/context-window. The
- *   interpreter is overridable via `OTTO_HEADROOM_PYTHON`.
+ *   `from headroom import compress` — Headroom's documented API (needs the
+ *   `headroom-ai[ml]` extra; the base package leaves plain text unchanged).
+ *   Inference is **local** with **no per-call API/cost** (`HEADROOM_MODEL` only
+ *   selects the tokenizer), but the ML model is **downloaded once from Hugging
+ *   Face** (~260–600 MB) on first use — a network fetch Otto does not proxy or
+ *   gate, so pre-warm it (`HF_HUB_OFFLINE=1` / `HF_ENDPOINT`). The interpreter is
+ *   overridable via `OTTO_HEADROOM_PYTHON`.
  * - **command mode:** when `OTTO_HEADROOM_BIN` is set, shell out to that binary
  *   with `compress --category <c>` (stdin → compressed stdout) — an escape hatch
  *   for a custom compressor that already speaks this contract.
@@ -150,6 +154,12 @@ export function libraryHeadroomRunner(
           encoding: "utf8",
           timeout: timeoutMs,
           maxBuffer: 64 * 1024 * 1024,
+          // Run offline by DEFAULT (#192): the ML model is a one-time Hugging Face
+          // download Otto cannot proxy/gate and that would blow `timeoutMs` mid-run.
+          // Forcing HF_HUB_OFFLINE means a governed run never performs that fetch —
+          // it uses pre-cached weights or degrades cleanly. Respect an explicit
+          // value (set HF_HUB_OFFLINE=0 to allow the in-run download).
+          env: { ...env, HF_HUB_OFFLINE: env.HF_HUB_OFFLINE ?? "1" },
         }),
         input.text
       ),
@@ -255,12 +265,22 @@ export function headroomToolDefinition(): ToolDefinition {
     name: "headroom",
     kind: "command",
     description:
-      "Context compressor (Headroom library mode): compresses token-heavy @spill content via headroom-ai's local compress(); no API key — `model` only selects the tokenizer.",
+      "Context compressor (Headroom library mode): compresses token-heavy @spill content via headroom-ai's local compress() (needs the `[ml]` extra; `model` only selects the tokenizer, no API key). First use downloads the kompress-base model (~260–600 MB) from Hugging Face — pre-warm it (see docs/INTEGRATIONS.md §4).",
     capabilities: ["compression", "context-engineering"],
     stages: [],
     command: "python3 -c 'from headroom import compress'",
-    env: ["OTTO_HEADROOM_BIN", "OTTO_HEADROOM_PYTHON", "HEADROOM_MODEL"],
-    networkDomains: [],
+    env: [
+      "OTTO_HEADROOM_BIN",
+      "OTTO_HEADROOM_PYTHON",
+      "HEADROOM_MODEL",
+      "HF_HUB_OFFLINE",
+      "HF_ENDPOINT",
+    ],
+    // The ML compressor fetches the kompress-base weights from Hugging Face on
+    // first use. Declared here for an honest inventory, but Otto does NOT proxy the
+    // subprocess, so this is not runtime-enforced — pre-download + HF_HUB_OFFLINE=1
+    // (or an HF_ENDPOINT mirror) to keep a run offline (docs/INTEGRATIONS.md §4).
+    networkDomains: ["huggingface.co", "cdn-lfs.huggingface.co"],
     writeRoots: [],
     secretRefs: [],
     approvalActions: [],
@@ -276,16 +296,22 @@ export function headroomToolDefinition(): ToolDefinition {
 }
 
 /**
- * The command a run would ACTUALLY execute, resolved from env exactly as
+ * Every command a run could ACTUALLY execute, resolved from env exactly as
  * {@link resolveHeadroomRunner} does — so policy authorizes what runs, not a
- * static placeholder (issue #192 part 2 follow-up). Command mode: `<bin> compress`.
- * Library mode: `<python> -c <bridge>` (the bridge text carries `headroom`, so a
- * `blockedCommands` pattern can match the interpreter or the library).
+ * static placeholder (issue #192 part 2 follow-up). Command mode emits one entry
+ * **per category** (`<bin> compress --category <c>`), matching the real argv, so
+ * an argument-specific `blockedCommands` pattern (e.g. `--category command-log`)
+ * cannot slip past. Library mode is a single `<python> -c <bridge>` (the bridge
+ * text carries `headroom`, so a pattern can match the interpreter or the library).
  */
-export function headroomCommand(env: NodeJS.ProcessEnv = process.env): string {
+export function headroomCommands(
+  env: NodeJS.ProcessEnv = process.env
+): string[] {
   const bin = env.OTTO_HEADROOM_BIN;
-  if (typeof bin === "string" && bin.length > 0) return `${bin} compress`;
-  return `${pythonBin(env)} -c ${HEADROOM_BRIDGE}`;
+  if (typeof bin === "string" && bin.length > 0) {
+    return COMPRESSION_CATEGORIES.map((c) => `${bin} compress --category ${c}`);
+  }
+  return [`${pythonBin(env)} -c ${HEADROOM_BRIDGE}`];
 }
 
 /** The compressor governance verdict (issue #192 part 2). */
@@ -306,11 +332,13 @@ export type CompressorAuthorization = {
  * - no `headroom` tool registered → allowed (config/flag-driven, unchanged — so a
  *   bare repo that only sets `--context-compressor headroom` behaves as before);
  * - tool disabled (registry `enabled: false` or a config override) → denied;
- * - the command that WOULD RUN ({@link headroomCommand}, resolved from `env` like
- *   the runtime) blocked by `.otto/policy.json` → denied, with the blocked
- *   {@link SafetyEvent}s for the evidence bundle. Authorizing the resolved command
- *   (not the static `tool.command`) closes the gap where `OTTO_HEADROOM_BIN`
- *   pointed at a policy-blocked binary that authorization never saw.
+ * - any command that WOULD RUN ({@link headroomCommands}, resolved from `env` like
+ *   the runtime — one per category in command mode, with `--category <c>`) blocked
+ *   by `.otto/policy.json` → denied, with the blocked {@link SafetyEvent}s for the
+ *   evidence bundle. Authorizing the resolved commands (not the static
+ *   `tool.command`) closes the gap where `OTTO_HEADROOM_BIN` pointed at a
+ *   policy-blocked binary, or an argument-specific pattern, that authorization
+ *   never saw.
  *
  * Pure: the registry, config, policy, and `env` are injected (the loop passes the
  * process env). Default policy + no override always allows.
@@ -337,15 +365,22 @@ export function authorizeCompressor(
       events: [],
     };
   }
-  const auth = authorizeToolInvocation(policy, tool, {
-    command: headroomCommand(env),
-  });
-  if (!auth.allowed) {
-    const kinds = auth.violations.map((v) => v.kind).join(", ");
+  // Authorize every command the run could execute (per-category in command mode);
+  // deny if ANY is blocked, aggregating the events.
+  const events: SafetyEvent[] = [];
+  const kinds = new Set<string>();
+  for (const command of headroomCommands(env)) {
+    const auth = authorizeToolInvocation(policy, tool, { command });
+    if (!auth.allowed) {
+      events.push(...auth.events);
+      for (const v of auth.violations) kinds.add(v.kind);
+    }
+  }
+  if (events.length > 0) {
     return {
       allowed: false,
-      reason: `headroom tool command blocked by policy (${kinds})`,
-      events: auth.events,
+      reason: `headroom tool command blocked by policy (${[...kinds].join(", ")})`,
+      events,
     };
   }
   return {

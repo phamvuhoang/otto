@@ -188,7 +188,7 @@ export {
   createHeadroomCompressor,
   createHeadroomSyncCompressor,
   defaultHeadroomRunner,
-  headroomCommand,
+  headroomCommands,
   headroomToolDefinition,
   libraryHeadroomRunner,
   resolveHeadroomRunner,

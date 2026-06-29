@@ -95,10 +95,10 @@ otto-afk --review-panel --use-skills "./docs/plans/feature.md" 20
 
 [headroomlabs-ai/headroom](https://github.com/headroomlabs-ai/headroom): _"the context compression layer for AI agents"_ — Headroom reports **60–95% token reduction** on tool outputs/logs/diffs while _aiming to preserve answer quality_ (a benchmark figure, **not** a per-run guarantee), **reversible** (originals cached). **Best when** your runs are long and dominated by re-injected bulk: pasted GitHub/Linear issue bodies, comment threads, large diffs. It lowers input-token cost and degrades cleanly if absent — but Otto does **not** evaluate compressed-output quality each run, so treat it as a cost lever and confirm via the run's evidence (below) and your own evals.
 
-Otto drives Headroom's real `compress()` library directly (no shim needed), and compression is **local** — no API key, no per-call cost. Setup is just **install the library**:
+Otto drives Headroom's real `compress()` library directly (no shim needed). Inference is **local** — no API key, no per-call cost — but install the **`[ml]`** extra (the base package leaves plain text unchanged), and note the ML model downloads once from Hugging Face on first use (see the warning):
 
 ```bash
-pip install "headroom-ai[all]"            # local Python library
+pip install "headroom-ai[ml]"             # ML text compressor (base = passthrough)
 export HEADROOM_MODEL=gpt-4o-mini         # optional: selects the tokenizer (this is the default)
 
 otto-extensions init context-saver        # writes .otto/tools/headroom.json + sets contextCompressor: headroom
@@ -109,7 +109,7 @@ otto-afk --context-compressor headroom "./docs/plans/feature.md" 10
 
 **Inspectability:** originals are retained under `.otto/runs/<id>/compressed/`; tokens before/after, savings, and latency show up in `otto-afk --context-report`.
 
-> **⚠️ When it pays off.** Compression is **local and deterministic** (no network, no API key, no per-call cost) — `HEADROOM_MODEL` only picks the tokenizer/context-window. So the only question is reduction: Headroom shrinks **large, repetitive spills** (big diffs, long issue bodies, comment threads) the most and may barely move small ones. Confirm real savings in `--context-report` (look for `tokensSaved > 0`, not `degraded`).
+> **⚠️ Local inference, but a one-time model download.** Compression runs **locally** with **no per-call API or cost** — `HEADROOM_MODEL` only picks the tokenizer. But the ML model (`kompress-base`, ~260–600 MB) is fetched from Hugging Face on first use. Otto runs the compressor with **`HF_HUB_OFFLINE=1` by default**, so a governed run never performs that fetch (no ungoverned egress, no 30s-timeout blowout) — it uses cached weights or degrades cleanly. So **pre-warm the cache once** (run a compression manually), then runs are fully local. (Set `HF_HUB_OFFLINE=0` to let Otto download in-run — slower, ungoverned; or `HF_ENDPOINT=<mirror>` for gated nets.) After warming, the only question is reduction: Headroom shrinks **large, repetitive spills** the most and may barely move small ones — confirm `tokensSaved > 0` (not `degraded`) in `--context-report`.
 >
 > **How Otto talks to it:**
 >

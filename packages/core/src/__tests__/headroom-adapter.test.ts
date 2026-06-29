@@ -168,6 +168,16 @@ describe("libraryHeadroomRunner", () => {
     ).run(input);
     expect(spawn.mock.calls[0][0]).toBe("py3.12");
   });
+
+  it("runs the bridge offline by default (no ungoverned HF download), respecting an explicit value", () => {
+    const spawn = fakeSpawn({ status: 0, stdout: "z" });
+    libraryHeadroomRunner({}, 30_000, spawn).run(input);
+    expect(spawn.mock.calls[0][2].env.HF_HUB_OFFLINE).toBe("1");
+
+    const spawn2 = fakeSpawn({ status: 0, stdout: "z" });
+    libraryHeadroomRunner({ HF_HUB_OFFLINE: "0" }, 30_000, spawn2).run(input);
+    expect(spawn2.mock.calls[0][2].env.HF_HUB_OFFLINE).toBe("0");
+  });
 });
 
 describe("resolveHeadroomRunner", () => {
@@ -280,6 +290,25 @@ describe("authorizeCompressor (#192 part 2)", () => {
     // Same policy, no override → the default library command is not blocked.
     const allowed = authorizeCompressor([tool], noConfig, policy, noEnv);
     expect(allowed.allowed).toBe(true);
+  });
+
+  // Authorization must see the full argv (`compress --category <c>`), not just
+  // `<bin> compress` — else an argument-specific blocked pattern slips through.
+  it("denies an argument-specific blocked pattern in command mode", () => {
+    const policy = {
+      ...DEFAULT_POLICY,
+      blockedCommands: ["compress --category command-log"],
+    };
+    const a = authorizeCompressor(
+      [headroomToolDefinition()],
+      noConfig,
+      policy,
+      {
+        OTTO_HEADROOM_BIN: "mybin",
+      }
+    );
+    expect(a.allowed).toBe(false);
+    expect(a.events.length).toBeGreaterThan(0);
   });
 });
 

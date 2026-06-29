@@ -42,12 +42,14 @@ const MODES: ReadonlySet<string> = new Set(["off", "headroom"]);
  * The token-heavy content categories P7 already flags — the targets the roadmap
  * names. Carried on each compression so a report can attribute savings by source.
  */
-export type CompressionCategory =
-  | "issue-body"
-  | "command-log"
-  | "prior-iteration"
-  | "read-artifact"
-  | "memory-projection";
+export const COMPRESSION_CATEGORIES = [
+  "issue-body",
+  "command-log",
+  "prior-iteration",
+  "read-artifact",
+  "memory-projection",
+] as const;
+export type CompressionCategory = (typeof COMPRESSION_CATEGORIES)[number];
 
 /** Content handed to the compressor, tagged by source category + a stable key. */
 export type CompressInput = {

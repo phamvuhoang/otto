@@ -32,12 +32,12 @@ git status --short .otto/                  # review what changed — new files a
 
 ## Compatibility matrix
 
-| Profile              | Source / tool                                  | Pinned ref | Required local binaries   | Tested Otto | Known limits                                                                                                                                                           |
-| -------------------- | ---------------------------------------------- | ---------- | ------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `coding-superpowers` | `github.com/obra/superpowers` (git)            | `v6.0.3`   | `git`                     | 0.x         | Git source `sync` is not implemented yet (P16 starts local) — vendor locally or wait for git fetch.                                                                    |
-| `pm-planning`        | `github.com/deanpeters/Product-Manager-Skills` | `v1.0.0`   | `git`                     | 0.x         | Same git-`sync` limitation; PM skills classify `stage-scoped` to plan/report.                                                                                          |
-| `context-saver`      | `headroom` (library mode)                      | n/a        | `python3` + `headroom-ai` | 0.x         | Local compression — no API key (`model` only selects the tokenizer). `otto-tools health` fails until `headroom-ai` is importable; the run degrades cleanly without it. |
-| `security-review`    | policy only                                    | n/a        | none                      | 0.x         | Pairs with `--review-panel`; review the generated `.otto/policy.json` and tighten further.                                                                             |
+| Profile              | Source / tool                                  | Pinned ref | Required local binaries       | Tested Otto | Known limits                                                                                                                                                                                                                                                                     |
+| -------------------- | ---------------------------------------------- | ---------- | ----------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `coding-superpowers` | `github.com/obra/superpowers` (git)            | `v6.0.3`   | `git`                         | 0.x         | Git source `sync` is not implemented yet (P16 starts local) — vendor locally or wait for git fetch.                                                                                                                                                                              |
+| `pm-planning`        | `github.com/deanpeters/Product-Manager-Skills` | `v1.0.0`   | `git`                         | 0.x         | Same git-`sync` limitation; PM skills classify `stage-scoped` to plan/report.                                                                                                                                                                                                    |
+| `context-saver`      | `headroom` (library mode)                      | n/a        | `python3` + `headroom-ai[ml]` | 0.x         | Local inference, no API key (`model` only selects the tokenizer), but first use downloads the kompress-base model (~260–600 MB) from Hugging Face — pre-warm + `HF_HUB_OFFLINE=1`. `otto-tools health` fails until `headroom-ai[ml]` is importable; degrades cleanly without it. |
+| `security-review`    | policy only                                    | n/a        | none                          | 0.x         | Pairs with `--review-panel`; review the generated `.otto/policy.json` and tighten further.                                                                                                                                                                                       |
 
 > The pinned refs live in one place (`extension-profiles.ts`) so this matrix and the manifests cannot drift. Until git-source `sync` lands, register the source then point it at a local checkout (`otto-skills sources add <name> <path> --type local`) to import.
 
@@ -52,10 +52,10 @@ otto-skills validate <skill>          # gate → afk-safe | interactive-only | s
 otto-afk --use-skills "./plan.md" 10  # only validated, eligible skills are injected
 ```
 
-For `context-saver`, install the Headroom library (local compression — no API key), then confirm it resolves:
+For `context-saver`, install the Headroom library with the `[ml]` extra (local inference, no API key; first use downloads the model from Hugging Face — pre-warm it), then confirm it resolves:
 
 ```bash
-pip install "headroom-ai[all]"        # local Python library; `model` only picks the tokenizer
+pip install "headroom-ai[ml]"         # ML text compressor (base = passthrough); no API key
 otto-extensions init context-saver
 otto-tools health                     # mirrors a run's binary resolution — honors
 #                                       OTTO_HEADROOM_BIN / OTTO_HEADROOM_PYTHON

@@ -77,8 +77,8 @@ function pythonBin(env: NodeJS.ProcessEnv): string {
  * stdout. Built line-by-line (Python is whitespace-sensitive) so it survives as a
  * `python3 -c` argument. Exit codes are diagnostic only — any non-zero exit is a
  * recoverable failure the orchestrator turns into a degraded passthrough:
- *   2 = library not importable, 1 = compress() raised (e.g. missing key),
- *   3 = empty output (never blank out a non-empty spill).
+ *   2 = library not importable, 1 = compress() raised (e.g. weights not cached
+ *   while offline), 3 = empty output (never blank out a non-empty spill).
  */
 export const HEADROOM_BRIDGE = [
   "import sys, os",
@@ -129,7 +129,8 @@ function fromSpawn(
 /**
  * Library-mode runner (default): probe `python3 -c "import headroom"` for
  * availability, then run {@link HEADROOM_BRIDGE} per compression. Honors
- * `OTTO_HEADROOM_PYTHON`; `compress()` runs locally (no network/API key).
+ * `OTTO_HEADROOM_PYTHON`; inference is local (no API key) and runs with
+ * `HF_HUB_OFFLINE=1` by default, so first use needs pre-cached model weights.
  */
 export function libraryHeadroomRunner(
   env: NodeJS.ProcessEnv = process.env,

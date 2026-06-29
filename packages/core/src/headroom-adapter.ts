@@ -72,6 +72,17 @@ function pythonBin(env: NodeJS.ProcessEnv): string {
 }
 
 /**
+ * Whether the compressor subprocess runs offline — Otto forces `HF_HUB_OFFLINE=1`
+ * by default, so it is offline unless the user explicitly sets a Hugging Face
+ * "online" value. Mirrors the value the runner injects (`env.HF_HUB_OFFLINE ?? "1"`)
+ * so {@link authorizeCompressor} knows whether a run can reach the network.
+ */
+export function headroomOffline(env: NodeJS.ProcessEnv = process.env): boolean {
+  const v = (env.HF_HUB_OFFLINE ?? "1").trim().toLowerCase();
+  return v !== "0" && v !== "false" && v !== "no" && v !== "off" && v !== "";
+}
+
+/**
  * The Python bridge driven in library mode: read the spill text on stdin, run it
  * through Headroom's `compress(messages, model)`, and write the compressed text to
  * stdout. Built line-by-line (Python is whitespace-sensitive) so it survives as a
@@ -339,7 +350,12 @@ export type CompressorAuthorization = {
  *   evidence bundle. Authorizing the resolved commands (not the static
  *   `tool.command`) closes the gap where `OTTO_HEADROOM_BIN` pointed at a
  *   policy-blocked binary, or an argument-specific pattern, that authorization
- *   never saw.
+ *   never saw;
+ * - when the run is **not** offline (the user set `HF_HUB_OFFLINE=0`, opting into
+ *   the in-run Hugging Face model download), the tool's `networkDomains` are
+ *   authorized against the repo's `allowedNetworkDomains` — so a network-restricted
+ *   repo denies the compressor rather than letting it reach Hugging Face ungoverned.
+ *   Offline (the default) reaches no network, so no domain check applies.
  *
  * Pure: the registry, config, policy, and `env` are injected (the loop passes the
  * process env). Default policy + no override always allows.
@@ -375,6 +391,17 @@ export function authorizeCompressor(
     if (!auth.allowed) {
       events.push(...auth.events);
       for (const v of auth.violations) kinds.add(v.kind);
+    }
+  }
+  // If the run opts OUT of offline mode, it may fetch the model from Hugging Face —
+  // authorize that network against repo policy so a restricted repo denies it.
+  if (!headroomOffline(env)) {
+    const net = authorizeToolInvocation(policy, tool, {
+      domains: tool.networkDomains,
+    });
+    if (!net.allowed) {
+      events.push(...net.events);
+      for (const v of net.violations) kinds.add(v.kind);
     }
   }
   if (events.length > 0) {

@@ -310,23 +310,68 @@ describe("authorizeCompressor (#192 part 2)", () => {
     expect(a.allowed).toBe(false);
     expect(a.events.length).toBeGreaterThan(0);
   });
+
+  // HF_HUB_OFFLINE=0 opts into the in-run Hugging Face download — which must then
+  // be gated by the repo's network policy, not silently allowed.
+  it("denies the in-run HF download when network policy excludes Hugging Face", () => {
+    const policy = {
+      ...DEFAULT_POLICY,
+      allowedNetworkDomains: ["internal.example"],
+    };
+    const denied = authorizeCompressor(
+      [headroomToolDefinition()],
+      noConfig,
+      policy,
+      { HF_HUB_OFFLINE: "0" }
+    );
+    expect(denied.allowed).toBe(false);
+    expect(denied.events.length).toBeGreaterThan(0);
+
+    // Same restrictive policy but offline (the default) → no network, so allowed.
+    const offline = authorizeCompressor(
+      [headroomToolDefinition()],
+      noConfig,
+      policy,
+      noEnv
+    );
+    expect(offline.allowed).toBe(true);
+  });
+
+  it("allows the in-run HF download under an unrestricted network policy", () => {
+    const a = authorizeCompressor(
+      [headroomToolDefinition()],
+      noConfig,
+      DEFAULT_POLICY,
+      { HF_HUB_OFFLINE: "0" }
+    );
+    expect(a.allowed).toBe(true);
+  });
 });
 
 // Real Headroom, no fake spawn — proves library mode actually compresses with the
-// kwargs above. Skipped where `headroom-ai` is not importable (most CI), so it can
-// never flake; run it locally after `pip install headroom-ai` to verify savings.
+// kwargs above. Skipped where `headroom-ai[ml]` is not importable (most CI), so it
+// can never flake; run it locally after `pip install "headroom-ai[ml]"` to verify
+// savings. Allows the one-time model download (HF_HUB_OFFLINE=0) with a generous
+// timeout, and uses a payload well above Headroom's ~250-token threshold.
 describe("library mode end-to-end", () => {
-  const realRunner = libraryHeadroomRunner();
+  const realRunner = libraryHeadroomRunner(
+    { ...process.env, HF_HUB_OFFLINE: "0" },
+    600_000
+  );
   const present = realRunner.available();
   const maybe = present ? it : it.skip;
 
-  maybe("reduces the payload on bulky, compressible content", () => {
-    const text =
-      "stale tool output: repeated filler line that headroom should shrink\n".repeat(
-        300
-      );
-    const out = realRunner.run({ key: "e2e", category: "command-log", text });
-    expect(out.ok).toBe(true);
-    expect(out.text.length).toBeLessThan(text.length); // actual token savings
-  });
+  maybe(
+    "reduces the payload on bulky, compressible content",
+    () => {
+      const text =
+        "stale tool output: repeated filler line that headroom should shrink\n".repeat(
+          300
+        );
+      const out = realRunner.run({ key: "e2e", category: "command-log", text });
+      expect(out.ok).toBe(true);
+      expect(out.text.length).toBeLessThan(text.length); // actual token savings
+    },
+    600_000
+  );
 });

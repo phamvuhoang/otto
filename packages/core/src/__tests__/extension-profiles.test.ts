@@ -65,7 +65,9 @@ describe("extension profile manifests", () => {
     const p = getProfile("context-saver")!;
     expect(p.tools.some((t) => t.name === "headroom")).toBe(true);
     expect(p.config.contextCompressor).toBe("headroom");
-    expect(p.requires).toContain("headroom-ai"); // local Python library, no API key
+    // Must require the [ml] extra — base headroom-ai leaves plain text unchanged.
+    expect(p.requires).toContain("headroom-ai[ml]");
+    expect(p.requires).not.toContain("headroom-ai"); // not the bare/base package
   });
 
   it("security-review tightens the safety policy", () => {

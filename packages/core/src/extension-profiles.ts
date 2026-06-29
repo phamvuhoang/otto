@@ -91,9 +91,9 @@ const PROFILES: ExtensionProfile[] = [
     sources: [],
     tools: [headroomToolDefinition()],
     config: { contextCompressor: "headroom" },
-    requires: ["python3", "headroom-ai"],
+    requires: ["python3", "headroom-ai[ml]"],
     followUp:
-      "Next: pip install headroom-ai (the local Python library — no API key), then otto-tools health to confirm it resolves.",
+      "Next: pip install 'headroom-ai[ml]' (local Python lib — base is passthrough; no API key), pre-warm the model once, then otto-tools health.",
   },
   {
     name: "security-review",

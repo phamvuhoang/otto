@@ -538,7 +538,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       compressor = createHeadroomSyncCompressor();
       if (!compressor.available) {
         process.stderr.write(
-          `${dim("note: --context-compressor headroom requested but Headroom is unavailable (need `pip install headroom-ai`, or set OTTO_HEADROOM_BIN) — continuing without compression")}\n`
+          `${dim('note: --context-compressor headroom requested but Headroom is unavailable (need `pip install "headroom-ai[ml]"`, or set OTTO_HEADROOM_BIN) — continuing without compression')}\n`
         );
         compressor = null;
       }

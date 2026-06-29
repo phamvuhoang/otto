@@ -154,8 +154,10 @@ export HEADROOM_MODEL=gpt-4o-mini          # optional: selects the tokenizer (de
 #    The kompress-base model (~260–600 MB) is fetched from Hugging Face on first
 #    use. Otto runs the compressor with HF_HUB_OFFLINE=1 by DEFAULT, so a governed
 #    run never performs that fetch (no ungoverned egress, no 30s-timeout blowout) —
-#    it uses cached weights or degrades cleanly. So pre-warm the cache ONCE up front:
-python -c "from headroom import compress; compress([{'role':'user','content':'warm'}], model='gpt-4o-mini', compress_user_messages=True, protect_recent=0)"
+#    it uses cached weights or degrades cleanly. So pre-warm the cache ONCE up
+#    front — the payload MUST exceed Headroom's ~250-token compression threshold or
+#    no model loads (and nothing downloads). Assert tokens_saved > 0:
+python -c "from headroom import compress; r=compress([{'role':'user','content':'lorem ipsum dolor sit amet '*200}], model='gpt-4o-mini', compress_user_messages=True, protect_recent=0); print('tokens_saved=', getattr(r, 'tokens_saved', 0)); assert getattr(r, 'tokens_saved', 0) > 0"
 #    (Or let Otto fetch in-run by setting HF_HUB_OFFLINE=0 — slower, ungoverned.
 #     HF_ENDPOINT=<mirror> points at a trusted mirror for air-gapped/gated nets.)
 #    Override the interpreter with OTTO_HEADROOM_PYTHON (e.g. a venv python).

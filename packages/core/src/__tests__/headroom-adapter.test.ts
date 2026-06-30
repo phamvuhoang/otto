@@ -346,20 +346,79 @@ describe("authorizeCompressor (#192 part 2)", () => {
     );
     expect(a.allowed).toBe(true);
   });
+
+  // HF reads HF_ENDPOINT directly, so authorization must check the RESOLVED host.
+  it("denies a HF_ENDPOINT host that network policy excludes", () => {
+    const policy = {
+      ...DEFAULT_POLICY,
+      allowedNetworkDomains: ["huggingface.co"],
+    };
+    const a = authorizeCompressor(
+      [headroomToolDefinition()],
+      noConfig,
+      policy,
+      {
+        HF_HUB_OFFLINE: "0",
+        HF_ENDPOINT: "https://evil.example",
+      }
+    );
+    expect(a.allowed).toBe(false);
+    expect(a.events.length).toBeGreaterThan(0);
+  });
+
+  // Otto's offline parsing must match HF's: only 1/true/yes/on are offline, so an
+  // unrecognized value runs ONLINE and must be authorized (not silently skipped).
+  it("treats an unrecognized HF_HUB_OFFLINE value as online (authorizes network)", () => {
+    const policy = {
+      ...DEFAULT_POLICY,
+      allowedNetworkDomains: ["internal.example"],
+    };
+    const a = authorizeCompressor(
+      [headroomToolDefinition()],
+      noConfig,
+      policy,
+      {
+        HF_HUB_OFFLINE: "maybe",
+      }
+    );
+    expect(a.allowed).toBe(false);
+  });
+
+  // Command mode (custom OTTO_HEADROOM_BIN) bypasses the Python library, so the HF
+  // network check must not apply — a restrictive network policy can't block it.
+  it("skips the HF network check in command mode", () => {
+    const policy = {
+      ...DEFAULT_POLICY,
+      allowedNetworkDomains: ["internal.example"],
+    };
+    const a = authorizeCompressor(
+      [headroomToolDefinition()],
+      noConfig,
+      policy,
+      {
+        OTTO_HEADROOM_BIN: "mybin",
+        HF_HUB_OFFLINE: "0",
+      }
+    );
+    expect(a.allowed).toBe(true);
+  });
 });
 
 // Real Headroom, no fake spawn — proves library mode actually compresses with the
-// kwargs above. Skipped where `headroom-ai[ml]` is not importable (most CI), so it
-// can never flake; run it locally after `pip install "headroom-ai[ml]"` to verify
-// savings. Allows the one-time model download (HF_HUB_OFFLINE=0) with a generous
-// timeout, and uses a payload well above Headroom's ~250-token threshold.
+// kwargs above. Gated behind OTTO_HEADROOM_E2E=1 (explicit opt-in) so the normal
+// suite never triggers the ~600 MB model download even on a machine where
+// `headroom-ai[ml]` is importable. Run it with:
+//   OTTO_HEADROOM_E2E=1 pnpm --filter @phamvuhoang/otto-core test -- headroom-adapter
+// Allows the one-time download (HF_HUB_OFFLINE=0) with a generous timeout, and uses
+// a payload well above Headroom's ~250-token threshold.
 describe("library mode end-to-end", () => {
+  const optedIn = process.env.OTTO_HEADROOM_E2E === "1";
   const realRunner = libraryHeadroomRunner(
     { ...process.env, HF_HUB_OFFLINE: "0" },
     600_000
   );
-  const present = realRunner.available();
-  const maybe = present ? it : it.skip;
+  // Short-circuit so `available()` (which spawns python) doesn't run unless opted in.
+  const maybe = optedIn && realRunner.available() ? it : it.skip;
 
   maybe(
     "reduces the payload on bulky, compressible content",

@@ -71,15 +71,42 @@ function pythonBin(env: NodeJS.ProcessEnv): string {
   return typeof p === "string" && p.length > 0 ? p : "python3";
 }
 
+/** The Hugging Face hosts the ML model is fetched from by default (no HF_ENDPOINT). */
+const HF_DEFAULT_DOMAINS = ["huggingface.co", "cdn-lfs.huggingface.co"];
+
 /**
- * Whether the compressor subprocess runs offline — Otto forces `HF_HUB_OFFLINE=1`
- * by default, so it is offline unless the user explicitly sets a Hugging Face
- * "online" value. Mirrors the value the runner injects (`env.HF_HUB_OFFLINE ?? "1"`)
- * so {@link authorizeCompressor} knows whether a run can reach the network.
+ * Whether the compressor subprocess runs offline. Otto forces `HF_HUB_OFFLINE=1`
+ * by default (the runner injects `env.HF_HUB_OFFLINE ?? "1"`), and this MUST match
+ * Hugging Face's own parsing so {@link authorizeCompressor}'s "can it reach the
+ * network?" matches reality: HF treats only `1`/`true`/`yes`/`on` (case-insensitive)
+ * as offline — every other value (e.g. `maybe`) is **online**. Treating an
+ * unrecognized value as offline would skip policy authorization while the run
+ * actually went online.
  */
 export function headroomOffline(env: NodeJS.ProcessEnv = process.env): boolean {
   const v = (env.HF_HUB_OFFLINE ?? "1").trim().toLowerCase();
-  return v !== "0" && v !== "false" && v !== "no" && v !== "off" && v !== "";
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
+
+/**
+ * The network host(s) the ML model fetch would ACTUALLY reach, resolved from env
+ * like Hugging Face does: `HF_ENDPOINT` (its host) overrides the default HF hosts.
+ * Authorizing the resolved endpoint — not the static `tool.networkDomains` — closes
+ * the gap where `HF_ENDPOINT=https://evil.example` would slip past a policy that
+ * only allows `huggingface.co`.
+ */
+export function headroomNetworkDomains(
+  env: NodeJS.ProcessEnv = process.env
+): string[] {
+  const ep = env.HF_ENDPOINT;
+  if (typeof ep === "string" && ep.length > 0) {
+    try {
+      return [new URL(ep).hostname];
+    } catch {
+      return [ep];
+    }
+  }
+  return [...HF_DEFAULT_DOMAINS];
 }
 
 /**
@@ -292,7 +319,7 @@ export function headroomToolDefinition(): ToolDefinition {
     // first use. Declared here for an honest inventory, but Otto does NOT proxy the
     // subprocess, so this is not runtime-enforced — pre-download + HF_HUB_OFFLINE=1
     // (or an HF_ENDPOINT mirror) to keep a run offline (docs/INTEGRATIONS.md §4).
-    networkDomains: ["huggingface.co", "cdn-lfs.huggingface.co"],
+    networkDomains: [...HF_DEFAULT_DOMAINS],
     writeRoots: [],
     secretRefs: [],
     approvalActions: [],
@@ -351,11 +378,13 @@ export type CompressorAuthorization = {
  *   `tool.command`) closes the gap where `OTTO_HEADROOM_BIN` pointed at a
  *   policy-blocked binary, or an argument-specific pattern, that authorization
  *   never saw;
- * - when the run is **not** offline (the user set `HF_HUB_OFFLINE=0`, opting into
- *   the in-run Hugging Face model download), the tool's `networkDomains` are
- *   authorized against the repo's `allowedNetworkDomains` — so a network-restricted
- *   repo denies the compressor rather than letting it reach Hugging Face ungoverned.
- *   Offline (the default) reaches no network, so no domain check applies.
+ * - in **library mode** only, when the run is **not** offline (the user set an
+ *   online `HF_HUB_OFFLINE`, opting into the in-run model download), the **resolved**
+ *   endpoint ({@link headroomNetworkDomains}, honoring `HF_ENDPOINT`) is authorized
+ *   against the repo's `allowedNetworkDomains` — so a network-restricted repo denies
+ *   the compressor rather than letting it reach an ungoverned host. Offline (the
+ *   default) reaches no network; command mode (a custom `OTTO_HEADROOM_BIN`) does
+ *   not use the Python library, so neither triggers the HF check.
  *
  * Pure: the registry, config, policy, and `env` are injected (the loop passes the
  * process env). Default policy + no override always allows.
@@ -393,12 +422,23 @@ export function authorizeCompressor(
       for (const v of auth.violations) kinds.add(v.kind);
     }
   }
-  // If the run opts OUT of offline mode, it may fetch the model from Hugging Face —
-  // authorize that network against repo policy so a restricted repo denies it.
-  if (!headroomOffline(env)) {
-    const net = authorizeToolInvocation(policy, tool, {
-      domains: tool.networkDomains,
-    });
+  // Library mode only: when the run opts OUT of offline mode it may fetch the model
+  // from Hugging Face — authorize the RESOLVED endpoint (honoring HF_ENDPOINT)
+  // against repo policy so a restricted repo denies it. Command mode (a custom
+  // OTTO_HEADROOM_BIN) bypasses the Python library, so the HF check doesn't apply.
+  const libraryMode = !(
+    typeof env.OTTO_HEADROOM_BIN === "string" &&
+    env.OTTO_HEADROOM_BIN.length > 0
+  );
+  if (libraryMode && !headroomOffline(env)) {
+    const resolved = headroomNetworkDomains(env);
+    // Scope the tool to the resolved endpoint so the gate is the repo policy
+    // (tool-scope check becomes a no-op rather than a stale-list false denial).
+    const net = authorizeToolInvocation(
+      policy,
+      { ...tool, networkDomains: resolved },
+      { domains: resolved }
+    );
     if (!net.allowed) {
       events.push(...net.events);
       for (const v of net.violations) kinds.add(v.kind);

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.31.0...otto-core-v0.32.0) (2026-07-01)
+
+
+### Features
+
+* **headroom:** make the integration real — library mode + tool-policy governance + env-aware health (closes [#192](https://github.com/phamvuhoang/otto/issues/192)) ([#193](https://github.com/phamvuhoang/otto/issues/193)) ([80cb9a4](https://github.com/phamvuhoang/otto/commit/80cb9a4b19e1e49a560d79c486e68e85e5c5b1e4))
+
 ## [0.31.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.30.0...otto-core-v0.31.0) (2026-06-27)
 
 

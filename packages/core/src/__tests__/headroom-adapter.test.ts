@@ -110,15 +110,16 @@ describe("libraryHeadroomRunner", () => {
     text: "verbose original text",
   };
 
-  it("probes availability via the ML backend (`import headroom, torch`)", () => {
+  it("probes availability via Headroom's is_kompress_available() (the ML backend)", () => {
     const spawn = fakeSpawn({ status: 0 });
     const r = libraryHeadroomRunner({}, 30_000, spawn);
     expect(r.available()).toBe(true);
-    expect(spawn).toHaveBeenCalledWith(
-      "python3",
-      ["-c", "import headroom, torch"], // torch = the [ml] extra, not base
-      expect.objectContaining({ timeout: 5_000 })
-    );
+    const [bin, argv, opts] = spawn.mock.calls[0];
+    expect(bin).toBe("python3");
+    expect(argv[0]).toBe("-c");
+    // Real backend check, not a bare `import headroom` (base) or `import torch`.
+    expect(argv[1]).toContain("is_kompress_available");
+    expect(opts.timeout).toBe(5_000);
   });
 
   it("available() is false on non-zero exit or a spawn throw", () => {
@@ -229,7 +230,7 @@ describe("headroomToolDefinition", () => {
     expect(t.healthCheck).toContain("node -e");
     expect(t.healthCheck).toContain("OTTO_HEADROOM_BIN");
     expect(t.healthCheck).toContain("OTTO_HEADROOM_PYTHON");
-    expect(t.healthCheck).toContain("import headroom, torch"); // verifies [ml], not base
+    expect(t.healthCheck).toContain("is_kompress_available"); // verifies [ml], not base
     expect(t.healthCheck).not.toContain("if ["); // not POSIX-shell-only
   });
 });

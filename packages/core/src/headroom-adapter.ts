@@ -30,9 +30,11 @@ import type { ToolConfig, ToolDefinition } from "./tools.js";
  *   `headroom-ai[ml]` extra; the base package leaves plain text unchanged).
  *   Inference is **local** with **no per-call API/cost** (`HEADROOM_MODEL` only
  *   selects the tokenizer), but the ML model is **downloaded once from Hugging
- *   Face** (~260–600 MB) on first use — a network fetch Otto does not proxy or
- *   gate, so pre-warm it (`HF_HUB_OFFLINE=1` / `HF_ENDPOINT`). The interpreter is
- *   overridable via `OTTO_HEADROOM_PYTHON`.
+ *   Face** (~260–600 MB) on first use. Otto forces offline by default (no fetch);
+ *   when you opt in ({@link authorizeCompressor} pre-authorizes the resolved
+ *   endpoint against policy + declared domains, though it cannot intercept the
+ *   subprocess's traffic), so pre-warm it (`HF_HUB_OFFLINE=0` / `HF_ENDPOINT`). The
+ *   interpreter is overridable via `OTTO_HEADROOM_PYTHON`.
  * - **command mode:** when `OTTO_HEADROOM_BIN` is set, shell out to that binary
  *   with `compress --category <c>` (stdin → compressed stdout) — an escape hatch
  *   for a custom compressor that already speaks this contract.
@@ -73,6 +75,17 @@ function pythonBin(env: NodeJS.ProcessEnv): string {
 
 /** The Hugging Face hosts the ML model is fetched from by default (no HF_ENDPOINT). */
 const HF_DEFAULT_DOMAINS = ["huggingface.co", "cdn-lfs.huggingface.co"];
+
+/**
+ * Python one-liner that exits 0 only when Headroom's ML compressor can actually run.
+ * `import headroom` passes on the passthrough-only base package, and `import torch`
+ * can pass with torch installed independently while other deps are missing — so we
+ * defer to Headroom's own `is_kompress_available()` (checks the real ONNX **or**
+ * PyTorch backend stack). Contains no quotes, so it embeds cleanly in the `node -e`
+ * health probe. A changed module path fails closed (reports unavailable → degrade).
+ */
+const KOMPRESS_PROBE =
+  "import sys; from headroom.transforms.kompress_compressor import is_kompress_available; sys.exit(0 if is_kompress_available() else 1)";
 
 /**
  * Whether the compressor subprocess runs offline. Otto forces `HF_HUB_OFFLINE=1`
@@ -165,11 +178,11 @@ function fromSpawn(
 }
 
 /**
- * Library-mode runner (default): probe `python3 -c "import headroom, torch"` for
- * availability (torch = the `[ml]` backend; base is passthrough-only), then run
- * {@link HEADROOM_BRIDGE} per compression. Honors `OTTO_HEADROOM_PYTHON`; inference
- * is local (no API key) and runs with `HF_HUB_OFFLINE=1` by default, so first use
- * needs pre-cached model weights.
+ * Library-mode runner (default): probe {@link KOMPRESS_PROBE} for availability
+ * (Headroom's `is_kompress_available()` — the real ML backend, not just an import;
+ * base is passthrough-only), then run {@link HEADROOM_BRIDGE} per compression.
+ * Honors `OTTO_HEADROOM_PYTHON`; inference is local (no API key) and runs with
+ * `HF_HUB_OFFLINE=1` by default, so first use needs pre-cached model weights.
  */
 export function libraryHeadroomRunner(
   env: NodeJS.ProcessEnv = process.env,
@@ -180,12 +193,12 @@ export function libraryHeadroomRunner(
   return {
     available: () => {
       try {
-        // Require the ML backend (`torch`), not just `import headroom`: the base
-        // package imports fine but only does passthrough, so a base-only install
-        // must report unavailable (clean degrade) rather than silently not compress.
+        // Verify the ML backend can actually run ({@link KOMPRESS_PROBE}), not just
+        // `import headroom`: the base package imports fine but only does passthrough,
+        // so a base-only (or partial) install must report unavailable (clean degrade)
+        // rather than silently not compress.
         return (
-          spawn(py, ["-c", "import headroom, torch"], { timeout: 5_000 })
-            .status === 0
+          spawn(py, ["-c", KOMPRESS_PROBE], { timeout: 5_000 }).status === 0
         );
       } catch {
         return false;
@@ -199,8 +212,9 @@ export function libraryHeadroomRunner(
           timeout: timeoutMs,
           maxBuffer: 64 * 1024 * 1024,
           // Run offline by DEFAULT (#192): the ML model is a one-time Hugging Face
-          // download Otto cannot proxy/gate and that would blow `timeoutMs` mid-run.
-          // Forcing HF_HUB_OFFLINE means a governed run never performs that fetch —
+          // download Otto cannot intercept (authorizeCompressor pre-authorizes the
+          // endpoint but does not proxy subprocess traffic) and that would blow
+          // `timeoutMs` mid-run. Forcing HF_HUB_OFFLINE means a run never fetches —
           // it uses pre-cached weights or degrades cleanly. Respect an explicit
           // value (set HF_HUB_OFFLINE=0 to allow the in-run download).
           // Force HF_HUB_DISABLE_XET=1 (unconditionally): modern huggingface_hub
@@ -343,11 +357,11 @@ export function headroomToolDefinition(): ToolDefinition {
     timeoutMs: 30_000,
     // Mirror runtime resolution (#192 part 3) cross-platform: a `node -e` probe
     // (node is always present — Otto is a Node CLI) honors the same env a run does
-    // — `$OTTO_HEADROOM_BIN --version` in command mode, else the (overridable)
-    // interpreter's `import headroom, torch`. Requiring torch verifies the ML
+    // — `$OTTO_HEADROOM_BIN --version` in command mode, else Headroom's own
+    // `is_kompress_available()` ({@link KOMPRESS_PROBE}), which verifies the ML
     // backend (`headroom-ai[ml]`) — base is passthrough-only and would pass a bare
     // `import headroom`. No POSIX shell builtins, so it works under cmd.exe too.
-    healthCheck: `node -e "const{execFileSync}=require('child_process');const b=process.env.OTTO_HEADROOM_BIN;try{execFileSync(b||process.env.OTTO_HEADROOM_PYTHON||'python3',b?['--version']:['-c','import headroom, torch'],{stdio:'ignore'})}catch(e){process.exit(1)}"`,
+    healthCheck: `node -e "const{execFileSync}=require('child_process');const b=process.env.OTTO_HEADROOM_BIN;try{execFileSync(b||process.env.OTTO_HEADROOM_PYTHON||'python3',b?['--version']:['-c','${KOMPRESS_PROBE}'],{stdio:'ignore'})}catch(e){process.exit(1)}"`,
     enabled: true,
   };
 }

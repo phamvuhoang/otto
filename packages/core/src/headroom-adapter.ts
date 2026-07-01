@@ -198,7 +198,16 @@ export function libraryHeadroomRunner(
           // Forcing HF_HUB_OFFLINE means a governed run never performs that fetch —
           // it uses pre-cached weights or degrades cleanly. Respect an explicit
           // value (set HF_HUB_OFFLINE=0 to allow the in-run download).
-          env: { ...env, HF_HUB_OFFLINE: env.HF_HUB_OFFLINE ?? "1" },
+          // Force HF_HUB_DISABLE_XET=1 (unconditionally): modern huggingface_hub
+          // routes transfers through hf_xet's own hosts, which the tool's declared
+          // networkDomains do NOT cover — disabling Xet keeps the transfer on the
+          // classic huggingface.co / cdn-lfs.huggingface.co path we authorize, so
+          // policy authorization actually bounds the network surface.
+          env: {
+            ...env,
+            HF_HUB_OFFLINE: env.HF_HUB_OFFLINE ?? "1",
+            HF_HUB_DISABLE_XET: "1",
+          },
         }),
         input.text
       ),
@@ -313,12 +322,15 @@ export function headroomToolDefinition(): ToolDefinition {
       "OTTO_HEADROOM_PYTHON",
       "HEADROOM_MODEL",
       "HF_HUB_OFFLINE",
+      "HF_HUB_DISABLE_XET",
       "HF_ENDPOINT",
     ],
     // The ML compressor fetches the kompress-base weights from Hugging Face on
     // first use. Declared here for an honest inventory, but Otto does NOT proxy the
     // subprocess, so this is not runtime-enforced — pre-download + HF_HUB_OFFLINE=1
     // (or an HF_ENDPOINT mirror) to keep a run offline (docs/INTEGRATIONS.md §4).
+    // Otto forces HF_HUB_DISABLE_XET=1 so transfers stay on these hosts (Xet uses
+    // its own hosts these would not cover).
     networkDomains: [...HF_DEFAULT_DOMAINS],
     writeRoots: [],
     secretRefs: [],
@@ -432,13 +444,11 @@ export function authorizeCompressor(
   );
   if (libraryMode && !headroomOffline(env)) {
     const resolved = headroomNetworkDomains(env);
-    // Scope the tool to the resolved endpoint so the gate is the repo policy
-    // (tool-scope check becomes a no-op rather than a stale-list false denial).
-    const net = authorizeToolInvocation(
-      policy,
-      { ...tool, networkDomains: resolved },
-      { domains: resolved }
-    );
+    // Authorize the RESOLVED endpoint against BOTH the repo policy AND the tool's
+    // DECLARED networkDomains (pass the original `tool`). A HF_ENDPOINT outside the
+    // registry declaration is denied even under an unrestricted repo policy — a
+    // trusted mirror must be added to the tool's networkDomains explicitly.
+    const net = authorizeToolInvocation(policy, tool, { domains: resolved });
     if (!net.allowed) {
       events.push(...net.events);
       for (const v of net.violations) kinds.add(v.kind);

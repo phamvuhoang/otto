@@ -178,6 +178,15 @@ describe("libraryHeadroomRunner", () => {
     libraryHeadroomRunner({ HF_HUB_OFFLINE: "0" }, 30_000, spawn2).run(input);
     expect(spawn2.mock.calls[0][2].env.HF_HUB_OFFLINE).toBe("0");
   });
+
+  it("forces HF_HUB_DISABLE_XET=1 so transfers stay on the declared hosts", () => {
+    const spawn = fakeSpawn({ status: 0, stdout: "z" });
+    // Even if the caller tries to enable Xet, Otto forces it off.
+    libraryHeadroomRunner({ HF_HUB_DISABLE_XET: "0" }, 30_000, spawn).run(
+      input
+    );
+    expect(spawn.mock.calls[0][2].env.HF_HUB_DISABLE_XET).toBe("1");
+  });
 });
 
 describe("resolveHeadroomRunner", () => {
@@ -361,6 +370,20 @@ describe("authorizeCompressor (#192 part 2)", () => {
         HF_HUB_OFFLINE: "0",
         HF_ENDPOINT: "https://evil.example",
       }
+    );
+    expect(a.allowed).toBe(false);
+    expect(a.events.length).toBeGreaterThan(0);
+  });
+
+  // Even under an UNRESTRICTED repo policy, an HF_ENDPOINT outside the tool's
+  // declared networkDomains must be denied — the registry scope, not just repo
+  // policy, bounds the endpoint (a mirror must be added to the tool explicitly).
+  it("denies an out-of-registry HF_ENDPOINT under DEFAULT_POLICY (tool scope holds)", () => {
+    const a = authorizeCompressor(
+      [headroomToolDefinition()],
+      noConfig,
+      DEFAULT_POLICY,
+      { HF_HUB_OFFLINE: "0", HF_ENDPOINT: "https://evil.example" }
     );
     expect(a.allowed).toBe(false);
     expect(a.events.length).toBeGreaterThan(0);

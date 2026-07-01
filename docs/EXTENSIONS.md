@@ -9,7 +9,7 @@ Curated, lockable bundles that combine the Phase-4 primitives — skill sources 
 - `.otto/config.json` — activation / compressor defaults
 - `.otto/policy.json` — safety-policy additions (union-merged, never relaxed)
 
-A profile is **generated config, not hidden behavior**: inspect it, edit it, diff it, roll it back. Enabling a profile does **not** auto-trust anything — a registered source is still imported `unverified` and must clear the P17 gate before P18 will inject it; a registered tool's **invocations** are policy-scoped. (One exception: the Headroom **runtime compressor** is enabled straight from `contextCompressor` config — it is **not** gated per-stage through tool policy; see [#192](https://github.com/phamvuhoang/otto/issues/192).)
+A profile is **generated config, not hidden behavior**: inspect it, edit it, diff it, roll it back. Enabling a profile does **not** auto-trust anything — a registered source is still imported `unverified` and must clear the P17 gate before P18 will inject it; a registered tool's **invocations** are policy-scoped. (Nuance for the Headroom **runtime compressor**: it's enabled from `contextCompressor` config and governed by the registered tool's `enabled` flag + `.otto/policy.json`, but it is **not** _stage_-gated — it runs at the render boundary, not per stage.)
 
 > Want a from-scratch, per-pack walkthrough (Superpowers, Product-Manager-Skills, a single Cursor skill, Headroom) — clone → register → validate → activate, with the gotchas? See **[INTEGRATIONS.md](./INTEGRATIONS.md)**.
 
@@ -23,21 +23,21 @@ git status --short .otto/                  # review what changed — new files a
 
 ## Profiles
 
-| Profile              | Writes                                                              | For                                                                   |
-| -------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `coding-superpowers` | `superpowers` source (pinned) + `skills.{enabled,implement,review}` | Superpowers coding methodology on the implement + review stages.      |
-| `pm-planning`        | `pm-skills` source (pinned) + `skills.{enabled,plan,report}`        | PM frameworks (roadmap, prioritization, PRD, framing) on plan/report. |
-| `context-saver`      | `headroom` tool + `contextCompressor: "headroom"`                   | Local-first token compression with P7 context-report defaults.        |
-| `security-review`    | `skills.{enabled,review}` + stricter `.otto/policy.json`            | Security/structural review posture + tighter governance.              |
+| Profile              | Writes                                                              | For                                                                             |
+| -------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `coding-superpowers` | `superpowers` source (pinned) + `skills.{enabled,implement,review}` | Superpowers coding methodology on the implement + review stages.                |
+| `pm-planning`        | `pm-skills` source (pinned) + `skills.{enabled,plan,report}`        | PM frameworks (roadmap, prioritization, PRD, framing) on plan/report.           |
+| `context-saver`      | `headroom` tool + `contextCompressor: "headroom"`                   | Headroom token compression (local, no API key) with P7 context-report defaults. |
+| `security-review`    | `skills.{enabled,review}` + stricter `.otto/policy.json`            | Security/structural review posture + tighter governance.                        |
 
 ## Compatibility matrix
 
-| Profile              | Source / tool                                  | Pinned ref | Required local binaries | Tested Otto | Known limits                                                                                             |
-| -------------------- | ---------------------------------------------- | ---------- | ----------------------- | ----------- | -------------------------------------------------------------------------------------------------------- |
-| `coding-superpowers` | `github.com/obra/superpowers` (git)            | `v6.0.3`   | `git`                   | 0.x         | Git source `sync` is not implemented yet (P16 starts local) — vendor locally or wait for git fetch.      |
-| `pm-planning`        | `github.com/deanpeters/Product-Manager-Skills` | `v1.0.0`   | `git`                   | 0.x         | Same git-`sync` limitation; PM skills classify `stage-scoped` to plan/report.                            |
-| `context-saver`      | `headroom` (command tool)                      | n/a        | `headroom`              | 0.x         | `otto-tools health` fails until the `headroom` binary is installed; the run degrades cleanly without it. |
-| `security-review`    | policy only                                    | n/a        | none                    | 0.x         | Pairs with `--review-panel`; review the generated `.otto/policy.json` and tighten further.               |
+| Profile              | Source / tool                                  | Pinned ref | Required local binaries       | Tested Otto | Known limits                                                                                                                                                                                                                                                                     |
+| -------------------- | ---------------------------------------------- | ---------- | ----------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `coding-superpowers` | `github.com/obra/superpowers` (git)            | `v6.0.3`   | `git`                         | 0.x         | Git source `sync` is not implemented yet (P16 starts local) — vendor locally or wait for git fetch.                                                                                                                                                                              |
+| `pm-planning`        | `github.com/deanpeters/Product-Manager-Skills` | `v1.0.0`   | `git`                         | 0.x         | Same git-`sync` limitation; PM skills classify `stage-scoped` to plan/report.                                                                                                                                                                                                    |
+| `context-saver`      | `headroom` (library mode)                      | n/a        | `python3` + `headroom-ai[ml]` | 0.x         | Local inference, no API key (`model` only selects the tokenizer), but first use downloads the kompress-base model (~260–600 MB) from Hugging Face — pre-warm + `HF_HUB_OFFLINE=1`. `otto-tools health` fails until `headroom-ai[ml]` is importable; degrades cleanly without it. |
+| `security-review`    | policy only                                    | n/a        | none                          | 0.x         | Pairs with `--review-panel`; review the generated `.otto/policy.json` and tighten further.                                                                                                                                                                                       |
 
 > The pinned refs live in one place (`extension-profiles.ts`) so this matrix and the manifests cannot drift. Until git-source `sync` lands, register the source then point it at a local checkout (`otto-skills sources add <name> <path> --type local`) to import.
 
@@ -52,16 +52,17 @@ otto-skills validate <skill>          # gate → afk-safe | interactive-only | s
 otto-afk --use-skills "./plan.md" 10  # only validated, eligible skills are injected
 ```
 
-For `context-saver`, install the binary and confirm it resolves:
+For `context-saver`, install the Headroom library with the `[ml]` extra (local inference, no API key; first use downloads the model from Hugging Face — pre-warm it), then confirm it resolves:
 
 ```bash
+pip install "headroom-ai[ml]"         # ML text compressor (base = passthrough); no API key
 otto-extensions init context-saver
-otto-tools health                     # runs the LITERAL `headroom --version` — ignores
-#                                       OTTO_HEADROOM_BIN (#192), so it can disagree with a run
+otto-tools health                     # mirrors a run's binary resolution — honors
+#                                       OTTO_HEADROOM_BIN / OTTO_HEADROOM_PYTHON
 otto-afk "./plan.md" 10               # the compressor is now the config default
 ```
 
-The `.otto/tools/headroom.json` entry is an **inspection/health** surface. The runtime enables the compressor straight from the `contextCompressor` config — it is **not** gated per-stage through tool policy ([#192](https://github.com/phamvuhoang/otto/issues/192)).
+The `.otto/tools/headroom.json` entry is the **inspection/health** surface **and** a governance hook: disabling the tool (registry `enabled: false` or a config override) or blocking its command in `.otto/policy.json` stops the compressor. It is **not** _stage_-gated, though — the compressor runs at the render boundary, not per stage.
 
 ## Update, lock & roll back
 

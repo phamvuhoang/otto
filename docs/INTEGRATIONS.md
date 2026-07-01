@@ -143,30 +143,48 @@ The skill now shapes the reviewer stage; `otto-inspect latest` shows it under "S
 
 ## 4. Headroom (context-compression **tool**)
 
-Headroom is a **tool**, not a skill — it compresses token-heavy `@spill` content (issue bodies, comments, diffs) before the agent reads them, reversibly. You enable it with `--context-compressor headroom` (or `OTTO_CONTEXT_COMPRESSOR` / config). `otto-extensions init context-saver` also registers a `.otto/tools/headroom.json` entry you can `otto-tools list`/`health` — but note the runtime builds the compressor straight from that config flag; it is **not** gated per-stage through tool policy ([#192](https://github.com/phamvuhoang/otto/issues/192)).
+Headroom is a **tool**, not a skill — it compresses token-heavy `@spill` content (issue bodies, comments, diffs) before the agent reads them, reversibly. You enable it with `--context-compressor headroom` (or `OTTO_CONTEXT_COMPRESSOR` / config). Otto drives Headroom's real `compress()` **library** directly (no shim); inference runs **locally** with **no per-call API or cost** (`HEADROOM_MODEL` only selects the tokenizer). Two caveats: it needs the **`headroom-ai[ml]`** extra (the base package leaves plain text unchanged), and the ML model is **downloaded once from Hugging Face** (~260–600 MB) on first use. Otto forces offline by default (a run performs no fetch); when you opt into the in-run download it **pre-authorizes** the resolved endpoint against `.otto/policy.json` + the tool's declared domains (though it cannot intercept the subprocess's actual traffic) — so pre-warm it (step 1 below). `otto-extensions init context-saver` also registers a `.otto/tools/headroom.json` entry you can `otto-tools list`/`health` — and that entry **governs** the compressor: disabling the tool or blocking its command in `.otto/policy.json` stops it. It is **not** _stage_-gated, though — the compressor runs at the render boundary, not per stage.
 
 ```bash
-# 1. Install/point at a `headroom` binary. Otto's command mode expects exactly:
-#       headroom --version                 (health)
-#       headroom compress --category <c>   (content on stdin → compressed text on stdout)
-#    Upstream headroom-ai is proxy/library-first and may NOT expose `compress` — shim it
-#    onto PATH (or via OTTO_HEADROOM_BIN). See #192. Missing/mismatched → degrades cleanly.
+# 1. Install the real library WITH the ML extra — the base package leaves plain
+#    text unchanged. Otto (library mode, the default) spawns `python3 -c` calling
+#    `from headroom import compress` — local inference, no API key.
+pip install "headroom-ai[ml]"
+export HEADROOM_MODEL=gpt-4o-mini          # optional: selects the tokenizer (default)
+#    The kompress-base model (~260–600 MB) is fetched from Hugging Face on first
+#    use. Otto runs the compressor with HF_HUB_OFFLINE=1 by DEFAULT, so a governed
+#    run never performs that fetch (no egress at all, no 30s-timeout blowout) —
+#    it uses cached weights or degrades cleanly. So pre-warm the cache ONCE up
+#    front — the payload MUST exceed Headroom's ~250-token compression threshold or
+#    no model loads (and nothing downloads). Assert tokens_saved > 0:
+python -c "from headroom import compress; r=compress([{'role':'user','content':'lorem ipsum dolor sit amet '*200}], model='gpt-4o-mini', compress_user_messages=True, protect_recent=0); print('tokens_saved=', getattr(r, 'tokens_saved', 0)); assert getattr(r, 'tokens_saved', 0) > 0"
+#    (Or let Otto fetch in-run by setting HF_HUB_OFFLINE=0 — the resolved endpoint
+#     is then authorized against .otto/policy.json AND the tool's declared
+#     networkDomains. Otto forces HF_HUB_DISABLE_XET=1 so transfers stay on the
+#     declared huggingface.co / cdn-lfs.huggingface.co hosts. To use a mirror, set
+#     HF_ENDPOINT=<mirror> AND add its host to the headroom tool's networkDomains —
+#     an endpoint outside the declaration is denied even under an open policy.)
+#    Override the interpreter with OTTO_HEADROOM_PYTHON (e.g. a venv python).
+#    Escape hatch: set OTTO_HEADROOM_BIN=<bin> to use a custom compressor instead —
+#    Otto then runs `<bin> compress --category <c>` (stdin → compressed stdout).
 
 # 2. Register the tool + set the compressor default
 otto-extensions init context-saver        # writes .otto/tools/headroom.json + config
 #   (or by hand: .otto/config.json { "contextCompressor": "headroom" })
 
-# 3. Confirm availability (inspection only — not a runtime gate; see #192)
+# 3. Confirm availability
 otto-tools list                            # headroom [command]
-otto-tools health                          # runs the LITERAL `headroom --version` — ignores
-#                                            OTTO_HEADROOM_BIN, so it can disagree with a run
+otto-tools health                          # mirrors a run's binary resolution — honors
+#                                            OTTO_HEADROOM_BIN / OTTO_HEADROOM_PYTHON
 
 # 4. Run — compression happens at the @spill boundary
 otto-afk --context-compressor headroom "./docs/plans/feature.md" 10
 #   or persistently: OTTO_CONTEXT_COMPRESSOR=headroom, or the config above
 ```
 
-**Inspectability:** originals are retained under `.otto/runs/<id>/compressed/`; tokens before/after, savings, and latency are recorded and surfaced in `otto-afk --context-report`. A missing or failing `headroom` **degrades cleanly** to normal behavior with a warning — never a broken run.
+**When it pays off:** compression is local (no API cost), so the only question is reduction — Headroom shrinks **large, repetitive spills** (big diffs, long issue bodies) the most, and may barely move small ones. Confirm real savings in `--context-report`.
+
+**Inspectability:** originals are retained under `.otto/runs/<id>/compressed/`; tokens before/after, savings, and latency are recorded and surfaced in `otto-afk --context-report`. A missing library (or a mismatched custom binary) **degrades cleanly** to normal behavior with a warning — never a broken run.
 
 ---
 

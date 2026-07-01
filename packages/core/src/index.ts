@@ -182,11 +182,19 @@ export {
   type SyncContextCompressor,
 } from "./context-compressor.js";
 export {
+  HEADROOM_BRIDGE,
   HEADROOM_VERSION,
+  authorizeCompressor,
   createHeadroomCompressor,
   createHeadroomSyncCompressor,
   defaultHeadroomRunner,
+  headroomCommands,
+  headroomNetworkDomains,
+  headroomOffline,
   headroomToolDefinition,
+  libraryHeadroomRunner,
+  resolveHeadroomRunner,
+  type CompressorAuthorization,
   type HeadroomRunner,
 } from "./headroom-adapter.js";
 export {

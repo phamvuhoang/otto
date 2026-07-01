@@ -260,7 +260,7 @@ The rest of this section is the detail behind each row:
 - 🛠️ **It gives you an operator view.** A CLI-first cockpit over the evidence bundles: `otto-runs list` for a one-row-per-run summary (status, iterations, cost, elapsed), `otto-inspect [latest]` for one run's report, `otto-explain [latest]` to re-render any run in plain language a non-engineer can verify, `otto-tail [latest]` to attach to a running loop and watch a live status tree (prints the done card once it finalizes), and `otto-eval compare <run-a> <run-b>` to A/B two past runs side-by-side **without re-paying for a run**. `--explain-routing` prints the adaptive router's per-iteration reasoning (change class, risk, chosen review depth) so a routing decision is never a black box. The in-run console is quiet by default (one terse line per meaningful action — edits, commits, test results, errors); `--verbose` restores the full firehose.
 - 🧩 **It can turn repeated workflows into skills.** Stable, repeated procedures (release flow, test bootstrap, a migration pattern) can be promoted into git-tracked `.otto/skills/<name>/` packages — instructions + metadata + constraints + a last-validated run. `otto-skills candidates` suggests them from runs that succeeded the same way twice; `otto-skills why <changed-files>` shows which skills retrieval would pick and **why** (by capability, touched files, and change risk). A skill must be **validated before it is eligible**, and stale skills are flagged rather than reapplied.
 - 🧮 **It can spend the cheapest model that does the job.** Opt-in `--model-routing` routes each stage to a model **tier** — `cheap` for docs/test-only changes, `mid` for ordinary code, `strong` for design/review/security — and **escalates a tier on repeated failure**, so a wedged run climbs to a stronger model on its own. A pinned `--model`/`OTTO_MODEL` always wins and disables routing. Pure, deterministic tier selection; the ladder (`haiku`/`sonnet`/`opus` by default) is overridable per tier.
-- 🗜️ **It can compress token-heavy context — reversibly.** Opt-in `--context-compressor headroom` routes large `@spill` content (issue bodies, comments, diffs) through a local [Headroom](https://github.com/headroomlabs-ai/headroom) binary before the agent reads it, cutting input tokens on long runs. It **never hides evidence**: every compression retains the original under the run bundle (`.otto/runs/<id>/compressed/`) and records tokens before/after, savings, and latency as a tool-usage record surfaced in `--context-report`. You enable it from the `--context-compressor` flag / `OTTO_CONTEXT_COMPRESSOR` / `.otto/config.json`, never from personal config. (`otto-extensions init context-saver` also drops a `.otto/tools/headroom.json` entry you can `otto-tools list`/`health`, but that's an **inspection/health** surface — the runtime builds the compressor from config; it is **not** gated per-stage through tool policy: see [#192](https://github.com/phamvuhoang/otto/issues/192).) Off by default; a missing/failed `headroom` **degrades cleanly** to today's behavior with a clear warning, not a broken run.
+- 🗜️ **It can compress token-heavy context — reversibly.** Opt-in `--context-compressor headroom` routes large `@spill` content (issue bodies, comments, diffs) through [Headroom](https://github.com/headroomlabs-ai/headroom)'s `compress()` library before the agent reads it, cutting input tokens on long runs. Inference is **local** (`pip install "headroom-ai[ml]"`; no API key — `HEADROOM_MODEL` only selects the tokenizer), so it shrinks large, repetitive spills the most — confirm savings in `--context-report`. (The model is fetched from Hugging Face on first use; Otto runs the compressor with `HF_HUB_OFFLINE=1` by default so a run never downloads mid-run — pre-warm the cache once.) It **never hides evidence**: every compression retains the original under the run bundle (`.otto/runs/<id>/compressed/`) and records tokens before/after, savings, and latency as a tool-usage record surfaced in `--context-report`. You enable it from the `--context-compressor` flag / `OTTO_CONTEXT_COMPRESSOR` / `.otto/config.json`, never from personal config. (`otto-extensions init context-saver` also drops a `.otto/tools/headroom.json` entry you can `otto-tools list`/`health`; that entry also **governs** the compressor — disable the tool or block its command in `.otto/policy.json` to stop it — though it is **not** _stage_-gated, since it runs at the render boundary.) Off by default; a missing library **degrades cleanly** to today's behavior with a clear warning, not a broken run.
 - 🪢 **It can parallelize independent work.** When a plan ships a machine-readable task graph (`.otto/tasks/<key>/tasks.json`, authored by `--plan`), opt-in `--fan-out` runs the independent tasks as **isolated git-worktree sub-agents** (each with its own bounded context), then cherry-picks their commits back onto the workspace — **serially, with a hard fallback**: any merge conflict or sub-agent failure defers that task to the normal sequential loop, so fan-out never leaves the tree half-merged. Worst case it degrades to today's behavior.
 - 📣 **It can build in public — safely.** Opt-in per repo, at the end of a run Otto can turn one generic craft learning into a short "field note" and publish it to **Threads** ("a coding agent's field notes"). Every candidate passes an **airtight, default-deny secrecy gate** — a deterministic deny-list (secrets, tokens, paths, code, URLs, the repo's own names, plus your `.otto/policy.json` secret patterns), a generalization check, and an adversarial LLM judge biased to refuse — and **a post that cannot be proven safe is never sent** (zero-leak is the hard gate). The sandboxed agent only ever produces text; the harness owns the gate and the network. **Draft-only by default** (screened notes land in `.otto/journal/drafts/`); actually posting needs an explicit **double opt-in**.
 
@@ -404,16 +404,26 @@ OTTO_MODEL=claude-opus-4-8 otto-afk --model-routing "./docs/plans/feature.md" 10
 # Conservative render-time prompt compaction + token reporting
 otto-afk --token-mode reduce "./docs/plans/feature.md" 5
 
-# Compress token-heavy spilled content (issue bodies, comments, diffs) through a
-# local Headroom binary — reversible: originals are retained under the run bundle
-# and the savings show up in --context-report. Off by default; degrades cleanly
-# (a clear warning, no broken run) if `headroom` is not installed.
+# Compress token-heavy spilled content (issue bodies, comments, diffs) through
+# Headroom's compress() library — reversible: originals are retained under the run
+# bundle and the savings show up in --context-report. Inference is LOCAL (no API
+# key — `model` only selects the tokenizer); install the ML extra (base = passthrough):
+pip install "headroom-ai[ml]"
+# The model (~260-600 MB) is fetched from Hugging Face on first use. Otto runs the
+# compressor with HF_HUB_OFFLINE=1 by default, so a run never downloads mid-run
+# (no egress / timeout blowout) — pre-warm the cache once first (see
+# docs/INTEGRATIONS.md §4). Set HF_HUB_OFFLINE=0 to allow the in-run fetch: the
+# resolved endpoint is then authorized against .otto/policy.json + the tool's
+# declared networkDomains (HF_HUB_DISABLE_XET=1 is forced to bound the surface).
 otto-afk --context-compressor headroom "./docs/plans/feature.md" 10
 # or set it per-shell / per-repo:
 OTTO_CONTEXT_COMPRESSOR=headroom otto-afk "./docs/plans/feature.md" 10
 # .otto/config.json: { "contextCompressor": "headroom" }
-# context-saver also registers .otto/tools/headroom.json for inspection/health (otto-tools
-# list/health) — the runtime enables it from config, NOT per-stage tool policy. See #192.
+# Off by default; degrades cleanly (a clear warning, no broken run) if the library
+# is missing. Override the interpreter with OTTO_HEADROOM_PYTHON; set OTTO_HEADROOM_BIN
+# to use a custom `compress --category` binary instead of the library.
+# context-saver also registers .otto/tools/headroom.json (otto-tools list/health); that entry
+# governs the compressor (its `enabled` flag + .otto/policy.json), but is NOT per-stage gated.
 ```
 
 ### 5. Govern memory, safety & skills
@@ -470,7 +480,7 @@ otto-extensions init context-saver              # writes normal .otto/ config �
 
 #### When to reach for Skills & Headroom
 
-**Skills sharpen _quality_; Headroom lowers _cost_** — and they compose on the same run. New to extending Otto? Start with **[docs/SKILLS-AND-HEADROOM.md](./docs/SKILLS-AND-HEADROOM.md)** — a sharp "what to use when" guide for Superpowers, Product-Manager-Skills, the Cursor review skill, and Headroom (plus [gstack](https://github.com/garrytan/gstack) as a design reference), the import → validate → activate model, and the Headroom binary-contract gotcha.
+**Skills sharpen _quality_; Headroom lowers _cost_** — and they compose on the same run. New to extending Otto? Start with **[docs/SKILLS-AND-HEADROOM.md](./docs/SKILLS-AND-HEADROOM.md)** — a sharp "what to use when" guide for Superpowers, Product-Manager-Skills, the Cursor review skill, and Headroom (plus [gstack](https://github.com/garrytan/gstack) as a design reference), the import → validate → activate model, and the Headroom setup (local library, no API key).
 
 | You want to…                                                 | Reach for                                                                                                                             | Switch on with                           |
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |

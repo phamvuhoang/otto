@@ -36,7 +36,12 @@ import {
   type RetrievalStore,
   type SyncContextCompressor,
 } from "./context-compressor.js";
-import { createHeadroomSyncCompressor } from "./headroom-adapter.js";
+import {
+  authorizeCompressor,
+  createHeadroomSyncCompressor,
+} from "./headroom-adapter.js";
+import { readSafetyPolicy } from "./safety-policy.js";
+import { readToolConfig, readTools } from "./tools.js";
 import {
   allocateRunId,
   hasRunReport,
@@ -47,6 +52,7 @@ import {
   writeStageRecord,
   type RunArtifact,
   type RunManifest,
+  type SafetyEvent,
   type SkillUsage,
   type StageRecord,
 } from "./run-report.js";
@@ -508,13 +514,35 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // uncompressed (degrade clean) rather than failing the run or emitting a
   // degraded record at every spill.
   const compressorMode: CompressorMode = contextCompressor;
-  let compressor: SyncContextCompressor | null =
-    compressorMode === "headroom" ? createHeadroomSyncCompressor() : null;
-  if (compressor && !compressor.available) {
-    process.stderr.write(
-      `${dim("note: --context-compressor headroom requested but `headroom` is unavailable — continuing without compression")}\n`
+  let compressor: SyncContextCompressor | null = null;
+  // Policy events from a denied compressor gate, attached to the run manifest as
+  // evidence (#192 part 2) — empty unless a registered tool is policy-blocked.
+  let compressorSafetyEvents: SafetyEvent[] = [];
+  if (compressorMode === "headroom") {
+    // Governance gate (#192 part 2): a registered `.otto/tools/headroom.json`
+    // entry's `enabled` flag + repo policy can deny the compressor (authorizing
+    // the command the run would actually execute). With no tool registered this is
+    // config/flag-driven exactly as before.
+    const gate = authorizeCompressor(
+      readTools(workspaceDir),
+      readToolConfig(workspaceDir),
+      readSafetyPolicy(workspaceDir),
+      process.env
     );
-    compressor = null;
+    if (!gate.allowed) {
+      compressorSafetyEvents = gate.events;
+      process.stderr.write(
+        `${dim(`note: --context-compressor headroom requested but ${gate.reason} — continuing without compression`)}\n`
+      );
+    } else {
+      compressor = createHeadroomSyncCompressor();
+      if (!compressor.available) {
+        process.stderr.write(
+          `${dim('note: --context-compressor headroom requested but Headroom is unavailable (need `pip install "headroom-ai[ml]"`, or set OTTO_HEADROOM_BIN) — continuing without compression')}\n`
+        );
+        compressor = null;
+      }
+    }
   }
   const retrievalStore: RetrievalStore = runRetrievalStore(workspaceDir, runId);
 
@@ -858,6 +886,9 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         nextAction: nextActionFor(reason),
         artifacts: collectArtifacts(),
         ...(runSkillsUsed.length > 0 ? { skillsUsed: runSkillsUsed } : {}),
+        ...(compressorSafetyEvents.length > 0
+          ? { safetyEvents: compressorSafetyEvents }
+          : {}),
         ...(inputSharpness
           ? {
               inputSharpness: {

@@ -42,12 +42,14 @@ const MODES: ReadonlySet<string> = new Set(["off", "headroom"]);
  * The token-heavy content categories P7 already flags — the targets the roadmap
  * names. Carried on each compression so a report can attribute savings by source.
  */
-export type CompressionCategory =
-  | "issue-body"
-  | "command-log"
-  | "prior-iteration"
-  | "read-artifact"
-  | "memory-projection";
+export const COMPRESSION_CATEGORIES = [
+  "issue-body",
+  "command-log",
+  "prior-iteration",
+  "read-artifact",
+  "memory-projection",
+] as const;
+export type CompressionCategory = (typeof COMPRESSION_CATEGORIES)[number];
 
 /** Content handed to the compressor, tagged by source category + a stable key. */
 export type CompressInput = {
@@ -298,7 +300,8 @@ export async function compressContent(
  * Synchronous compression for the sync render/`@spill` path, where `renderTemplate`
  * cannot await. Same reversible measurement and degrade rules as
  * {@link compressContent}; backed by a {@link SyncContextCompressor} (the Headroom
- * command runner is itself synchronous). `compressor === null` → original verbatim.
+ * runner is synchronous — it drives `compress()` via a blocking subprocess).
+ * `compressor === null` → original verbatim.
  */
 export function compressContentSync(
   compressor: SyncContextCompressor | null,

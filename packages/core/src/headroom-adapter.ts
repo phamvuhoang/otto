@@ -400,8 +400,10 @@ export type CompressorAuthorization = {
  * But when a repo registers the `headroom` tool, the registry and policy DO govern
  * it:
  *
- * - no `headroom` tool registered → allowed (config/flag-driven, unchanged — so a
- *   bare repo that only sets `--context-compressor headroom` behaves as before);
+ * - no `headroom` tool registered → the **built-in** {@link headroomToolDefinition}
+ *   is used for the policy checks (the compressor is enabled by flag/config, not the
+ *   registry, so a flag/config-only run must still be pre-authorized). A bare repo
+ *   under `DEFAULT_POLICY` still passes; a restrictive policy still gates it;
  * - tool disabled (registry `enabled: false` or a config override) → denied;
  * - any command that WOULD RUN ({@link headroomCommands}, resolved from `env` like
  *   the runtime — one per category in command mode, with `--category <c>`) blocked
@@ -427,14 +429,13 @@ export function authorizeCompressor(
   policy: SafetyPolicy,
   env: NodeJS.ProcessEnv = process.env
 ): CompressorAuthorization {
-  const tool = tools.find((t) => t.name === "headroom");
-  if (!tool) {
-    return {
-      allowed: true,
-      reason: "no headroom tool registered — config-driven",
-      events: [],
-    };
-  }
+  // The compressor is enabled by flag/config, not the registry — so when no
+  // `.otto/tools/headroom.json` exists, fall back to the built-in definition for the
+  // policy checks rather than skipping them (#192). A bare repo under DEFAULT_POLICY
+  // still passes; a restrictive policy still gates the resolved command/endpoint.
+  const registered = tools.find((t) => t.name === "headroom");
+  const tool = registered ?? headroomToolDefinition();
+  const source = registered ? "registry" : "built-in";
   const enabled = config.overrides[tool.name]?.enabled ?? tool.enabled;
   if (!enabled) {
     return {
@@ -477,13 +478,13 @@ export function authorizeCompressor(
   if (events.length > 0) {
     return {
       allowed: false,
-      reason: `headroom tool command blocked by policy (${[...kinds].join(", ")})`,
+      reason: `headroom (${source}) blocked by policy (${[...kinds].join(", ")})`,
       events,
     };
   }
   return {
     allowed: true,
-    reason: "authorized by registry + policy",
+    reason: `authorized by ${source} + policy`,
     events: [],
   };
 }

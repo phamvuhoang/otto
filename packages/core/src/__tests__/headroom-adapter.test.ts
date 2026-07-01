@@ -245,6 +245,25 @@ describe("authorizeCompressor (#192 part 2)", () => {
     expect(a.events).toEqual([]);
   });
 
+  // Flag/config-only online mode must STILL be pre-authorized when no
+  // .otto/tools/headroom.json exists — the built-in definition drives the check.
+  it("gates flag/config-only online mode with no registered tool (built-in fallback)", () => {
+    const policy = {
+      ...DEFAULT_POLICY,
+      allowedNetworkDomains: ["internal.example"],
+    };
+    // Online + restrictive policy + no registry entry → denied (was a bypass).
+    const online = authorizeCompressor([], noConfig, policy, {
+      HF_HUB_OFFLINE: "0",
+    });
+    expect(online.allowed).toBe(false);
+    expect(online.events.length).toBeGreaterThan(0);
+
+    // Offline (the default) reaches no network, so the same setup is allowed.
+    const offline = authorizeCompressor([], noConfig, policy, noEnv);
+    expect(offline.allowed).toBe(true);
+  });
+
   it("allows a registered, enabled tool under default policy", () => {
     const a = authorizeCompressor(
       [headroomToolDefinition()],

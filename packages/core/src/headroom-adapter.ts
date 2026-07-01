@@ -165,10 +165,11 @@ function fromSpawn(
 }
 
 /**
- * Library-mode runner (default): probe `python3 -c "import headroom"` for
- * availability, then run {@link HEADROOM_BRIDGE} per compression. Honors
- * `OTTO_HEADROOM_PYTHON`; inference is local (no API key) and runs with
- * `HF_HUB_OFFLINE=1` by default, so first use needs pre-cached model weights.
+ * Library-mode runner (default): probe `python3 -c "import headroom, torch"` for
+ * availability (torch = the `[ml]` backend; base is passthrough-only), then run
+ * {@link HEADROOM_BRIDGE} per compression. Honors `OTTO_HEADROOM_PYTHON`; inference
+ * is local (no API key) and runs with `HF_HUB_OFFLINE=1` by default, so first use
+ * needs pre-cached model weights.
  */
 export function libraryHeadroomRunner(
   env: NodeJS.ProcessEnv = process.env,
@@ -179,8 +180,12 @@ export function libraryHeadroomRunner(
   return {
     available: () => {
       try {
+        // Require the ML backend (`torch`), not just `import headroom`: the base
+        // package imports fine but only does passthrough, so a base-only install
+        // must report unavailable (clean degrade) rather than silently not compress.
         return (
-          spawn(py, ["-c", "import headroom"], { timeout: 5_000 }).status === 0
+          spawn(py, ["-c", "import headroom, torch"], { timeout: 5_000 })
+            .status === 0
         );
       } catch {
         return false;
@@ -339,9 +344,10 @@ export function headroomToolDefinition(): ToolDefinition {
     // Mirror runtime resolution (#192 part 3) cross-platform: a `node -e` probe
     // (node is always present — Otto is a Node CLI) honors the same env a run does
     // — `$OTTO_HEADROOM_BIN --version` in command mode, else the (overridable)
-    // interpreter's `import headroom`. No POSIX shell builtins, so it works under
-    // cmd.exe too (the prior `if [ … ]` form did not).
-    healthCheck: `node -e "const{execFileSync}=require('child_process');const b=process.env.OTTO_HEADROOM_BIN;try{execFileSync(b||process.env.OTTO_HEADROOM_PYTHON||'python3',b?['--version']:['-c','import headroom'],{stdio:'ignore'})}catch(e){process.exit(1)}"`,
+    // interpreter's `import headroom, torch`. Requiring torch verifies the ML
+    // backend (`headroom-ai[ml]`) — base is passthrough-only and would pass a bare
+    // `import headroom`. No POSIX shell builtins, so it works under cmd.exe too.
+    healthCheck: `node -e "const{execFileSync}=require('child_process');const b=process.env.OTTO_HEADROOM_BIN;try{execFileSync(b||process.env.OTTO_HEADROOM_PYTHON||'python3',b?['--version']:['-c','import headroom, torch'],{stdio:'ignore'})}catch(e){process.exit(1)}"`,
     enabled: true,
   };
 }

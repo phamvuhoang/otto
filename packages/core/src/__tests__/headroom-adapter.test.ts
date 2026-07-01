@@ -110,13 +110,13 @@ describe("libraryHeadroomRunner", () => {
     text: "verbose original text",
   };
 
-  it("probes availability via `python3 -c import headroom`", () => {
+  it("probes availability via the ML backend (`import headroom, torch`)", () => {
     const spawn = fakeSpawn({ status: 0 });
     const r = libraryHeadroomRunner({}, 30_000, spawn);
     expect(r.available()).toBe(true);
     expect(spawn).toHaveBeenCalledWith(
       "python3",
-      ["-c", "import headroom"],
+      ["-c", "import headroom, torch"], // torch = the [ml] extra, not base
       expect.objectContaining({ timeout: 5_000 })
     );
   });
@@ -229,7 +229,7 @@ describe("headroomToolDefinition", () => {
     expect(t.healthCheck).toContain("node -e");
     expect(t.healthCheck).toContain("OTTO_HEADROOM_BIN");
     expect(t.healthCheck).toContain("OTTO_HEADROOM_PYTHON");
-    expect(t.healthCheck).toContain("import headroom");
+    expect(t.healthCheck).toContain("import headroom, torch"); // verifies [ml], not base
     expect(t.healthCheck).not.toContain("if ["); // not POSIX-shell-only
   });
 });

@@ -411,8 +411,10 @@ otto-afk --token-mode reduce "./docs/plans/feature.md" 5
 pip install "headroom-ai[ml]"
 # The model (~260-600 MB) is fetched from Hugging Face on first use. Otto runs the
 # compressor with HF_HUB_OFFLINE=1 by default, so a run never downloads mid-run
-# (no ungoverned egress / timeout blowout) — pre-warm the cache once first
-# (see docs/INTEGRATIONS.md §4), or set HF_HUB_OFFLINE=0 to allow the in-run fetch.
+# (no egress / timeout blowout) — pre-warm the cache once first (see
+# docs/INTEGRATIONS.md §4). Set HF_HUB_OFFLINE=0 to allow the in-run fetch: the
+# resolved endpoint is then authorized against .otto/policy.json + the tool's
+# declared networkDomains (HF_HUB_DISABLE_XET=1 is forced to bound the surface).
 otto-afk --context-compressor headroom "./docs/plans/feature.md" 10
 # or set it per-shell / per-repo:
 OTTO_CONTEXT_COMPRESSOR=headroom otto-afk "./docs/plans/feature.md" 10

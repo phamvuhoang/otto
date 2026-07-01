@@ -153,7 +153,7 @@ pip install "headroom-ai[ml]"
 export HEADROOM_MODEL=gpt-4o-mini          # optional: selects the tokenizer (default)
 #    The kompress-base model (~260–600 MB) is fetched from Hugging Face on first
 #    use. Otto runs the compressor with HF_HUB_OFFLINE=1 by DEFAULT, so a governed
-#    run never performs that fetch (no ungoverned egress, no 30s-timeout blowout) —
+#    run never performs that fetch (no egress at all, no 30s-timeout blowout) —
 #    it uses cached weights or degrades cleanly. So pre-warm the cache ONCE up
 #    front — the payload MUST exceed Headroom's ~250-token compression threshold or
 #    no model loads (and nothing downloads). Assert tokens_saved > 0:

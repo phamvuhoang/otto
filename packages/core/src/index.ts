@@ -182,6 +182,11 @@ export {
   type SyncContextCompressor,
 } from "./context-compressor.js";
 export {
+  assessFactSurvival,
+  formatFactSurvival,
+  type FactSurvival,
+} from "./compression-survival.js";
+export {
   HEADROOM_BRIDGE,
   HEADROOM_VERSION,
   authorizeCompressor,

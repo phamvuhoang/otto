@@ -1,48 +1,37 @@
-# Plan — P22 slice 2: a real `retrievable` producer (no behavior change)
+# Plan — P22 slice 3: eval-backed fact-survival proof (report/eval-only)
 
-Spec: `.otto/tasks/harness-roadmap-phase5/spec.md`. Ordered; each task = one Otto
-run, gated on the prior, failing-test-first, with an explicit verify command.
-Scope is the `retrievable` producer + the report's "why" rationale only; Headroom
-compression and retirement automation are out of scope (see spec Scope guard).
+Design: `docs/superpowers/specs/2026-07-02-compression-survival-eval-design.md`.
+Ordered; each task = one Otto run, gated on the prior, failing-test-first, with an
+explicit verify command. Scope is the survival scorer + fixture + gated
+real-Headroom proof only; no live-loop change (see spec Scope guard).
 
-The prior slice (context-lifecycle reporting) is already landed on this branch
-(commits `4be129f`…`c7b24eb`) — do not redo it.
+**Prior slices are landed — do not redo them:**
 
-- [ ] **T1 — `evidence` category producer → `retrievable`.**
-      Failing test first: (a) in
-      `packages/core/src/__tests__/context-lifecycle.test.ts` extend the
-      `classifyLifecycle` table with `evidence → retrievable` (and keep the four
-      existing rows); (b) in
-      `packages/core/src/__tests__/context-report.test.ts` update the existing
-      "treats afk `<inputs>` and ghafk `<issues-summary>`/`<issues-full-file>` as
-      inputs" case so the issue-body tags now assert `category: "evidence"` /
-      `lifecycle: "retrievable"`, while afk `<inputs>` still asserts
-      `category: "inputs"` / `lifecycle: "required-now"`. Watch both fail (and note
-      `pnpm -r typecheck` fails on the non-exhaustive switch once `"evidence"` is
-      added to the union — the compiler-enforced guard). Then in
-      `packages/core/src/context-report.ts` add `"evidence"` to the
-      `ContextCategory` union and remap `issue` / `issues-summary` /
-      `issues-full-file` in `BLOCK_CATEGORY` to `"evidence"`; in
-      `packages/core/src/context-lifecycle.ts` add `case "evidence": return
-    "retrievable"` to `classifyLifecycle`. Confirm `analyzeContext` total chars
-      still equal `prompt.length` (existing assertions pass — no chars lost, only
-      recategorized). verify: `pnpm -r typecheck && pnpm -r test`
+- Slice 1 & 2 (context-lifecycle reporting, the `evidence → retrievable` producer,
+  `lifecycleRationale`, the freeable dry run, the `--context-report` rollup) all
+  shipped in **PR #178** (`072f444`). The earlier on-disk "slice 2" plan that
+  called this unimplemented was a stale re-plan; #178 already delivered it.
+- Real Headroom `compress()` library mode shipped in **PR #193**, and the spill
+  path already compresses retrievable issue bodies with reversible evidence.
 
-- [ ] **T2 — "why is this still in context?" rationale + large issue-body fixture.**
-      Failing test first: (a) in
-      `packages/core/src/__tests__/context-lifecycle.test.ts` add a
-      `lifecycleRationale` case asserting a distinct non-empty string for each of
-      `required-now` / `resolved` / `durable` / `retrievable`; (b) in
-      `packages/core/src/__tests__/context-report-cli.test.ts` add a
-      **large issue-body fixture** — stage records whose `contextBreakdown` has a
-      multi-KB `evidence`/`retrievable` segment plus a `commits`/`resolved`
-      segment — asserting `formatContextReportRun` output (i) names the issue-body
-      bytes as `compress`/`retrievable` and the commits as `retire`/`resolved` in
-      the freeable line, and (ii) renders a per-class rationale line. Watch both
-      fail (helper absent; rationale not rendered). Then add and export the pure
-      `lifecycleRationale(lifecycle)` in
-      `packages/core/src/context-lifecycle.ts` (re-export from
-      `packages/core/src/index.ts`), and render it under the existing lifecycle
-      rollup in `formatContextReportRun`
-      (`packages/core/src/context-report-cli.ts`). Read-only; no loop or prompt
-      change. verify: `pnpm -r typecheck && pnpm -r test && pnpm test`
+- [ ] **T1 — `assessFactSurvival` pure scorer + formatter.**
+      Failing test first: add
+      `packages/core/src/__tests__/compression-survival.test.ts` asserting
+      `assessFactSurvival(facts, compressed)` returns exact `survived` / `missing`
+      / `survivalRate` for all-survive, some-missing, empty-facts, and mixed-case
+      inputs, and that `formatFactSurvival` renders a one-line summary. Watch it
+      fail (module absent). Then add `packages/core/src/compression-survival.ts`
+      with the `FactSurvival` type, the pure `assessFactSurvival` (normalized
+      case-insensitive substring match), and the pure `formatFactSurvival`; re-export
+      both from `packages/core/src/index.ts`.
+      verify: `pnpm -r typecheck && pnpm -r test`
+
+- [ ] **T2 — survival fixture + gated real-Headroom e2e.**
+      In the same test file add (a) a realistic multi-KB issue-body fixture with a
+      documented list of distinctive buried facts (error code, semver, file path,
+      config key, a numbered acceptance criterion), and (b) a gated
+      (`OTTO_HEADROOM_E2E=1`, skipped by default — mirrors the existing e2e block)
+      real-Headroom test that compresses the fixture through `libraryHeadroomRunner`
+      and asserts the payload shrank AND `assessFactSurvival` reports survival
+      at/above the documented floor. Read-only; no loop or prompt change.
+      verify: `pnpm -r typecheck && pnpm -r test && pnpm test`

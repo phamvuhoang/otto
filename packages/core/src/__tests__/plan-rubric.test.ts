@@ -39,6 +39,9 @@ const COMPLETE_PLAN = [
   "Done when: `toCsv` emits RFC-4180 output for every input; the test command passes and reviewers can check the expected output.",
   "Testing notes: vitest, pure.",
   "",
+  "## Risks (what would make this plan wrong?)",
+  "- If exports routinely exceed memory, a streaming writer is required and the pure-module shape breaks.",
+  "",
 ].join("\n");
 
 /** A thin prompt-shaped doc with none of the rubric sections. */
@@ -132,6 +135,7 @@ describe("scorePlanDepth", () => {
       "File map names at least two real paths",
       "Each task names a failing test and verify command",
       "Success criteria are concretely testable",
+      'Risks: "what would make this plan wrong?"',
     ]);
   });
 
@@ -151,6 +155,34 @@ describe("scorePlanDepth", () => {
     const out = formatPlanDepthRubric(scorePlanDepth(COMPLETE_PLAN));
     expect(out).toMatch(/plan depth/i);
     expect(out).toContain("100%");
+  });
+});
+
+describe("plan depth: 'what would make this plan wrong?' risks (issue #203)", () => {
+  const WITHOUT_RISKS = COMPLETE_PLAN.replace(
+    /## Risks[\s\S]*?(?=## \w|$)/,
+    ""
+  );
+
+  it("a populated risks section meets the criterion", () => {
+    const risk = scorePlanDepth(COMPLETE_PLAN).results.find(
+      (r) => r.criterion === "planWrongRisks"
+    );
+    expect(risk?.met).toBe(true);
+  });
+
+  it("a plan without one is scored down and told what is missing", () => {
+    const score = scorePlanDepth(WITHOUT_RISKS);
+    const risk = score.results.find((r) => r.criterion === "planWrongRisks");
+    expect(risk?.met).toBe(false);
+    expect(score.ratio).toBeLessThan(1);
+    expect(score.missing.join("; ")).toMatch(/plan wrong/i);
+  });
+
+  it("an empty risks header does not count", () => {
+    const score = scorePlanDepth(WITHOUT_RISKS + "\n## Risks\n");
+    const risk = score.results.find((r) => r.criterion === "planWrongRisks");
+    expect(risk?.met).toBe(false);
   });
 });
 

@@ -9,10 +9,12 @@
  * load-bearing fact (an error code, a version, a file path) *survived* the
  * summarization. This module answers that orthogonal question.
  *
- * Pure and eval-only: it takes a known set of "buried facts" and the compressed
- * text and reports which facts still appear. It never runs a stage, mutates a
- * prompt, or touches the live compress path — the runtime compressor has no
- * facts list; survival can only be scored against facts an eval supplies.
+ * Pure: it takes a known set of "buried facts" and the compressed text and
+ * reports which facts still appear. Evals score survival against facts they
+ * supply; the runtime keep-decision (`context-compressor.ts`, issue #200)
+ * scores it against anchors mechanically extracted from the original via
+ * {@link extractAnchors}, so a compression that drops a load-bearing
+ * identifier is rejected instead of used.
  */
 
 /** The outcome of scoring a fact set against one piece of compressed text. */
@@ -52,6 +54,41 @@ export function assessFactSurvival(
     survivalRate: facts.length === 0 ? 1 : survived / facts.length,
     missing,
   };
+}
+
+/**
+ * The load-bearing token shapes a summarizer must not drop: slash file paths
+ * with an extension, uppercase identifier codes containing a digit or
+ * underscore (error codes, env keys — bare acronyms like `API` don't count),
+ * and version strings. Ordered by appearance so a capped list keeps the
+ * earliest (usually headline) anchors.
+ */
+const ANCHOR_PATTERNS = [
+  /\bv?\d+\.\d+(?:\.\d+)+\b/g,
+  /\b[\w-]+(?:\/[\w.-]+)*\/[\w-]+\.\w{1,8}\b/g,
+  /\b[A-Z][A-Z0-9]*[_0-9][A-Z0-9_]*\b/g,
+];
+
+/**
+ * Extract up to `limit` distinctive anchors from original text, deduplicated,
+ * in order of first appearance. The runtime survival floor checks these against
+ * the compressed text; an empty result means the text has no mechanically
+ * recognizable load-bearing tokens (survival is then vacuous). Pure.
+ */
+export function extractAnchors(text: string, limit = 12): string[] {
+  const found: { index: number; value: string }[] = [];
+  for (const pattern of ANCHOR_PATTERNS) {
+    for (const m of text.matchAll(pattern)) {
+      found.push({ index: m.index ?? 0, value: m[0] });
+    }
+  }
+  found.sort((a, b) => a.index - b.index);
+  const anchors: string[] = [];
+  for (const f of found) {
+    if (anchors.length >= limit) break;
+    if (!anchors.includes(f.value)) anchors.push(f.value);
+  }
+  return anchors;
 }
 
 /** One-line human summary of a survival assessment for eval output. Pure. */

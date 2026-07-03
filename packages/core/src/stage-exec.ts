@@ -5,6 +5,7 @@ import { analyzeContext } from "./context-report.js";
 import {
   compressContentSync,
   compressionToolUsage,
+  isCompressibleCategory,
   type CompressionCategory,
   type RetrievalStore,
   type SyncContextCompressor,
@@ -137,6 +138,9 @@ export async function executeStage(
         opts.compressor && opts.retrievalStore
           ? (name: string, content: string): string => {
               const category = spillCategory(name);
+              // Selective by lifecycle (issue #200): only retrievable-class
+              // spills are compressed; the diff under review stays verbatim.
+              if (!isCompressibleCategory(category)) return content;
               const out = compressContentSync(
                 opts.compressor!,
                 {

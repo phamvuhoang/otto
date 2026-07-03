@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   assessFactSurvival,
+  extractAnchors,
   formatFactSurvival,
 } from "../compression-survival.js";
 import { libraryHeadroomRunner } from "../headroom-adapter.js";
@@ -42,6 +43,36 @@ describe("assessFactSurvival", () => {
     expect(s.survived).toBe(0);
     expect(s.survivalRate).toBe(1);
     expect(s.missing).toEqual([]);
+  });
+});
+
+describe("extractAnchors", () => {
+  it("extracts file paths, identifier codes, and versions in appearance order", () => {
+    const text =
+      "After upgrading to v2.3.1 the loop emits E4021 inside " +
+      "packages/core/src/loop.ts when OTTO_HEADROOM_BIN is set.";
+    expect(extractAnchors(text)).toEqual([
+      "v2.3.1",
+      "E4021",
+      "packages/core/src/loop.ts",
+      "OTTO_HEADROOM_BIN",
+    ]);
+  });
+
+  it("dedups repeated anchors and caps the count", () => {
+    const text = Array.from(
+      { length: 30 },
+      (_, i) => `E4021 fails in pkg/f${i}.ts`
+    ).join("\n");
+    const anchors = extractAnchors(text);
+    expect(anchors.filter((a) => a === "E4021")).toEqual(["E4021"]);
+    expect(anchors.length).toBeLessThanOrEqual(12);
+  });
+
+  it("ignores plain prose and bare acronyms without digits or underscores", () => {
+    expect(
+      extractAnchors("THE API and HTTP README are fine, said the reviewer.")
+    ).toEqual([]);
   });
 });
 

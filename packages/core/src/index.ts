@@ -167,6 +167,7 @@ export {
   compressContentSync,
   compressionToolUsage,
   formatCompressionSummary,
+  isCompressibleCategory,
   readCompressorMode,
   resolveCompressorMode,
   runRetrievalStore,
@@ -183,6 +184,7 @@ export {
 } from "./context-compressor.js";
 export {
   assessFactSurvival,
+  extractAnchors,
   formatFactSurvival,
   type FactSurvival,
 } from "./compression-survival.js";

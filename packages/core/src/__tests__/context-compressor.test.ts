@@ -326,6 +326,68 @@ describe("compressContentSync (the render/@spill path)", () => {
   });
 });
 
+describe("runtime fact-survival floor (issue #200)", () => {
+  function syncFake(transform: (t: string) => string): SyncContextCompressor {
+    return {
+      name: "headroom",
+      version: "floor-1",
+      available: true,
+      compress: (i) => ({ ok: true, text: transform(i.text) }),
+    };
+  }
+  // Two load-bearing anchors buried in bulk prose.
+  const original =
+    "The E4021 error regressed in packages/core/src/loop.ts. " +
+    "filler prose that repeats without identifiers ".repeat(30);
+
+  it("rejects a compression that drops load-bearing anchors — keeps the original", () => {
+    const { store, saved } = memStore();
+    const out = compressContentSync(
+      syncFake(() => "an error regressed in the loop module"),
+      input(original),
+      store
+    );
+    expect(out.text).toBe(original);
+    expect(out.degraded).toBe(true);
+    expect(out.tokensSaved).toBe(0);
+    expect(out.note).toMatch(/anchor/i);
+    expect(saved.size).toBe(0); // rejected compressions store nothing
+  });
+
+  it("accepts a compression that preserves every anchor", () => {
+    const { store, saved } = memStore();
+    const out = compressContentSync(
+      syncFake(() => "E4021 regressed in packages/core/src/loop.ts."),
+      input(original),
+      store
+    );
+    expect(out.degraded).toBe(false);
+    expect(out.tokensSaved).toBeGreaterThan(0);
+    expect(saved.get("k1")).toBe(original);
+  });
+
+  it("rejects a blank result even when the original has no anchors", () => {
+    const noAnchors = "plain prose without identifiers ".repeat(30);
+    const out = compressContentSync(
+      syncFake(() => "  \n"),
+      input(noAnchors),
+      null
+    );
+    expect(out.text).toBe(noAnchors);
+    expect(out.degraded).toBe(true);
+  });
+
+  it("applies the same floor on the async path", async () => {
+    const out = await compressContent(
+      fake({ transform: () => "summary with no identifiers" }),
+      input(original),
+      null
+    );
+    expect(out.text).toBe(original);
+    expect(out.degraded).toBe(true);
+  });
+});
+
 describe("Task 5 benchmark: off vs reduce vs headroom (no fact lost)", () => {
   // A large issue-dump fixture with one buried fact.
   const fixture =

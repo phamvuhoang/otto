@@ -2,9 +2,14 @@
 
 Last updated: 2026-07-03
 
-> **Status:** P22 is in progress; P23–P26 are planned. P22 lifecycle reporting,
-> real Headroom compression, and eval-backed fact-survival measurement have
-> landed in prior slices.
+> **Status:** P22–P24 have landed their core slices; P25–P26 are planned.
+> P22: lifecycle reporting, real Headroom compression — scoped to retrievable
+> spills and guarded by a runtime anchor-survival floor (#200) — and a
+> CI-runnable fact-survival eval that drives the real compress path (#202).
+> P23: input sharpening on the plan path (#187), with the guidance pass itself
+> under eval (#202). P24: verification matrix + gallery with existence and
+> produced-this-run artifact checks and matrix↔plan reconciliation (#201);
+> artifact existence is machine-checked, relevance remains reviewer judgment.
 >
 > **Tracking:** Phase 5 epic
 > [#183](https://github.com/phamvuhoang/otto/issues/183); initiatives

@@ -75,6 +75,9 @@ rationale`; record blockers and the safest assumption taken.
   create or modify, as backticked paths (e.g. `packages/core/src/foo.ts`).
 - `## Testing notes` — how it will be verified, and the **testable success
   criteria** (done-when conditions).
+- `## Risks` — **"what would make this plan wrong?"**: the assumptions that,
+  if false, invalidate the approach (a hidden caller, a wrong file/component
+  hypothesis, a scale cliff), each with how you would detect it early.
 
 ## 4. WRITE THE PLAN — `.otto/tasks/<task-key>/plan.md`
 
@@ -133,6 +136,8 @@ missing, revise the artifacts once before you commit:
   explicit `verify:` command.
 - Success criteria are concretely testable: a reviewer can tell pass/fail from
   an observable result, test, or command.
+- A `## Risks` section answers "what would make this plan wrong?" with at least
+  one concrete, detectable risk.
 
 ## 5. COMMIT
 

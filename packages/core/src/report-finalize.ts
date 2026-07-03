@@ -229,7 +229,7 @@ function appendVerificationGallery(
   const section = [
     "## Verification Gallery",
     "",
-    "Structured proof that each requirement was checked — its method, result, and the artifact that backs it. Failed or unproven requirements are listed as risks below the matrix.",
+    "Structured proof that each requirement was checked — its method, result, and the artifact that backs it. Failed or unproven requirements are listed as risks below the matrix. Cited artifacts are existence-checked against the workspace and git and stamped as produced by this run; whether an artifact actually proves its paired requirement remains reviewer judgment (#201).",
     "",
     "```text",
     formatVerificationMatrix(matrix),
@@ -238,8 +238,13 @@ function appendVerificationGallery(
     // Coverage gate (P24): judge whether every verifiable requirement is
     // artifact-backed — the roadmap's "reports include a verification artifact
     // where feasible" bar. Dropped malformed rows are passed in so they FAIL the
-    // gate, not just footnote it (#181 re-review).
-    formatVerificationCoverageGate(matrix, dropped),
+    // gate, not just footnote it (#181 re-review); a matrix↔plan row shortfall
+    // does the same (#201).
+    formatVerificationCoverageGate(
+      matrix,
+      dropped,
+      ctx.manifest.verificationPlan
+    ),
   ].join("\n");
   // Visual half (P24): embed any captured screenshots as a markdown gallery so a
   // non-engineer sees the rendered-UI proof, not just a path. Empty when no

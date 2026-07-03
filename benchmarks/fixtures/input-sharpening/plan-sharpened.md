@@ -49,3 +49,11 @@ invalidation on product updates. This slice is a single in-process read cache.
 Testable success criteria (done when): within the 60s TTL a repeated listing
 request is served from cache — the loader is invoked once across two requests —
 asserted by a test in `src/__tests__/products.test.ts`; `node --test` passes.
+
+## Risks (what would make this plan wrong?)
+
+- If product data must be fresh within seconds (e.g. flash-sale pricing), a 60s
+  TTL is the wrong mechanism entirely — detect by checking the pricing update
+  cadence with the owner before task 1.
+- If the listing handler is horizontally scaled, a per-process in-memory cache
+  gives inconsistent listings across replicas; detect via the deploy topology.

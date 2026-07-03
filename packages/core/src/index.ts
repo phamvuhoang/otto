@@ -130,8 +130,10 @@ export {
   isValidArtifactReference,
   parseVerificationMatrix,
   parseVerificationMatrixWithDiagnostics,
+  reconcileMatrixWithPlan,
   scoreVerificationCoverage,
   summarizeVerification,
+  type PlanReconciliation,
   type VerificationCoverageGate,
   type VerificationConfidence,
   type VerificationEntry,
@@ -167,6 +169,7 @@ export {
   compressContentSync,
   compressionToolUsage,
   formatCompressionSummary,
+  isCompressibleCategory,
   readCompressorMode,
   resolveCompressorMode,
   runRetrievalStore,
@@ -183,6 +186,7 @@ export {
 } from "./context-compressor.js";
 export {
   assessFactSurvival,
+  extractAnchors,
   formatFactSurvival,
   type FactSurvival,
 } from "./compression-survival.js";

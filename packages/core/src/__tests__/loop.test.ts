@@ -2335,6 +2335,10 @@ describe("runLoop", () => {
       "",
       "Done when all tests pass and `pnpm vitest run` exits 0. Acceptance: run command above.",
       "Testable success: assert score.ratio > 0.75.",
+      "",
+      "## Risks (what would make this plan wrong?)",
+      "",
+      "- If the scoring logic has another caller, the fix must move up a layer; detect via grep before task 1.",
     ].join("\n");
 
     it("plan mode re-plans once on a thin plan, then pauses", async () => {

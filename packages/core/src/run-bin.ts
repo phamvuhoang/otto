@@ -323,6 +323,14 @@ export async function runBin(argv: string[], cfg: RunBinConfig): Promise<void> {
         ? "review"
         : cfg.mode;
 
+  // Sharpening only acts on the plan path; a silent no-op reads as "on" to the
+  // operator, so say it out loud (issue #203). A warning, never an error.
+  if (sharpenInput && runMode !== "plan") {
+    console.error(
+      "warning: --sharpen-input only acts in --plan mode — it is inert for this run."
+    );
+  }
+
   // Single source of truth for the --watch label: the per-mode resolver
   // (otto-linear-afk → OTTO_LINEAR_LABEL) falling back to OTTO_WATCH_LABEL.
   // Both --print-config and the runWatch call below read this, so the reported

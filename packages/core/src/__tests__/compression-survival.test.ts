@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   assessFactSurvival,
+  extractAnchors,
   formatFactSurvival,
 } from "../compression-survival.js";
+import { compressContentSync } from "../context-compressor.js";
 import { libraryHeadroomRunner } from "../headroom-adapter.js";
 
 describe("assessFactSurvival", () => {
@@ -42,6 +44,36 @@ describe("assessFactSurvival", () => {
     expect(s.survived).toBe(0);
     expect(s.survivalRate).toBe(1);
     expect(s.missing).toEqual([]);
+  });
+});
+
+describe("extractAnchors", () => {
+  it("extracts file paths, identifier codes, and versions in appearance order", () => {
+    const text =
+      "After upgrading to v2.3.1 the loop emits E4021 inside " +
+      "packages/core/src/loop.ts when OTTO_HEADROOM_BIN is set.";
+    expect(extractAnchors(text)).toEqual([
+      "v2.3.1",
+      "E4021",
+      "packages/core/src/loop.ts",
+      "OTTO_HEADROOM_BIN",
+    ]);
+  });
+
+  it("dedups repeated anchors and caps the count", () => {
+    const text = Array.from(
+      { length: 30 },
+      (_, i) => `E4021 fails in pkg/f${i}.ts`
+    ).join("\n");
+    const anchors = extractAnchors(text);
+    expect(anchors.filter((a) => a === "E4021")).toEqual(["E4021"]);
+    expect(anchors.length).toBeLessThanOrEqual(12);
+  });
+
+  it("ignores plain prose and bare acronyms without digits or underscores", () => {
+    expect(
+      extractAnchors("THE API and HTTP README are fine, said the reviewer.")
+    ).toEqual([]);
   });
 });
 
@@ -92,10 +124,61 @@ const ISSUE_BODY = [
   "",
   "### Acceptance criteria",
   "1. The loop no longer stalls when compression is enabled.",
-  "2. Error E4021 is no longer emitted at the render boundary.",
+  "2. The stall error is no longer emitted at the render boundary.",
   "3. acceptance criterion 3: buried facts (codes, versions, paths, config",
   "   keys) remain retrievable after the issue body is compressed.",
 ].join("\n");
+// Each buried fact appears exactly ONCE in the body (issue #202) — a summarizer
+// can't earn survival credit from a redundant second mention.
+for (const fact of BURIED_FACTS) {
+  const count = ISSUE_BODY.split(fact).length - 1;
+  if (count !== 1) {
+    throw new Error(`fixture drift: "${fact}" appears ${count}× (expected 1)`);
+  }
+}
+
+// The fixture driven through the REAL runtime keep-decision (issue #202): the
+// same compressContentSync path the render boundary calls, with deterministic
+// summarizers standing in for Headroom. This is the CI-runnable half of the
+// fact-survival proof — the model-backed half below stays opt-in.
+describe("survival fixture through the runtime compress path", () => {
+  const runtime = (
+    summarize: (t: string) => string
+  ): Parameters<typeof compressContentSync>[0] => ({
+    name: "headroom",
+    version: "eval-1",
+    available: true,
+    compress: (i) => ({ ok: true, text: summarize(i.text) }),
+  });
+  const input = { key: "s", category: "issue-body" as const, text: ISSUE_BODY };
+
+  it("a fact-dropping summarization is rejected by the floor — the run keeps the original", () => {
+    const out = compressContentSync(
+      runtime(() => "The loop stalls after compression is enabled (summary)."),
+      input,
+      null
+    );
+    expect(out.degraded).toBe(true);
+    expect(out.text).toBe(ISSUE_BODY);
+    // End to end, every buried fact is still in the text the run uses.
+    expect(assessFactSurvival(BURIED_FACTS, out.text).survivalRate).toBe(1);
+  });
+
+  it("a fact-preserving summarization is kept, with every buried fact surviving", () => {
+    const summary =
+      "E4021 regressed in v2.3.1 in src/context/loop.ts when OTTO_HEADROOM_BIN " +
+      "is set; fix per acceptance criterion 3.";
+    const out = compressContentSync(
+      runtime(() => summary),
+      input,
+      null
+    );
+    expect(out.degraded).toBe(false);
+    expect(out.text).toBe(summary);
+    expect(out.tokensSaved).toBeGreaterThan(0);
+    expect(assessFactSurvival(BURIED_FACTS, out.text).survivalRate).toBe(1);
+  });
+});
 
 // Real Headroom, no fake spawn — proves distinctive buried facts SURVIVE library-mode
 // compression (not merely that the payload shrinks, which headroom-adapter's e2e

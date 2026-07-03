@@ -5,6 +5,7 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -179,5 +180,75 @@ describe("validateVerificationEvidence", () => {
       { workspaceDir: dir, runId: "run-1", ...noGit }
     );
     expect(e.artifactPath).toMatch(/^verification\//);
+  });
+});
+
+describe("produced-this-run enforcement (issue #201)", () => {
+  function scratchShot(dir: string, ageMs: number): string {
+    mkdirSync(join(dir, ".otto-tmp", "shots"), { recursive: true });
+    const p = join(dir, ".otto-tmp", "shots", "after.png");
+    writeFileSync(p, "png-bytes");
+    const t = new Date(Date.now() - ageMs);
+    utimesSync(p, t, t);
+    return ".otto-tmp/shots/after.png";
+  }
+
+  it("rejects a scratch artifact older than the run start — neither bundled nor counted", () => {
+    const dir = ws();
+    const rel = scratchShot(dir, 60_000); // written a minute "before" the run
+    const out = validateVerificationEvidence(
+      [entry({ method: "visual", artifactPath: rel })],
+      {
+        workspaceDir: dir,
+        runId: "r1",
+        startedAtMs: Date.now() - 1_000,
+        ...noGit,
+      }
+    );
+    expect(out[0]?.artifactBundled).toBe(false);
+    expect(out[0]?.artifactExists).toBe(false);
+    expect(out[0]?.artifactPath).toBe(rel); // left in place, never relocated
+  });
+
+  it("bundles a scratch artifact created after the run start", () => {
+    const dir = ws();
+    const rel = scratchShot(dir, 0);
+    const out = validateVerificationEvidence(
+      [entry({ method: "visual", artifactPath: rel })],
+      {
+        workspaceDir: dir,
+        runId: "r1",
+        startedAtMs: Date.now() - 60_000,
+        ...noGit,
+      }
+    );
+    expect(out[0]?.artifactBundled).toBe(true);
+    expect(out[0]?.artifactExists).toBe(true);
+  });
+
+  it("also refuses to relocate a stale before-screenshot", () => {
+    const dir = ws();
+    const rel = scratchShot(dir, 60_000);
+    const out = validateVerificationEvidence(
+      [entry({ method: "visual", artifactPath: "a.ts:1", beforePath: rel })],
+      {
+        workspaceDir: dir,
+        runId: "r1",
+        startedAtMs: Date.now() - 1_000,
+        ...noGit,
+      }
+    );
+    expect(out[0]?.beforeBundled).toBe(false);
+    expect(out[0]?.beforePath).toBe(rel);
+  });
+
+  it("without startedAtMs keeps the pre-#201 behavior (no mtime check)", () => {
+    const dir = ws();
+    const rel = scratchShot(dir, 60_000);
+    const out = validateVerificationEvidence(
+      [entry({ method: "visual", artifactPath: rel })],
+      { workspaceDir: dir, runId: "r1", ...noGit }
+    );
+    expect(out[0]?.artifactBundled).toBe(true);
   });
 });

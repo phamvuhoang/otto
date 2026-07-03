@@ -251,9 +251,68 @@ export function summarizeVerification(
   };
 }
 
+/**
+ * How a verification matrix reconciles against the plan's task set (issue #201).
+ * The matrix is authored by the agent, so an unfinished task can simply be
+ * omitted; comparing row count against the plan's task count closes that hole.
+ */
+export type PlanReconciliation = {
+  planTasks: number;
+  matrixRows: number;
+  /** True when the matrix has fewer rows than the plan has tasks — at least one
+   *  plan task was never verified. */
+  shortfall: boolean;
+  /** Plan task titles with no fuzzy-matching matrix row — best-effort naming of
+   *  the omissions (token overlap, not semantic proof). */
+  unmatched: string[];
+};
+
+/** Distinct lowercase alphanumeric tokens of 4+ chars — the words that carry a
+ *  title's identity once articles/prepositions fall away. */
+function significantTokens(s: string): string[] {
+  return [...new Set(s.toLowerCase().match(/[a-z0-9]+/g) ?? [])].filter(
+    (w) => w.length >= 4
+  );
+}
+
+/**
+ * Reconcile a verification matrix against the plan's task titles: a coarse
+ * row-count check (fewer rows than tasks ⇒ something was omitted) plus a
+ * best-effort naming of which titles no row appears to cover (a title is covered
+ * when some row's requirement+check shares at least half its significant
+ * tokens). Naming is a hint for the reader; only the count drives the gate,
+ * since token overlap cannot prove semantic coverage. Pure.
+ */
+export function reconcileMatrixWithPlan(
+  entries: VerificationEntry[],
+  planTaskTitles: string[]
+): PlanReconciliation {
+  const rows = entries.map(
+    (e) => new Set(significantTokens(`${e.requirement} ${e.check ?? ""}`))
+  );
+  const unmatched = planTaskTitles.filter((title) => {
+    const tokens = significantTokens(title);
+    if (tokens.length === 0) {
+      const t = title.trim().toLowerCase();
+      return !entries.some((e) => e.requirement.toLowerCase().includes(t));
+    }
+    const needed = Math.ceil(tokens.length / 2);
+    return !rows.some(
+      (row) => tokens.filter((tk) => row.has(tk)).length >= needed
+    );
+  });
+  return {
+    planTasks: planTaskTitles.length,
+    matrixRows: entries.length,
+    shortfall: entries.length < planTaskTitles.length,
+    unmatched,
+  };
+}
+
 export type VerificationCoverageGate = {
-  /** True iff no requirement failed, every verifiable one is artifact-backed, and
-   *  no matrix rows were dropped during parsing. */
+  /** True iff no requirement failed, every verifiable one is artifact-backed,
+   *  no matrix rows were dropped during parsing, and — when a plan is attached —
+   *  the matrix has at least as many rows as the plan has tasks. */
   passed: boolean;
   /** Artifact-backed share of the verifiable requirements, 0..1. */
   coverage: number;
@@ -265,6 +324,8 @@ export type VerificationCoverageGate = {
   incomplete: string[];
   /** Malformed matrix rows dropped during parsing — unknown, unverified requirements. */
   dropped: number;
+  /** Plan reconciliation when a matching plan was attached (issue #201). */
+  plan?: PlanReconciliation;
 };
 
 /**
@@ -277,11 +338,12 @@ export type VerificationCoverageGate = {
  */
 export function scoreVerificationCoverage(
   entries: VerificationEntry[],
-  dropped = 0
+  dropped = 0,
+  plan?: PlanReconciliation
 ): VerificationCoverageGate {
   const summary = summarizeVerification(entries);
   return {
-    passed: summary.verdict === "verified" && dropped === 0,
+    passed: summary.verdict === "verified" && dropped === 0 && !plan?.shortfall,
     coverage: summary.coverage,
     unproven: entries
       .filter((e) => isVerifiable(e) && !hasArtifact(e))
@@ -293,6 +355,7 @@ export function scoreVerificationCoverage(
       .filter((e) => e.result === "partial")
       .map((e) => e.requirement),
     dropped,
+    ...(plan ? { plan } : {}),
   };
 }
 
@@ -304,16 +367,27 @@ export function scoreVerificationCoverage(
  */
 export function formatVerificationCoverageGate(
   entries: VerificationEntry[],
-  dropped = 0
+  dropped = 0,
+  plan?: PlanReconciliation
 ): string {
   if (entries.length === 0 && dropped === 0) return "";
-  const g = scoreVerificationCoverage(entries, dropped);
+  const g = scoreVerificationCoverage(entries, dropped, plan);
   const lines = [
     "## Verification Coverage Gate",
     "",
     `Gate: **${g.passed ? "PASS" : "FAIL"}** — ${pct.format(g.coverage * 100)}% of verifiable requirements are artifact-backed.`,
   ];
   if (!g.passed) {
+    if (g.plan?.shortfall) {
+      const named =
+        g.plan.unmatched.length > 0
+          ? ` — not obviously covered: ${g.plan.unmatched.join(", ")}`
+          : "";
+      lines.push(
+        "",
+        `Plan reconciliation: the plan has ${g.plan.planTasks} task(s) but the matrix has only ${g.plan.matrixRows} row(s); omitted plan task(s) are unverified gaps${named}.`
+      );
+    }
     if (g.dropped > 0) {
       lines.push(
         "",
@@ -341,7 +415,8 @@ export function formatVerificationCoverageGate(
       g.dropped === 0 &&
       g.failed.length === 0 &&
       g.incomplete.length === 0 &&
-      g.unproven.length === 0
+      g.unproven.length === 0 &&
+      !g.plan?.shortfall
     ) {
       lines.push(
         "",

@@ -15,14 +15,17 @@ import {
   routeReview,
 } from "./risk.js";
 import { resolveTierLadder, type TierLadder } from "./model-tier.js";
-import { discoverPlanTasks } from "./plan-tasks.js";
+import { discoverPlanTasks, readPlanTasks } from "./plan-tasks.js";
 import { reviewsFanoutInsteadOfReplan } from "./plan-fanout.js";
 import {
   formatInputSharpness,
   formatSharpeningGuidance,
   scoreInputSharpness,
 } from "./input-sharpness.js";
-import { parseVerificationMatrixWithDiagnostics } from "./verification-matrix.js";
+import {
+  parseVerificationMatrixWithDiagnostics,
+  reconcileMatrixWithPlan,
+} from "./verification-matrix.js";
 import { validateVerificationEvidence } from "./verification-evidence.js";
 import { runFanout } from "./fanout.js";
 import { reapWorktrees } from "./worktree.js";
@@ -809,6 +812,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       // failure rather than silently omitting the gate (#181 review).
       let verification: RunManifest["verification"];
       let verificationDropped = 0;
+      let verificationPlan: RunManifest["verificationPlan"];
       if (mode === "verify" && existsSync(verifyMatrixPath)) {
         // Read + parse the matrix in its OWN try so a directory / unreadable /
         // race-deleted matrix file degrades to "no matrix" (which renders the
@@ -823,11 +827,29 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             // Validate each cited artifact against the real filesystem/git (so a
             // nonexistent path or fabricated SHA cannot earn coverage) and relocate
             // scratch file artifacts into the durable bundle (#181 re-review).
+            // Produced-this-run (#201): scratch artifacts older than the run
+            // start are prior-run leftovers, not this run's proof.
+            const startedAtMs = Date.parse(manifestStartedAt);
             verification = validateVerificationEvidence(result.entries, {
               workspaceDir,
               runId,
+              ...(Number.isFinite(startedAtMs) ? { startedAtMs } : {}),
               commitExists: (sha) => commitExists(workspaceDir, sha),
             });
+            // Reconcile the matrix against the matching plan's task set (#201)
+            // so an omitted plan task surfaces as an unverified gap instead of
+            // silently inflating coverage.
+            if (planDoc && planMatchesRun) {
+              const titles = readPlanTasks(workspaceDir, planDoc.taskKey).map(
+                (t) => t.title
+              );
+              if (titles.length > 0) {
+                verificationPlan = reconcileMatrixWithPlan(
+                  verification,
+                  titles
+                );
+              }
+            }
           }
         } catch {
           // unreadable/dir/removed → treat as no matrix; the verify FAIL path renders.
@@ -860,6 +882,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         ...(mode === "verify" && verificationDropped > 0
           ? { verificationDropped }
           : {}),
+        ...(verificationPlan ? { verificationPlan } : {}),
         startedAt: manifestStartedAt,
         finishedAt: nowIso(),
       };
@@ -902,6 +925,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         ...(mode === "verify" && verificationDropped > 0
           ? { verificationDropped }
           : {}),
+        ...(verificationPlan ? { verificationPlan } : {}),
         startedAt: manifestStartedAt,
         finishedAt: nowIso(),
       });

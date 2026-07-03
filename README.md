@@ -266,7 +266,7 @@ The rest of this section is the detail behind each row:
 
 Beyond the build loop, two read/repair modes reuse all of the above:
 
-- 🔍 **`--verify`** — a read-only pass that reconciles a plan against git, runs the suites, and writes a DONE/GAP/DEFERRED report. Changes nothing.
+- 🔍 **`--verify`** — a read-only pass that reconciles a plan against git, runs the suites, and writes a DONE/GAP/DEFERRED report plus a machine-checked verification matrix. Changes nothing. The harness verifies each cited artifact **exists** (in-bounds `file:line`, a commit in git, or a scratch file **produced by this run** — prior-run leftovers are rejected) and fails the coverage gate when the matrix has fewer rows than the matching plan has tasks, so an omitted task can't silently inflate coverage. Whether an artifact actually _proves_ its requirement remains reviewer judgment — existence is machine-checked, relevance is not.
 - 🩹 **`--apply-review <doc>`** — consumes an external code-review document and fixes its actionable findings one per iteration, tracking deferred ones in the task-local `.otto/tasks/<task-key>/followups.md`.
 
 ---

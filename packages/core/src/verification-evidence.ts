@@ -112,9 +112,16 @@ export function artifactReferenceExists(
  */
 export function validateVerificationEvidence(
   entries: VerificationEntry[],
-  opts: { workspaceDir: string; runId: string } & EvidenceDeps
+  opts: {
+    workspaceDir: string;
+    runId: string;
+    /** Run start (epoch ms). When set, a scratch artifact whose mtime predates it
+     *  was produced by a PRIOR run and is rejected — neither counted as proof nor
+     *  relocated into this run's bundle (issue #201). */
+    startedAtMs?: number;
+  } & EvidenceDeps
 ): VerificationEntry[] {
-  const { workspaceDir, runId, commitExists } = opts;
+  const { workspaceDir, runId, startedAtMs, commitExists } = opts;
   let counter = 0;
 
   let scratchRoot: string | null = null;
@@ -141,17 +148,44 @@ export function validateVerificationEvidence(
     destDir = null;
   }
 
+  // A scratch file that predates the run start was produced by a prior run —
+  // citing it as this run's proof is fabrication, so it is rejected (#201).
+  const staleScratch = (real: string): boolean => {
+    if (startedAtMs === undefined) return false;
+    if (
+      !scratchRoot ||
+      (real !== scratchRoot && !real.startsWith(scratchRoot + sep))
+    ) {
+      return false; // not a scratch file — durable references have no run age
+    }
+    try {
+      return statSync(real).mtimeMs < startedAtMs;
+    } catch {
+      return true; // unreadable scratch file cannot prove anything
+    }
+  };
+
+  // Whether a plain scratch-path artifact is stale (never true for `file:line`
+  // or SHA references, which are durable by construction).
+  const staleScratchRef = (p: string): boolean => {
+    if (FILE_LINE_RE.test(p) || SHA_RE.test(p)) return false;
+    const real = safeWorkspaceFile(p, workspaceDir);
+    return real !== null && staleScratch(real);
+  };
+
   const relocateScratch = (p: string): { path: string; bundled: boolean } => {
     const keep = { path: p, bundled: false };
     if (FILE_LINE_RE.test(p) || SHA_RE.test(p)) return keep; // a reference, not a file
     const real = safeWorkspaceFile(p, workspaceDir);
     // Only relocate scratch artifacts the verify stage wrote under `.otto-tmp/`
-    // — never an arbitrary in-repo or host file (#181 re-review).
+    // — never an arbitrary in-repo or host file (#181 re-review) and never one
+    // left over from a previous run (#201).
     if (
       !real ||
       !destDir ||
       !scratchRoot ||
-      (real !== scratchRoot && !real.startsWith(scratchRoot + sep))
+      (real !== scratchRoot && !real.startsWith(scratchRoot + sep)) ||
+      staleScratch(real)
     ) {
       return keep;
     }
@@ -183,11 +217,10 @@ export function validateVerificationEvidence(
   return entries.map((e) => {
     const next: VerificationEntry = { ...e };
     if (e.artifactPath !== undefined) {
-      next.artifactExists = artifactReferenceExists(
-        e.artifactPath,
-        workspaceDir,
-        { commitExists }
-      );
+      next.artifactExists =
+        artifactReferenceExists(e.artifactPath, workspaceDir, {
+          commitExists,
+        }) && !staleScratchRef(e.artifactPath);
       const r = relocateScratch(e.artifactPath);
       next.artifactPath = r.path;
       next.artifactBundled = r.bundled;

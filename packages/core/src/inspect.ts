@@ -121,7 +121,9 @@ export function formatRunReport(
     lines.push("");
     lines.push(formatVerificationMatrix(matrix));
     lines.push("");
-    lines.push(formatVerificationCoverageGate(matrix, dropped));
+    lines.push(
+      formatVerificationCoverageGate(matrix, dropped, manifest.verificationPlan)
+    );
   } else if (manifest.mode === "verify") {
     lines.push("");
     lines.push(

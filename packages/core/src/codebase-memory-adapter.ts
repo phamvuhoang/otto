@@ -133,8 +133,9 @@ export function createStdioCbmRunner(
     for (const line of lines) {
       try {
         const msg = JSON.parse(line);
-        if (msg.id === 2 && msg.result) return { ok: true, result: msg.result };
-        if (msg.id === 2 && msg.error)
+        if (msg.id === 2 && "result" in msg)
+          return { ok: true, result: msg.result };
+        if (msg.id === 2 && "error" in msg)
           return { ok: false, error: String(msg.error.message ?? msg.error) };
       } catch {
         /* ignore non-JSON banner lines */

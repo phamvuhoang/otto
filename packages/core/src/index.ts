@@ -450,6 +450,7 @@ export {
 } from "./skill-validation.js";
 export {
   compareTrajectories,
+  scoreImpactRecall,
   scoreTrajectory,
   type EvalSignals,
   type LabelledSignals,

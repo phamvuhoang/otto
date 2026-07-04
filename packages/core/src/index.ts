@@ -203,6 +203,13 @@ export {
   type HeadroomRunner,
 } from "./headroom-adapter.js";
 export {
+  codebaseMemoryToolDefinition,
+  createStdioCbmRunner,
+  type CbmRequest,
+  type CbmResponse,
+  type CbmRunner,
+} from "./codebase-memory-adapter.js";
+export {
   formatPlanReport,
   readTaskPlans,
   runPlanReport,

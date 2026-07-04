@@ -406,10 +406,8 @@ export function authorizeToolInvocation(
  * Build a blocked {@link ToolAuthorization} for `authorizeToolOperation`'s
  * allowlist checks (an operation the tool hasn't declared, or a stage it isn't
  * enabled for). Mirrors the `PolicyViolation`/`SafetyEvent` field names
- * `authorizeToolInvocation` uses for a blocked call. The event's `kind` is
- * fixed to `"policy-violation"`: an operation-allowlist breach isn't one of
- * the four axis-specific {@link PolicyViolationKind} values, so it can't reuse
- * `v.kind` the way the invocation-level mapping does.
+ * `authorizeToolInvocation` uses for a blocked call. The event reuses the
+ * passed axis `kind` (same as the invocation-level mapping).
  */
 function blocked(
   kind: PolicyViolation["kind"],
@@ -417,13 +415,13 @@ function blocked(
   message: string
 ): ToolAuthorization {
   const violation: PolicyViolation = { kind, subject, message };
-  const event = {
+  const event: SafetyEvent = {
     category: "policy-violation",
-    kind: "policy-violation",
+    kind,
     subject,
     message,
     blocked: true,
-  } as unknown as SafetyEvent;
+  };
   return { allowed: false, violations: [violation], events: [event] };
 }
 

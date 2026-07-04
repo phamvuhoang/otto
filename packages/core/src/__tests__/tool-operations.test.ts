@@ -60,7 +60,7 @@ describe("authorizeToolOperation", () => {
       {}
     );
     expect(a.allowed).toBe(false);
-    expect(a.events.some((e) => e.kind === "policy-violation")).toBe(true);
+    expect(a.events.some((e) => e.category === "policy-violation")).toBe(true);
   });
 
   it("blocks any op on a stage the tool is not enabled for", () => {

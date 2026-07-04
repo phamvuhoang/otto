@@ -290,6 +290,7 @@ export {
 } from "./taint.js";
 export {
   authorizeToolInvocation,
+  authorizeToolOperation,
   parseTool,
   readToolConfig,
   readTools,
@@ -302,6 +303,7 @@ export {
   type ToolDefinition,
   type ToolInvocation,
   type ToolKind,
+  type ToolOperation,
   type ToolOverride,
   type ToolResult,
   type ToolSelection,

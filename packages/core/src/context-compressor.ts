@@ -424,6 +424,28 @@ export function summarizeToolCompression(usages: ToolUsage[]): {
   return { invocations, tokensSaved, retrievals };
 }
 
+/**
+ * Summarize the codebase-memory retrieval {@link ToolUsage} records on a run's
+ * stage records (name `codebase-memory`) — what a context report reads to show
+ * graph-retrieval evidence (P26). Pure. `undefined` when no such usage is
+ * present, so a non-CBM run's report omits the section entirely.
+ */
+export function summarizeGraphRetrieval(usages: ToolUsage[]):
+  | {
+      queries: number;
+      tokensAvoided: number;
+      fallbacks: number;
+    }
+  | undefined {
+  const graph = usages.filter((u) => u.name === "codebase-memory");
+  if (graph.length === 0) return undefined;
+  return {
+    queries: graph.length,
+    tokensAvoided: graph.reduce((s, u) => s + (u.tokensAvoided ?? 0), 0),
+    fallbacks: graph.filter((u) => u.fallbackReason).length,
+  };
+}
+
 /** One-line human summary of compression savings for the context report. Pure. */
 export function formatCompressionSummary(s: CompressionSummary): string {
   if (s.invocations === 0) return "Context compression: not used.";

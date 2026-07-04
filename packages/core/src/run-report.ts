@@ -13,6 +13,11 @@ import type { VerificationEntry } from "./verification-matrix.js";
 import type { PolicyViolationKind } from "./safety-policy.js";
 import type { TaintSource } from "./taint.js";
 import type { TokenUsage } from "./tokens.js";
+import type {
+  CbmIndexIdentity,
+  IndexFreshness,
+  WriteInventory,
+} from "./codebase-memory-adapter.js";
 
 /**
  * A safety-relevant occurrence recorded in a run's trajectory so policy
@@ -95,6 +100,22 @@ export type ToolUsage = {
   retrievalHandle?: string;
   /** Why the tool was selected/used (so a run report can explain the choice). */
   reasons?: string[];
+  /** The tool's version, when known (P26 codebase-memory evidence). */
+  toolVersion?: string;
+  /** Identity of the index this invocation queried, when applicable (P26). */
+  indexIdentity?: CbmIndexIdentity;
+  /** Freshness classification of the index at invocation time (P26). */
+  indexFreshness?: IndexFreshness;
+  /** Estimated tokens avoided by retrieving via this tool instead of inline context (P26). */
+  tokensAvoided?: number;
+  /** Size of the result returned, if relevant (P26). */
+  resultSize?: number;
+  /** Wall-clock latency of the invocation in milliseconds (P26). */
+  latencyMs?: number;
+  /** The query issued to the tool, if applicable (P26). */
+  query?: string;
+  /** Reason the tool fell back to a degraded path, if it did (P26). */
+  fallbackReason?: string;
 };
 
 /**
@@ -186,6 +207,13 @@ export type RunManifest = {
   /** Count of malformed matrix rows the parser dropped on a `--verify` run
    *  (issue #181 review); absent/0 when the matrix was clean. */
   verificationDropped?: number;
+  /** Run-level codebase-memory index record (P26 spike); absent for non-CBM runs. */
+  codebaseMemory?: {
+    indexIdentity?: CbmIndexIdentity;
+    buildMs?: number;
+    refreshMs?: number;
+    writeInventory?: WriteInventory;
+  };
   startedAt: string;
   finishedAt?: string;
 };

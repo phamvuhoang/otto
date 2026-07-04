@@ -205,9 +205,14 @@ export {
 export {
   codebaseMemoryToolDefinition,
   createStdioCbmRunner,
+  classifyIndexFreshness,
+  diffWriteInventory,
   type CbmRequest,
   type CbmResponse,
   type CbmRunner,
+  type CbmIndexIdentity,
+  type IndexFreshness,
+  type WriteInventory,
 } from "./codebase-memory-adapter.js";
 export {
   formatPlanReport,

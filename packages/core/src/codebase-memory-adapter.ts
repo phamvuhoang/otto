@@ -145,3 +145,70 @@ export function createStdioCbmRunner(
   };
   return { available, call };
 }
+
+/**
+ * Identity stamp a persisted `.codebase-memory/` index carries, so a later
+ * run can tell whether it's safe to trust without re-indexing: which
+ * workspace it was built for, the source revision it was built at, whether
+ * the worktree was dirty at build time, and tool/index bookkeeping.
+ */
+export type CbmIndexIdentity = {
+  workspace: string;
+  sourceRevision: string;
+  worktreeDirty: boolean;
+  toolVersion: string;
+  indexStatus: string;
+  indexedAt: string;
+};
+
+/**
+ * Freshness verdict for a persisted index against the current workspace
+ * state: `absent` (no index or no current state to compare), `wrong-project`
+ * (index was built for a different workspace), `stale` (revision drift or a
+ * dirty worktree since indexing), `fresh` (safe to trust as-is).
+ */
+export type IndexFreshness = "fresh" | "stale" | "absent" | "wrong-project";
+
+/**
+ * Classifies a persisted index's freshness against the current workspace
+ * identity. Pure — no filesystem or process access; callers gather
+ * `current`/`index` themselves.
+ */
+export function classifyIndexFreshness(
+  current: {
+    workspace: string;
+    sourceRevision: string;
+    worktreeDirty: boolean;
+  } | null,
+  index: CbmIndexIdentity | null
+): IndexFreshness {
+  if (!index || !current) return "absent";
+  if (index.workspace !== current.workspace) return "wrong-project";
+  if (index.sourceRevision !== current.sourceRevision || current.worktreeDirty)
+    return "stale";
+  return "fresh";
+}
+
+/**
+ * New files written during a run (`after \ before`) plus which of those
+ * escaped the tool's declared write roots — i.e. wrote outside
+ * `.codebase-memory/` (see `writeRoots` on {@link codebaseMemoryToolDefinition}).
+ * A declared root matches itself exactly or any path under `root + "/"`, so
+ * a root doesn't accidentally prefix-match a sibling like `.codebase-memory-foo`.
+ */
+export type WriteInventory = { files: string[]; escaped: string[] };
+
+/** Pure diff of two file-path snapshots against a set of declared write roots. */
+export function diffWriteInventory(
+  before: string[],
+  after: string[],
+  declaredRoots: string[]
+): WriteInventory {
+  const beforeSet = new Set(before);
+  const files = after.filter((f) => !beforeSet.has(f));
+  const under = (f: string) =>
+    declaredRoots.some(
+      (r) => f === r || f.startsWith(r.endsWith("/") ? r : `${r}/`)
+    );
+  return { files, escaped: files.filter((f) => !under(f)) };
+}

@@ -1,3 +1,4 @@
+import { codebaseMemoryToolDefinition } from "./codebase-memory-adapter.js";
 import type { ExternalSkillSource } from "./external-skills.js";
 import { headroomToolDefinition } from "./headroom-adapter.js";
 import type { SafetyPolicy } from "./safety-policy.js";
@@ -116,6 +117,17 @@ const PROFILES: ExtensionProfile[] = [
     requires: [],
     followUp:
       "Next: pair with otto-afk --review-panel; review .otto/policy.json and tighten further as needed.",
+  },
+  {
+    name: "codebase-intelligence",
+    description:
+      "Local code-knowledge graph (Codebase Memory) via an Otto-owned MCP stdio child. Off by default; no live prompt injection in the spike.",
+    sources: [],
+    tools: [codebaseMemoryToolDefinition()],
+    config: { tools: { "codebase-memory": { enabled: true, stages: [] } } },
+    policy: { allowedWriteRoots: [".codebase-memory"] },
+    requires: ["codebase-memory"],
+    followUp: "Next: otto-tools health && otto-tools why plan",
   },
 ];
 

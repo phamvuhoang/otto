@@ -580,6 +580,12 @@ export {
 } from "./plan-tasks.js";
 export { reviewsFanoutInsteadOfReplan } from "./plan-fanout.js";
 export {
+  parseHandoff,
+  computeOutOfScope,
+  type TestRun,
+  type SubAgentHandoff,
+} from "./handoff.js";
+export {
   INPUT_DIMENSIONS,
   formatInputSharpness,
   formatSharpeningGuidance,

@@ -571,7 +571,12 @@ export {
   parsePlanTasks,
   planParallelGroups,
   readPlanTasks,
+  pathsCollide,
+  scopesOverlap,
+  scopeConfidence,
+  predictConflicts,
   type PlanTask,
+  type ConflictPrediction,
 } from "./plan-tasks.js";
 export { reviewsFanoutInsteadOfReplan } from "./plan-fanout.js";
 export {

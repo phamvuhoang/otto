@@ -68,7 +68,7 @@ The `.otto/tools/headroom.json` entry is the **inspection/health** surface **and
 
 ## Codebase Memory (P26, spike)
 
-`codebase-intelligence` registers a local code-knowledge graph (architecture summaries, call-path tracing, symbol search) via an Otto-owned MCP stdio child, following the same adapter pattern as Headroom. **This is a spike, not a production feature:** it is **report/eval-only** — nothing here injects graph results into a live plan/implement/review/verify prompt, and this slice does not index a live target. It exists so the eval harness can measure whether structural retrieval is worth wiring into a stage later (P26 in [docs/HARNESS_ROADMAP_PHASE5.md](./HARNESS_ROADMAP_PHASE5.md)).
+`codebase-intelligence` registers a local code-knowledge graph (architecture summaries, call-path tracing, symbol search) via an Otto-owned MCP stdio child, following the same adapter pattern as Headroom. **This is a spike, not a production feature:** it is **report/eval-only** — nothing here injects graph results into a live plan/implement/review/verify prompt, and this slice does not index a live target. It exists so the eval harness can measure whether structural retrieval is worth wiring into a stage later (P26 in the Phase 5 roadmap, `docs/HARNESS_ROADMAP_PHASE5.md`).
 
 ```bash
 otto-extensions init codebase-intelligence --dry-run  # preview the .otto/tools/codebase-memory.json it writes

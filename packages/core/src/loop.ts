@@ -94,6 +94,7 @@ import type { Stage } from "./stages.js";
 import { maybeJournal } from "./journal.js";
 import {
   detectScopeDrift,
+  extractPlanFileMap,
   formatPlanDepthRubric,
   scorePlanDepth,
   scorePlanQuality,
@@ -1110,6 +1111,14 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           process.stderr.write(
             `${bold(SYM.bullet)} ${bold("fan-out")} ${dim(`· ${planTasks.length} task(s), concurrency ${fanOutConcurrency}`)}\n`
           );
+          // Ground merge-order confidence in the plan's real file map (P25 Task
+          // 3) — the same doc + extraction the scope-drift check uses below. No
+          // plan doc available (fan-out without --plan) degrades to `[]`,
+          // reproducing prior (uniform-confidence) ordering.
+          const fanoutPlanDoc = latestTaskPlanDocument(workspaceDir);
+          const planFileMap = fanoutPlanDoc
+            ? extractPlanFileMap(fanoutPlanDoc.doc)
+            : [];
           const fr = await runFanout({
             tasks: planTasks,
             workspaceDir,
@@ -1123,6 +1132,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             runtimeId: activeAgentId,
             signal: activeSignal,
             onSubAgent: accountStage,
+            planFileMap,
           });
           fanoutLanded = fr.outcomes.filter(
             (o) => o.status === "landed"

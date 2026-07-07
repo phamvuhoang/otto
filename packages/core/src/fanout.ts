@@ -91,6 +91,14 @@ export type RunFanoutOptions = {
   runtimeId: AgentRuntimeId;
   signal?: AbortSignal;
   /**
+   * Real paths named in the plan doc (spec.md + plan.md), from
+   * {@link extractPlanFileMap}. Threaded into Phase B's conflict prediction so
+   * `scopeConfidence` varies per task and merge order is non-inert (P25 Task
+   * 3). Optional; `[]` (fan-out without `--plan`) reproduces prior uniform-
+   * confidence ordering.
+   */
+  planFileMap?: string[];
+  /**
    * The parallel per-task work: implement `task` inside `worktreeDir` and commit
    * there. Injectable so tests don't spawn a model; defaults to the
    * sub-implementer stage. A throw defers the task (its worktree is discarded).
@@ -223,10 +231,11 @@ export async function runFanout(opts: RunFanoutOptions): Promise<FanoutResult> {
 
       // Phase B — serial cherry-pick onto the workspace HEAD. Merge
       // lowest-conflict-risk tasks first (P25 Task 3): predicted overlaps are
-      // computed from the wave's own declared scopes (no plan file map is
-      // available here, so confidence is uniform and ordering falls back to
-      // fewest overlaps).
-      const predictions = predictConflicts(wave, []);
+      // computed from the wave's own declared scopes, reconciled against the
+      // caller's plan file map — when one is supplied, `scopeConfidence`
+      // varies per task and actually drives the merge order; `[]` degrades to
+      // uniform confidence (fewest-overlaps ordering only).
+      const predictions = predictConflicts(wave, opts.planFileMap ?? []);
       const orderedTasks = orderByConflictRisk(wave, predictions);
       const orderedBuilt = orderedTasks.map(
         (t) => built.find((b) => b.task.id === t.id)!

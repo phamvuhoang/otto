@@ -596,6 +596,8 @@ export {
 } from "./input-sharpness.js";
 export { createWorktree, reapWorktrees } from "./worktree.js";
 export {
+  buildCrossTaskSummary,
+  orderByConflictRisk,
   runFanout,
   type FanoutResult,
   type FanoutTaskOutcome,

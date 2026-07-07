@@ -8,10 +8,19 @@
  * sequential loop — fan-out never leaves the tree conflicted or half-merged.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import type { AgentRuntimeId } from "./agent-runtime.js";
-import { git, headSha } from "./git.js";
+import { changedFilesSince, git, headSha } from "./git.js";
+import { parseHandoff, type SubAgentHandoff } from "./handoff.js";
 import type { TierLadder } from "./model-tier.js";
-import { planParallelGroups, type PlanTask } from "./plan-tasks.js";
+import {
+  planParallelGroups,
+  predictConflicts,
+  type ConflictPrediction,
+  type PlanTask,
+} from "./plan-tasks.js";
 import type { StageResult } from "./runner.js";
 import { executeStage } from "./stage-exec.js";
 import { STAGES } from "./stages.js";
@@ -23,13 +32,51 @@ export type FanoutTaskOutcome = {
   task: PlanTask;
   status: FanoutTaskStatus;
   reason?: string;
+  /** The sub-agent's structured handoff, when one could be read (or derived). */
+  handoff?: SubAgentHandoff;
 };
 
 export type FanoutResult = {
   outcomes: FanoutTaskOutcome[];
   /** Tasks that did not land cleanly and must be re-run sequentially. */
   deferred: PlanTask[];
+  /** Cross-task interaction notes (shared files, out-of-scope touches,
+   *  deferrals) surfaced by the synthesizer; `""` when nothing noteworthy. */
+  crossTaskSummary: string;
 };
+
+/**
+ * Reorder `tasks` by ascending conflict risk (safest first): highest scope
+ * confidence, fewest predicted overlaps. Pure — the caller decides how to use
+ * the order (P25 Task 3: Phase B merges the lowest-risk worktrees first).
+ */
+export function orderByConflictRisk(
+  tasks: PlanTask[],
+  predictions: ConflictPrediction[]
+): PlanTask[] {
+  const score = (id: string) => {
+    const p = predictions.find((x) => x.taskId === id);
+    return p ? p.confidence - p.overlapsWith.length : 1;
+  };
+  return [...tasks].sort((a, b) => score(b.id) - score(a.id));
+}
+
+/**
+ * Summarize cross-task interactions worth a human's attention: out-of-scope
+ * touches reported by a sub-agent's handoff, and deferrals with their reason.
+ * `""` when no outcome has anything noteworthy to report.
+ */
+export function buildCrossTaskSummary(outcomes: FanoutTaskOutcome[]): string {
+  const lines: string[] = [];
+  for (const o of outcomes) {
+    const oos = o.handoff?.outOfScopeFiles ?? [];
+    if (oos.length)
+      lines.push(`- ${o.task.id} touched out-of-scope: ${oos.join(", ")}`);
+    if (o.status === "deferred")
+      lines.push(`- ${o.task.id} deferred: ${o.reason ?? "unknown"}`);
+  }
+  return lines.length ? `Cross-task interactions:\n${lines.join("\n")}` : "";
+}
 
 export type RunFanoutOptions = {
   tasks: PlanTask[];
@@ -115,6 +162,22 @@ type Built = {
 };
 
 /**
+ * Read a built worktree's `handoff.json` (written by the subtask template)
+ * and parse it. Throws-free: a missing/unreadable file degrades to `""`,
+ * which `parseHandoff` turns into its fallback (the worktree's git-diff file
+ * list since `before`) — never blocks the merge on a malformed handoff.
+ */
+function readSubAgentHandoff(b: Built): SubAgentHandoff {
+  let raw = "";
+  try {
+    raw = readFileSync(join(b.dir, "handoff.json"), "utf8");
+  } catch {
+    raw = "";
+  }
+  return parseHandoff(raw, b.task.id, changedFilesSince(b.dir, b.before));
+}
+
+/**
  * Run the plan's tasks wave-by-wave. Phase A (parallel, bounded by
  * `concurrency`): each task runs its sub-agent in a fresh worktree. Phase B
  * (serial): cherry-pick each worktree's new commit(s) onto the workspace HEAD;
@@ -128,15 +191,24 @@ export async function runFanout(opts: RunFanoutOptions): Promise<FanoutResult> {
 
   for (const wave of waves) {
     if (opts.signal?.aborted) {
-      for (const task of wave) outcomes.push({ task, status: "deferred", reason: "aborted" });
+      for (const task of wave)
+        outcomes.push({ task, status: "deferred", reason: "aborted" });
       continue;
     }
 
     // Create one worktree per task up front (serial — git worktree add mutates
     // .git), then run the sub-agents concurrently inside them.
     const built: Built[] = wave.map((task) => {
-      const wt = createWorktree(opts.workspaceDir, `${opts.iteration}-${task.id}`);
-      return { task, dir: wt.dir, before: headSha(wt.dir), cleanup: wt.cleanup };
+      const wt = createWorktree(
+        opts.workspaceDir,
+        `${opts.iteration}-${task.id}`
+      );
+      return {
+        task,
+        dir: wt.dir,
+        before: headSha(wt.dir),
+        cleanup: wt.cleanup,
+      };
     });
 
     try {
@@ -149,15 +221,36 @@ export async function runFanout(opts: RunFanoutOptions): Promise<FanoutResult> {
         }
       });
 
-      // Phase B — serial cherry-pick onto the workspace HEAD.
-      for (const b of built) {
+      // Phase B — serial cherry-pick onto the workspace HEAD. Merge
+      // lowest-conflict-risk tasks first (P25 Task 3): predicted overlaps are
+      // computed from the wave's own declared scopes (no plan file map is
+      // available here, so confidence is uniform and ordering falls back to
+      // fewest overlaps).
+      const predictions = predictConflicts(wave, []);
+      const orderedTasks = orderByConflictRisk(wave, predictions);
+      const orderedBuilt = orderedTasks.map(
+        (t) => built.find((b) => b.task.id === t.id)!
+      );
+
+      for (const b of orderedBuilt) {
+        const handoff = readSubAgentHandoff(b);
         if (b.failure) {
-          outcomes.push({ task: b.task, status: "deferred", reason: b.failure });
+          outcomes.push({
+            task: b.task,
+            status: "deferred",
+            reason: b.failure,
+            handoff,
+          });
           continue;
         }
         const after = headSha(b.dir);
         if (!after || after === b.before) {
-          outcomes.push({ task: b.task, status: "deferred", reason: "no commit produced" });
+          outcomes.push({
+            task: b.task,
+            status: "deferred",
+            reason: "no commit produced",
+            handoff,
+          });
           continue;
         }
         const picked = git(
@@ -166,10 +259,18 @@ export async function runFanout(opts: RunFanoutOptions): Promise<FanoutResult> {
         );
         if (picked == null) {
           git(["cherry-pick", "--abort"], opts.workspaceDir);
-          outcomes.push({ task: b.task, status: "deferred", reason: "cherry-pick conflict" });
+          const riskNote = handoff.risks.length
+            ? `; risks: ${handoff.risks.join(", ")}`
+            : "";
+          outcomes.push({
+            task: b.task,
+            status: "deferred",
+            reason: `cherry-pick conflict${riskNote}`,
+            handoff,
+          });
           continue;
         }
-        outcomes.push({ task: b.task, status: "landed" });
+        outcomes.push({ task: b.task, status: "landed", handoff });
       }
     } finally {
       for (const b of built) b.cleanup();
@@ -178,6 +279,9 @@ export async function runFanout(opts: RunFanoutOptions): Promise<FanoutResult> {
 
   return {
     outcomes,
-    deferred: outcomes.filter((o) => o.status === "deferred").map((o) => o.task),
+    deferred: outcomes
+      .filter((o) => o.status === "deferred")
+      .map((o) => o.task),
+    crossTaskSummary: buildCrossTaskSummary(outcomes),
   };
 }

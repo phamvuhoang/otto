@@ -47,6 +47,7 @@ import {
   hasRunReport,
   readStageRecords,
   removeStageRecords,
+  summarizeFanout,
   writeManifest,
   writeRunReport,
   writeStageRecord,
@@ -691,6 +692,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   let reportRewriteUsed = false;
   let runCostUsd = 0;
   let runTokenUsage = emptyTokenUsage();
+  // Sub-agent fan-out evidence (P25 Task 4): set once the first iteration's
+  // `runFanout` resolves; absent for non-fan-out runs, so the manifest's
+  // `fanout` field stays unset (mirrors the `inputSharpness` optional pattern).
+  let fanoutSummary: RunManifest["fanout"];
   let cooldownFactor = 1;
   // Model-routing escalation (issue #66 P11): count consecutive iterations whose
   // gate stage (the implementer) returned an error, then escalate the routed tier
@@ -857,6 +862,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               },
             }
           : {}),
+        ...(fanoutSummary ? { fanout: fanoutSummary } : {}),
         ...(verification ? { verification } : {}),
         ...(mode === "verify" && verificationDropped > 0
           ? { verificationDropped }
@@ -899,6 +905,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               },
             }
           : {}),
+        ...(fanoutSummary ? { fanout: fanoutSummary } : {}),
         ...(verification ? { verification } : {}),
         ...(mode === "verify" && verificationDropped > 0
           ? { verificationDropped }
@@ -1140,6 +1147,36 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           process.stderr.write(
             `${dim(SYM.cont)} ${greenOut(String(fanoutLanded))} landed, ${fr.deferred.length} deferred ${dim("(deferred tasks continue in the sequential loop)")}\n`
           );
+          // Evidence (P25 Task 4): roll the fan-out outcomes onto the manifest
+          // and give each sub-agent its own inspectable stage record — today
+          // that per-task detail (status + defer reason) only ever reached
+          // stderr. Cost/tokens were already rolled into the run total above
+          // via `onSubAgent: accountStage`, so these synthetic records carry
+          // no cost/usage of their own (avoids double-counting). Best-effort
+          // (mirrors recordStage's own try/catch): evidence collection must
+          // never take down an otherwise-successful fan-out landing.
+          try {
+            fanoutSummary = summarizeFanout(fr);
+            const fanoutRecordedAt = nowIso();
+            for (const o of fr.outcomes) {
+              recordStage(
+                i,
+                `subImplementer:${o.task.id}`,
+                {
+                  result: o.reason ?? o.status,
+                  costUsd: 0,
+                  isError: o.status !== "landed",
+                  apiErrorStatus: null,
+                  usage: emptyTokenUsage(),
+                  runtimeId: activeAgentId,
+                },
+                fanoutRecordedAt
+              );
+            }
+          } catch {
+            // Best-effort: never fail a run because fan-out evidence could not
+            // be recorded.
+          }
         }
       }
 

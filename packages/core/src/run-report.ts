@@ -18,6 +18,7 @@ import type {
   IndexFreshness,
   WriteInventory,
 } from "./codebase-memory-adapter.js";
+import type { FanoutResult } from "./fanout.js";
 
 /**
  * A safety-relevant occurrence recorded in a run's trajectory so policy
@@ -214,9 +215,42 @@ export type RunManifest = {
     refreshMs?: number;
     writeInventory?: WriteInventory;
   };
+  /** Sub-agent fan-out evidence (issue #66 P11, P25 Task 4): per-task
+   *  contributions (status + changed files + defer reason) and the
+   *  cross-task interaction summary; absent when `--fan-out` did not run. */
+  fanout?: {
+    contributions: {
+      taskId: string;
+      status: string;
+      changedFiles: string[];
+      reason?: string;
+    }[];
+    crossTaskSummary: string;
+  };
   startedAt: string;
   finishedAt?: string;
 };
+
+/**
+ * Map a `runFanout` result onto the manifest's `fanout` evidence field (P25
+ * Task 4): one contribution per task outcome (status + changed files + defer
+ * reason, when any), plus the synthesizer's cross-task summary. Pure — no I/O
+ * — so the loop can call it directly on the in-memory `FanoutResult` and the
+ * mapping itself stays unit-testable without spawning sub-agents.
+ */
+export function summarizeFanout(
+  result: FanoutResult
+): NonNullable<RunManifest["fanout"]> {
+  return {
+    contributions: result.outcomes.map((o) => ({
+      taskId: o.task.id,
+      status: o.status,
+      changedFiles: o.handoff?.changedFiles ?? [],
+      ...(o.reason !== undefined ? { reason: o.reason } : {}),
+    })),
+    crossTaskSummary: result.crossTaskSummary,
+  };
+}
 
 /**
  * Allocate a sortable, filesystem-safe run id: an ISO timestamp with its

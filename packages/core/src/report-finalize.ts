@@ -33,6 +33,7 @@ export type FinalizeReportContext = {
   headSha?: string | null;
   changedFiles?: string[];
   scopeDrift?: ScopeDriftSummary | null;
+  fanout?: RunManifest["fanout"];
 };
 
 export const DEFAULT_REPORT_LEGIBILITY_THRESHOLD = 1;
@@ -249,6 +250,39 @@ function appendVerificationGallery(
   return visual ? `${withGallery.trimEnd()}\n\n${visual}\n` : withGallery;
 }
 
+/**
+ * Render a `--fan-out` run's sub-agent evidence (issue #66 P11, P25 Task 5)
+ * as an "Agent contributions" section — each task's status, changed files,
+ * and defer reason, plus the synthesizer's cross-task summary. Pure; returns
+ * `""` when there are no contributions so non-fan-out runs omit the section
+ * entirely.
+ */
+export function formatAgentContributions(
+  fanout: NonNullable<FinalizeReportContext["fanout"]>
+): string {
+  if (!fanout.contributions.length) return "";
+  const rows = fanout.contributions
+    .map(
+      (c) =>
+        `- **${c.taskId}** — ${c.status}${c.changedFiles.length ? ` (${c.changedFiles.join(", ")})` : ""}${c.reason ? ` — ${c.reason}` : ""}`
+    )
+    .join("\n");
+  const summary = fanout.crossTaskSummary
+    ? `\n\n${fanout.crossTaskSummary}`
+    : "";
+  return `## Agent contributions\n\n${rows}${summary}`;
+}
+
+function appendAgentContributions(
+  report: string,
+  ctx: FinalizeReportContext
+): string {
+  if (!ctx.fanout) return report;
+  const section = formatAgentContributions(ctx.fanout);
+  if (!section) return report;
+  return `${report.trimEnd()}\n\n${section}\n`;
+}
+
 function appendLegibilityGate(report: string): string {
   const score = scoreReportLegibility(report);
   const passed = score.ratio >= DEFAULT_REPORT_LEGIBILITY_THRESHOLD;
@@ -350,6 +384,7 @@ export function finalizeReportText(
     ctx.scopeDrift
   );
   const withEvidence = appendAutomatedEvidence(withRisk, ctx);
-  const withGallery = appendVerificationGallery(withEvidence, ctx);
+  const withContributions = appendAgentContributions(withEvidence, ctx);
+  const withGallery = appendVerificationGallery(withContributions, ctx);
   return appendLegibilityGate(withGallery);
 }

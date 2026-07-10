@@ -1282,6 +1282,11 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               modelRouting,
               tierLadder,
               riskAssessment,
+              // Cross-task interactions from this run's fan-out (P25 Task 6):
+              // `fanoutSummary` is set once, on the fan-out iteration, and
+              // persists for the rest of the run — undefined on a non-fan-out
+              // run, so the panel's injection stays inert.
+              crossTaskSummary: fanoutSummary?.crossTaskSummary,
               onStage: accountStage,
               recordStage: (stageName, subSr, startedAt, reviewSeverity) =>
                 recordStage(i, stageName, subSr, startedAt, reviewSeverity),

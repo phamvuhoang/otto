@@ -1152,30 +1152,26 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           // that per-task detail (status + defer reason) only ever reached
           // stderr. Cost/tokens were already rolled into the run total above
           // via `onSubAgent: accountStage`, so these synthetic records carry
-          // no cost/usage of their own (avoids double-counting). Best-effort
-          // (mirrors recordStage's own try/catch): evidence collection must
-          // never take down an otherwise-successful fan-out landing.
-          try {
-            fanoutSummary = summarizeFanout(fr);
-            const fanoutRecordedAt = nowIso();
-            for (const o of fr.outcomes) {
-              recordStage(
-                i,
-                `subImplementer:${o.task.id}`,
-                {
-                  result: o.reason ?? o.status,
-                  costUsd: 0,
-                  isError: o.status !== "landed",
-                  apiErrorStatus: null,
-                  usage: emptyTokenUsage(),
-                  runtimeId: activeAgentId,
-                },
-                fanoutRecordedAt
-              );
-            }
-          } catch {
-            // Best-effort: never fail a run because fan-out evidence could not
-            // be recorded.
+          // no cost/usage of their own (avoids double-counting). `summarizeFanout`
+          // is pure over a well-formed `FanoutResult` and `recordStage` already
+          // guards its own fs write internally, so no outer try/catch here —
+          // a real regression should surface, not be swallowed.
+          fanoutSummary = summarizeFanout(fr);
+          const fanoutRecordedAt = nowIso();
+          for (const o of fr.outcomes) {
+            recordStage(
+              i,
+              `subImplementer:${o.task.id}`,
+              {
+                result: o.reason ?? o.status,
+                costUsd: 0,
+                isError: o.status !== "landed",
+                apiErrorStatus: null,
+                usage: emptyTokenUsage(),
+                runtimeId: activeAgentId,
+              },
+              fanoutRecordedAt
+            );
           }
         }
       }

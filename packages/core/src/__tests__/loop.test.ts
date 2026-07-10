@@ -286,7 +286,18 @@ describe("runLoop", () => {
     // Fan-out discovers a task and lands it.
     mocks.discoverPlanTasks.mockReturnValue([{ id: "t1" }]);
     mocks.runFanout.mockResolvedValue({
-      outcomes: [{ status: "landed" }],
+      outcomes: [
+        {
+          status: "landed",
+          task: {
+            id: "t1",
+            title: "t1",
+            fileScope: [],
+            dependsOn: [],
+            parallelSafe: true,
+          },
+        },
+      ],
       deferred: [],
     });
     mocks.runStage.mockResolvedValue(ok("reviewed, fixes committed"));

@@ -8,5 +8,6 @@
     "label": "cbm-on",
     "args": ["--enable-tool", "codebase-memory"],
     "env": { "OTTO_CBM_E2E": "1" }
-  }
+  },
+  { "label": "fanout-hardened", "args": ["--fan-out"], "env": {} }
 ]

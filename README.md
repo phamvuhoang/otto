@@ -183,6 +183,8 @@ otto-afk --fan-out --fan-out-concurrency 4 "./docs/plans/feature.md" 20
 > **Note:** `--fan-out` is not available in `--watch` mode. For issue-driven watch runs (`otto-ghafk --watch`), Otto works sequentially per issue. Fan-out applies when you drive `otto-afk` directly against a plan file.
 >
 > **`--plan` + `--fan-out` together:** when a previously authored task graph already exists and fan-out lands implementation work, that run is treated as an _implement_ — Otto reviews the aggregated fan-out diff and finalizes, rather than re-authoring the next plan over the slice docs. If fan-out lands nothing, the run authors a plan as usual.
+>
+> **Multi-agent coordination (P25):** fan-out now predicts file-scope conflicts before merging, requires each sub-agent to hand off a structured summary of what it touched, and reports per-agent contributions and deferrals (with reasons) in the run's evidence bundle.
 
 ---
 

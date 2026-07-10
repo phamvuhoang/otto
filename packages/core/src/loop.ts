@@ -1127,6 +1127,21 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           const planFileMap = fanoutPlanDoc
             ? extractPlanFileMap(fanoutPlanDoc.doc)
             : [];
+          // P25/P26 seam (Task 7): bind each fan-out worktree to a retrieval
+          // identity only when the repo has actually opted the
+          // `codebase-memory` tool in — the simplest correct "is it enabled"
+          // check, mirroring the registry/config merge `toolEnabledForStage`
+          // uses for its own registry-level gate (`.otto/tools/*.json`
+          // `enabled` + `.otto/config.json` `tools.codebase-memory.enabled`
+          // override). Absent tool or explicit off ⇒ `false`, so a bare repo
+          // (no `codebase-memory` registration) never sets this.
+          const cbmTool = readTools(workspaceDir).find(
+            (t) => t.name === "codebase-memory"
+          );
+          const bindWorktreeIdentity = cbmTool
+            ? (readToolConfig(workspaceDir).overrides["codebase-memory"]
+                ?.enabled ?? cbmTool.enabled)
+            : false;
           const fr = await runFanout({
             tasks: planTasks,
             workspaceDir,
@@ -1141,6 +1156,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             signal: activeSignal,
             onSubAgent: accountStage,
             planFileMap,
+            retrievalStore,
+            bindWorktreeIdentity,
           });
           fanoutLanded = fr.outcomes.filter(
             (o) => o.status === "landed"

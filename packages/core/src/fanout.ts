@@ -12,6 +12,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { AgentRuntimeId } from "./agent-runtime.js";
+import type { CbmIndexIdentity } from "./codebase-memory-adapter.js";
+import type { RetrievalStore } from "./context-compressor.js";
 import { changedFilesSince, git, headSha } from "./git.js";
 import { parseHandoff, type SubAgentHandoff } from "./handoff.js";
 import type { TierLadder } from "./model-tier.js";
@@ -78,6 +80,21 @@ export function buildCrossTaskSummary(outcomes: FanoutTaskOutcome[]): string {
   return lines.length ? `Cross-task interactions:\n${lines.join("\n")}` : "";
 }
 
+/**
+ * Per-worktree retrieval identity (P25 Task 7, the seam for P26): stamps a
+ * fan-out worktree with the workspace it lives in and the sha it was built
+ * from, so a codebase-memory index built inside one worktree is never
+ * mistaken for another's (or trusted once the worktree's HEAD has moved on).
+ * Pure. Only computed when `bindWorktreeIdentity` is on; otherwise unused —
+ * P26 is the only consumer.
+ */
+export function worktreeIndexIdentity(
+  dir: string,
+  before: string
+): Pick<CbmIndexIdentity, "workspace" | "sourceRevision" | "worktreeDirty"> {
+  return { workspace: dir, sourceRevision: before, worktreeDirty: false };
+}
+
 export type RunFanoutOptions = {
   tasks: PlanTask[];
   workspaceDir: string;
@@ -108,6 +125,16 @@ export type RunFanoutOptions = {
    *  tokens into the run total (budget/pacing). Not called for an injected
    *  `runSubAgent`. */
   onSubAgent?: (sr: StageResult) => void;
+  /** The run's retrieval store (issue #112 P20's `runRetrievalStore`), passed
+   *  through to each sub-agent's `executeStage` call exactly as the
+   *  sequential loop already does. Optional; absent ⇒ no retrieval store is
+   *  threaded (today's behavior — fan-out never passed one). */
+  retrievalStore?: RetrievalStore;
+  /** P25/P26 seam: when true, stamp each built worktree with a
+   *  {@link worktreeIndexIdentity} so a codebase-memory index built inside
+   *  one worktree can't be mistaken for another's. Default false ⇒ inert;
+   *  only meaningful once the `codebase-memory` tool is enabled. */
+  bindWorktreeIdentity?: boolean;
 };
 
 /** Bounded-concurrency map: at most `limit` promises in flight at once. */
@@ -154,6 +181,9 @@ function defaultRunSubAgent(
       // worktree dir — allow writes there so `git commit` works under the
       // sandbox runner (issue #66 P11).
       sandboxWriteRoots: [opts.workspaceDir],
+      // Absent unless the caller threads one (P25 Task 7); undefined here
+      // reproduces today's behavior exactly.
+      retrievalStore: opts.retrievalStore,
     });
     opts.onSubAgent?.(sr);
   };
@@ -167,6 +197,12 @@ type Built = {
   cleanup: () => void;
   /** Set when the parallel phase failed before producing a usable commit. */
   failure?: string;
+  /** Per-worktree retrieval identity (P25 Task 7), present only when
+   *  `bindWorktreeIdentity` is on. Consumed only by P26; otherwise unused. */
+  identity?: Pick<
+    CbmIndexIdentity,
+    "workspace" | "sourceRevision" | "worktreeDirty"
+  >;
 };
 
 /**
@@ -211,11 +247,15 @@ export async function runFanout(opts: RunFanoutOptions): Promise<FanoutResult> {
         opts.workspaceDir,
         `${opts.iteration}-${task.id}`
       );
+      const before = headSha(wt.dir);
       return {
         task,
         dir: wt.dir,
-        before: headSha(wt.dir),
+        before,
         cleanup: wt.cleanup,
+        identity: opts.bindWorktreeIdentity
+          ? worktreeIndexIdentity(wt.dir, before ?? "")
+          : undefined,
       };
     });
 

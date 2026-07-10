@@ -160,11 +160,15 @@ describe("runFanout (worktree merge)", () => {
   // into Phase B's conflict prediction, not the prior unconditional `[]`.
   // Tasks are declared in the OPPOSITE order from their plan-map-grounded
   // confidence, so only a forwarded, non-empty map can flip the merge order
-  // away from input order.
+  // away from input order. "weak" has TWO fileScope entries so it lands at
+  // confidence 0.5 (grounded, not sealed into its own wave by the Minor P25
+  // Task 1 fix below) while still scoring below "strong"'s full 1.0 — the two
+  // tasks share a wave, and only Phase B's ordering (not wave-sealing) can
+  // explain the merge order this test checks.
   it("forwards opts.planFileMap so the higher-confidence task merges first", async () => {
     const res = await runFanout({
       ...baseOpts(
-        [t("weak", ["b.txt"]), t("strong", ["a.txt"])],
+        [t("weak", ["b.txt", "c.txt"]), t("strong", ["a.txt"])],
         async (task, dir) => {
           commitInWorktree(
             dir,
@@ -173,8 +177,10 @@ describe("runFanout (worktree merge)", () => {
           );
         }
       ),
-      // Only "a.txt" ("strong"'s scope) is grounded in the plan's file map.
-      planFileMap: ["a.txt"],
+      // "a.txt" ("strong"'s scope) is fully grounded (confidence 1); "c.txt"
+      // grounds half of "weak"'s scope (confidence 0.5) — both clear the 0.5
+      // wave-admission threshold, so they still land in the same wave.
+      planFileMap: ["a.txt", "c.txt"],
     });
     expect(res.outcomes.map((o) => o.status)).toEqual(["landed", "landed"]);
     const log = execFileSync("git", ["log", "--format=%s", "--reverse"], {
@@ -191,5 +197,25 @@ describe("runFanout (worktree merge)", () => {
     // even though it was declared second in `tasks` — proving the map, not
     // input order, drove the merge order.
     expect(strongIdx).toBeLessThan(weakIdx);
+  });
+
+  // Task 2/6 regression guard: `readSubAgentHandoff` must harness-compute
+  // `outOfScopeFiles` from the sub-agent's actual changed files vs. the
+  // task's declared `fileScope` — never trust a self-report (the subtask
+  // template doesn't even ask for one). Without the fix, `outOfScopeFiles`
+  // is always `[]`, so this must fail before the fix and pass after.
+  it("computes outOfScopeFiles from real changed files vs. declared fileScope", async () => {
+    const res = await runFanout(
+      baseOpts([t("t1", ["a.txt"])], async (task, dir) => {
+        commitInWorktree(dir, "a.txt", "in-scope");
+        commitInWorktree(dir, "outside.txt", "out-of-scope");
+      })
+    );
+    expect(res.outcomes).toHaveLength(1);
+    const [outcome] = res.outcomes;
+    expect(outcome.status).toBe("landed");
+    expect(outcome.handoff?.outOfScopeFiles).toContain("outside.txt");
+    expect(res.crossTaskSummary).toContain("out-of-scope");
+    expect(res.crossTaskSummary).toContain("outside.txt");
   });
 });

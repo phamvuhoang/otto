@@ -15,7 +15,11 @@ import type { AgentRuntimeId } from "./agent-runtime.js";
 import type { CbmIndexIdentity } from "./codebase-memory-adapter.js";
 import type { RetrievalStore } from "./context-compressor.js";
 import { changedFilesSince, git, headSha } from "./git.js";
-import { parseHandoff, type SubAgentHandoff } from "./handoff.js";
+import {
+  computeOutOfScope,
+  parseHandoff,
+  type SubAgentHandoff,
+} from "./handoff.js";
 import type { TierLadder } from "./model-tier.js";
 import {
   planParallelGroups,
@@ -210,6 +214,12 @@ type Built = {
  * and parse it. Throws-free: a missing/unreadable file degrades to `""`,
  * which `parseHandoff` turns into its fallback (the worktree's git-diff file
  * list since `before`) — never blocks the merge on a malformed handoff.
+ *
+ * `outOfScopeFiles` is always harness-computed (never trusted from the
+ * sub-agent's self-report, which the template doesn't even ask for): it's
+ * `changedFiles` reconciled against the task's declared `fileScope` via
+ * {@link computeOutOfScope}, so the cross-task summary's out-of-scope line
+ * and the P25 Task 6 structural-lens binding actually fire.
  */
 function readSubAgentHandoff(b: Built): SubAgentHandoff {
   let raw = "";
@@ -218,7 +228,15 @@ function readSubAgentHandoff(b: Built): SubAgentHandoff {
   } catch {
     raw = "";
   }
-  return parseHandoff(raw, b.task.id, changedFilesSince(b.dir, b.before));
+  const handoff = parseHandoff(
+    raw,
+    b.task.id,
+    changedFilesSince(b.dir, b.before)
+  );
+  return {
+    ...handoff,
+    outOfScopeFiles: computeOutOfScope(handoff.changedFiles, b.task.fileScope),
+  };
 }
 
 /**
@@ -230,7 +248,7 @@ function readSubAgentHandoff(b: Built): SubAgentHandoff {
  */
 export async function runFanout(opts: RunFanoutOptions): Promise<FanoutResult> {
   const runSubAgent = opts.runSubAgent ?? defaultRunSubAgent(opts);
-  const waves = planParallelGroups(opts.tasks);
+  const waves = planParallelGroups(opts.tasks, opts.planFileMap ?? []);
   const outcomes: FanoutTaskOutcome[] = [];
 
   for (const wave of waves) {

@@ -326,6 +326,81 @@ describe("runLoop", () => {
     expect(manifest?.exitReason).toBe("complete");
   });
 
+  it("wires the fan-out summary into the finalized report as Agent contributions (P25 Task 5 guard)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    const planStage: Stage = { name: "plan", template: "plan.md" };
+    const reviewStage: Stage = { name: "reviewer", template: "reviewer.md" };
+    writeFileSync(
+      join(dirs.packageDir, "templates", "plan.md"),
+      "PLAN_STAGE {{ INPUTS }}",
+      "utf8"
+    );
+    writeFileSync(
+      join(dirs.packageDir, "templates", "reviewer.md"),
+      "REVIEW_STAGE {{ INPUTS }}",
+      "utf8"
+    );
+    mocks.discoverPlanTasks.mockReturnValue([{ id: "t1" }, { id: "t2" }]);
+    mocks.runFanout.mockResolvedValue({
+      outcomes: [
+        {
+          status: "landed",
+          task: {
+            id: "t1",
+            title: "t1",
+            fileScope: [],
+            dependsOn: [],
+            parallelSafe: true,
+          },
+          handoff: { changedFiles: ["src/a.ts"] },
+        },
+        {
+          status: "deferred",
+          task: {
+            id: "t2",
+            title: "t2",
+            fileScope: [],
+            dependsOn: [],
+            parallelSafe: true,
+          },
+          reason: "cherry-pick conflict",
+        },
+      ],
+      deferred: [
+        {
+          id: "t2",
+          title: "t2",
+          fileScope: [],
+          dependsOn: [],
+          parallelSafe: true,
+        },
+      ],
+      crossTaskSummary:
+        "Cross-task interactions:\n- t2 deferred: cherry-pick conflict",
+    });
+    mocks.runStage.mockResolvedValue(ok("reviewed, fixes committed"));
+
+    await runLoop(
+      loopOptions(dirs, {
+        stages: [planStage],
+        reviewStage,
+        mode: "plan",
+        fanOut: true,
+        iterations: 1,
+      })
+    );
+
+    const { runsDir, readRunReport } = await import("../run-report.js");
+    const ids = (await import("node:fs")).readdirSync(
+      runsDir(dirs.workspaceDir)
+    );
+    const report = readRunReport(dirs.workspaceDir, ids[0]);
+    expect(report).toContain("Agent contributions");
+    expect(report).toContain("t1");
+    expect(report).toContain("cherry-pick conflict");
+  });
+
   it("plan + fan-out that lands nothing still authors a plan (no reviewer substitution) (#177)", async () => {
     const dirs = makeDirs();
     roots.push(dirs.root);

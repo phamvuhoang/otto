@@ -876,6 +876,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         headSha: headSha(workspaceDir),
         changedFiles,
         scopeDrift,
+        ...(fanoutSummary ? { fanout: fanoutSummary } : {}),
       });
       writeRunReport(workspaceDir, runId, report);
       writeManifest(workspaceDir, {

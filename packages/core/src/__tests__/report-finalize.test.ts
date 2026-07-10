@@ -249,6 +249,41 @@ describe("finalizeReportText", () => {
     expect(out).toContain("2 malformed matrix row(s) were dropped");
   });
 
+  it("renders Agent contributions when the manifest context carries a fanout summary (P25 Task 5)", () => {
+    const out = finalizeReportText(emitted, {
+      manifest,
+      stages: [stage],
+      headSha: "abc1234",
+      changedFiles: [],
+      fanout: {
+        contributions: [
+          { taskId: "t1", status: "landed", changedFiles: ["src/a.ts"] },
+          {
+            taskId: "t2",
+            status: "deferred",
+            changedFiles: [],
+            reason: "cherry-pick conflict",
+          },
+        ],
+        crossTaskSummary:
+          "Cross-task interactions:\n- t2 deferred: cherry-pick conflict",
+      },
+    });
+    expect(out).toContain("Agent contributions");
+    expect(out).toContain("t1");
+    expect(out).toContain("cherry-pick conflict");
+  });
+
+  it("omits Agent contributions when the context carries no fanout summary (P25 Task 5)", () => {
+    const out = finalizeReportText(emitted, {
+      manifest,
+      stages: [stage],
+      headSha: "abc1234",
+      changedFiles: [],
+    });
+    expect(out).not.toContain("Agent contributions");
+  });
+
   it("generates a fallback report when the agent emitted none", () => {
     const out = buildFallbackRunReport({
       manifest,

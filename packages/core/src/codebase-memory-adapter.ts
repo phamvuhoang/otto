@@ -207,8 +207,11 @@ export function diffWriteInventory(
   const beforeSet = new Set(before);
   const files = after.filter((f) => !beforeSet.has(f));
   const under = (f: string) =>
-    declaredRoots.some(
-      (r) => f === r || f.startsWith(r.endsWith("/") ? r : `${r}/`)
-    );
+    declaredRoots.some((raw) => {
+      // Normalize a trailing slash so a root declared as `.codebase-memory/`
+      // classifies the bare directory the same as `.codebase-memory` does.
+      const r = raw.replace(/\/+$/, "");
+      return f === r || f.startsWith(`${r}/`);
+    });
   return { files, escaped: files.filter((f) => !under(f)) };
 }

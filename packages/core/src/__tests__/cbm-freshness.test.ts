@@ -78,4 +78,12 @@ describe("diffWriteInventory", () => {
     );
     expect(inv.escaped).toEqual([]);
   });
+  it("normalizes a trailing-slash root so the bare directory is inside", () => {
+    const inv = diffWriteInventory(
+      [],
+      [".codebase-memory", ".codebase-memory/graph.db.zst", ".gitattributes"],
+      [".codebase-memory/"]
+    );
+    expect(inv.escaped).toEqual([".gitattributes"]);
+  });
 });

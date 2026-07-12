@@ -8,10 +8,25 @@
  * sequential loop — fan-out never leaves the tree conflicted or half-merged.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import type { AgentRuntimeId } from "./agent-runtime.js";
-import { git, headSha } from "./git.js";
+import type { CbmIndexIdentity } from "./codebase-memory-adapter.js";
+import type { RetrievalStore } from "./context-compressor.js";
+import { changedFilesSince, git, headSha } from "./git.js";
+import {
+  computeOutOfScope,
+  parseHandoff,
+  type SubAgentHandoff,
+} from "./handoff.js";
 import type { TierLadder } from "./model-tier.js";
-import { planParallelGroups, type PlanTask } from "./plan-tasks.js";
+import {
+  planParallelGroups,
+  predictConflicts,
+  type ConflictPrediction,
+  type PlanTask,
+} from "./plan-tasks.js";
 import type { StageResult } from "./runner.js";
 import { executeStage } from "./stage-exec.js";
 import { STAGES } from "./stages.js";
@@ -23,13 +38,66 @@ export type FanoutTaskOutcome = {
   task: PlanTask;
   status: FanoutTaskStatus;
   reason?: string;
+  /** The sub-agent's structured handoff, when one could be read (or derived). */
+  handoff?: SubAgentHandoff;
 };
 
 export type FanoutResult = {
   outcomes: FanoutTaskOutcome[];
   /** Tasks that did not land cleanly and must be re-run sequentially. */
   deferred: PlanTask[];
+  /** Cross-task interaction notes (shared files, out-of-scope touches,
+   *  deferrals) surfaced by the synthesizer; `""` when nothing noteworthy. */
+  crossTaskSummary: string;
 };
+
+/**
+ * Reorder `tasks` by ascending conflict risk (safest first): highest scope
+ * confidence, fewest predicted overlaps. Pure — the caller decides how to use
+ * the order (P25 Task 3: Phase B merges the lowest-risk worktrees first).
+ */
+export function orderByConflictRisk(
+  tasks: PlanTask[],
+  predictions: ConflictPrediction[]
+): PlanTask[] {
+  const score = (id: string) => {
+    const p = predictions.find((x) => x.taskId === id);
+    return p ? p.confidence - p.overlapsWith.length : 1;
+  };
+  return [...tasks].sort((a, b) => score(b.id) - score(a.id));
+}
+
+/**
+ * Summarize cross-task interactions worth a human's attention: out-of-scope
+ * touches reported by a sub-agent's handoff, and deferrals with their reason.
+ * `""` when no outcome has anything noteworthy to report.
+ */
+export function buildCrossTaskSummary(outcomes: FanoutTaskOutcome[]): string {
+  const lines: string[] = [];
+  for (const o of outcomes) {
+    const oos = o.handoff?.outOfScopeFiles ?? [];
+    if (oos.length)
+      lines.push(`- ${o.task.id} touched out-of-scope: ${oos.join(", ")}`);
+    if (o.status === "deferred")
+      lines.push(`- ${o.task.id} deferred: ${o.reason ?? "unknown"}`);
+  }
+  return lines.length ? `Cross-task interactions:\n${lines.join("\n")}` : "";
+}
+
+/**
+ * Per-worktree retrieval identity (P25 Task 7, the seam for P26): stamps a
+ * fan-out worktree with the workspace it lives in and the sha it was built
+ * from, so a codebase-memory index built inside one worktree is never
+ * mistaken for another's (or trusted once the worktree's HEAD has moved on).
+ * Pure. Only computed when `bindWorktreeIdentity` is on; otherwise unused —
+ * P26 is the only consumer.
+ */
+export function worktreeIndexIdentity(
+  dir: string,
+  before: string
+): Pick<CbmIndexIdentity, "workspace" | "sourceRevision" | "worktreeDirty"> {
+  return { workspace: dir, sourceRevision: before, worktreeDirty: false };
+}
 
 export type RunFanoutOptions = {
   tasks: PlanTask[];
@@ -44,6 +112,14 @@ export type RunFanoutOptions = {
   runtimeId: AgentRuntimeId;
   signal?: AbortSignal;
   /**
+   * Real paths named in the plan doc (spec.md + plan.md), from
+   * {@link extractPlanFileMap}. Threaded into Phase B's conflict prediction so
+   * `scopeConfidence` varies per task and merge order is non-inert (P25 Task
+   * 3). Optional; `[]` (fan-out without `--plan`) reproduces prior uniform-
+   * confidence ordering.
+   */
+  planFileMap?: string[];
+  /**
    * The parallel per-task work: implement `task` inside `worktreeDir` and commit
    * there. Injectable so tests don't spawn a model; defaults to the
    * sub-implementer stage. A throw defers the task (its worktree is discarded).
@@ -53,6 +129,16 @@ export type RunFanoutOptions = {
    *  tokens into the run total (budget/pacing). Not called for an injected
    *  `runSubAgent`. */
   onSubAgent?: (sr: StageResult) => void;
+  /** The run's retrieval store (issue #112 P20's `runRetrievalStore`), passed
+   *  through to each sub-agent's `executeStage` call exactly as the
+   *  sequential loop already does. Optional; absent ⇒ no retrieval store is
+   *  threaded (today's behavior — fan-out never passed one). */
+  retrievalStore?: RetrievalStore;
+  /** P25/P26 seam: when true, stamp each built worktree with a
+   *  {@link worktreeIndexIdentity} so a codebase-memory index built inside
+   *  one worktree can't be mistaken for another's. Default false ⇒ inert;
+   *  only meaningful once the `codebase-memory` tool is enabled. */
+  bindWorktreeIdentity?: boolean;
 };
 
 /** Bounded-concurrency map: at most `limit` promises in flight at once. */
@@ -99,6 +185,9 @@ function defaultRunSubAgent(
       // worktree dir — allow writes there so `git commit` works under the
       // sandbox runner (issue #66 P11).
       sandboxWriteRoots: [opts.workspaceDir],
+      // Absent unless the caller threads one (P25 Task 7); undefined here
+      // reproduces today's behavior exactly.
+      retrievalStore: opts.retrievalStore,
     });
     opts.onSubAgent?.(sr);
   };
@@ -112,7 +201,43 @@ type Built = {
   cleanup: () => void;
   /** Set when the parallel phase failed before producing a usable commit. */
   failure?: string;
+  /** Per-worktree retrieval identity (P25 Task 7), present only when
+   *  `bindWorktreeIdentity` is on. Consumed only by P26; otherwise unused. */
+  identity?: Pick<
+    CbmIndexIdentity,
+    "workspace" | "sourceRevision" | "worktreeDirty"
+  >;
 };
+
+/**
+ * Read a built worktree's `handoff.json` (written by the subtask template)
+ * and parse it. Throws-free: a missing/unreadable file degrades to `""`,
+ * which `parseHandoff` turns into its fallback (the worktree's git-diff file
+ * list since `before`) — never blocks the merge on a malformed handoff.
+ *
+ * `outOfScopeFiles` is always harness-computed (never trusted from the
+ * sub-agent's self-report, which the template doesn't even ask for): it's
+ * `changedFiles` reconciled against the task's declared `fileScope` via
+ * {@link computeOutOfScope}, so the cross-task summary's out-of-scope line
+ * and the P25 Task 6 structural-lens binding actually fire.
+ */
+function readSubAgentHandoff(b: Built): SubAgentHandoff {
+  let raw = "";
+  try {
+    raw = readFileSync(join(b.dir, "handoff.json"), "utf8");
+  } catch {
+    raw = "";
+  }
+  const handoff = parseHandoff(
+    raw,
+    b.task.id,
+    changedFilesSince(b.dir, b.before)
+  );
+  return {
+    ...handoff,
+    outOfScopeFiles: computeOutOfScope(handoff.changedFiles, b.task.fileScope),
+  };
+}
 
 /**
  * Run the plan's tasks wave-by-wave. Phase A (parallel, bounded by
@@ -123,20 +248,33 @@ type Built = {
  */
 export async function runFanout(opts: RunFanoutOptions): Promise<FanoutResult> {
   const runSubAgent = opts.runSubAgent ?? defaultRunSubAgent(opts);
-  const waves = planParallelGroups(opts.tasks);
+  const waves = planParallelGroups(opts.tasks, opts.planFileMap ?? []);
   const outcomes: FanoutTaskOutcome[] = [];
 
   for (const wave of waves) {
     if (opts.signal?.aborted) {
-      for (const task of wave) outcomes.push({ task, status: "deferred", reason: "aborted" });
+      for (const task of wave)
+        outcomes.push({ task, status: "deferred", reason: "aborted" });
       continue;
     }
 
     // Create one worktree per task up front (serial — git worktree add mutates
     // .git), then run the sub-agents concurrently inside them.
     const built: Built[] = wave.map((task) => {
-      const wt = createWorktree(opts.workspaceDir, `${opts.iteration}-${task.id}`);
-      return { task, dir: wt.dir, before: headSha(wt.dir), cleanup: wt.cleanup };
+      const wt = createWorktree(
+        opts.workspaceDir,
+        `${opts.iteration}-${task.id}`
+      );
+      const before = headSha(wt.dir);
+      return {
+        task,
+        dir: wt.dir,
+        before,
+        cleanup: wt.cleanup,
+        identity: opts.bindWorktreeIdentity
+          ? worktreeIndexIdentity(wt.dir, before ?? "")
+          : undefined,
+      };
     });
 
     try {
@@ -149,15 +287,37 @@ export async function runFanout(opts: RunFanoutOptions): Promise<FanoutResult> {
         }
       });
 
-      // Phase B — serial cherry-pick onto the workspace HEAD.
-      for (const b of built) {
+      // Phase B — serial cherry-pick onto the workspace HEAD. Merge
+      // lowest-conflict-risk tasks first (P25 Task 3): predicted overlaps are
+      // computed from the wave's own declared scopes, reconciled against the
+      // caller's plan file map — when one is supplied, `scopeConfidence`
+      // varies per task and actually drives the merge order; `[]` degrades to
+      // uniform confidence (fewest-overlaps ordering only).
+      const predictions = predictConflicts(wave, opts.planFileMap ?? []);
+      const orderedTasks = orderByConflictRisk(wave, predictions);
+      const orderedBuilt = orderedTasks.map(
+        (t) => built.find((b) => b.task.id === t.id)!
+      );
+
+      for (const b of orderedBuilt) {
+        const handoff = readSubAgentHandoff(b);
         if (b.failure) {
-          outcomes.push({ task: b.task, status: "deferred", reason: b.failure });
+          outcomes.push({
+            task: b.task,
+            status: "deferred",
+            reason: b.failure,
+            handoff,
+          });
           continue;
         }
         const after = headSha(b.dir);
         if (!after || after === b.before) {
-          outcomes.push({ task: b.task, status: "deferred", reason: "no commit produced" });
+          outcomes.push({
+            task: b.task,
+            status: "deferred",
+            reason: "no commit produced",
+            handoff,
+          });
           continue;
         }
         const picked = git(
@@ -166,10 +326,18 @@ export async function runFanout(opts: RunFanoutOptions): Promise<FanoutResult> {
         );
         if (picked == null) {
           git(["cherry-pick", "--abort"], opts.workspaceDir);
-          outcomes.push({ task: b.task, status: "deferred", reason: "cherry-pick conflict" });
+          const riskNote = handoff.risks.length
+            ? `; risks: ${handoff.risks.join(", ")}`
+            : "";
+          outcomes.push({
+            task: b.task,
+            status: "deferred",
+            reason: `cherry-pick conflict${riskNote}`,
+            handoff,
+          });
           continue;
         }
-        outcomes.push({ task: b.task, status: "landed" });
+        outcomes.push({ task: b.task, status: "landed", handoff });
       }
     } finally {
       for (const b of built) b.cleanup();
@@ -178,6 +346,9 @@ export async function runFanout(opts: RunFanoutOptions): Promise<FanoutResult> {
 
   return {
     outcomes,
-    deferred: outcomes.filter((o) => o.status === "deferred").map((o) => o.task),
+    deferred: outcomes
+      .filter((o) => o.status === "deferred")
+      .map((o) => o.task),
+    crossTaskSummary: buildCrossTaskSummary(outcomes),
   };
 }

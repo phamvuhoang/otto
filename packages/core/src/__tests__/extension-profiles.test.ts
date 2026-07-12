@@ -9,11 +9,12 @@ import {
 } from "../extension-profiles.js";
 
 describe("extension profile manifests", () => {
-  it("ships the four curated profiles", () => {
+  it("ships the five curated profiles", () => {
     const names = listProfiles()
       .map((p) => p.name)
       .sort();
     expect(names).toEqual([
+      "codebase-intelligence",
       "coding-superpowers",
       "context-saver",
       "pm-planning",

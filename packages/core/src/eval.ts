@@ -2,6 +2,7 @@ import type { PlanRubricScore } from "./plan-rubric.js";
 import type { ReportRubricScore } from "./report-rubric.js";
 import type { RunManifest, StageRecord } from "./run-report.js";
 import { tokenUsageTotal } from "./tokens.js";
+import { assessFactSurvival } from "./compression-survival.js";
 
 /**
  * The multi-signal outcome of one Otto run, derived purely from its recorded
@@ -49,6 +50,29 @@ export type EvalSignals = {
    * trajectory), so this function stays pure.
    */
   reportLegibilityRatio: number | null;
+  /**
+   * Count of external tool invocations recorded across the manifest and stage
+   * records (P26 codebase-memory spike). `0` when no tools were used.
+   */
+  toolCallCount: number;
+  /**
+   * Sum of `tokensAvoided` reported by tool invocations (P26) — tokens that
+   * would have been spent inlining context the tool retrieved instead. `0`
+   * when no tool reported an estimate.
+   */
+  tokensAvoided: number;
+  /**
+   * Fraction (0..1) of the benchmark's known-impacted files that the run's
+   * answer text surfaced, scored by {@link scoreImpactRecall} against a
+   * fixture's `impact.json` (P26). `0` when not scored from the trajectory
+   * alone — callers score this against a fixture's known-impact list.
+   */
+  impactRecall: number;
+  /**
+   * Milliseconds spent building/refreshing the codebase-memory index for this
+   * run (P26), summed from `manifest.codebaseMemory`. `0` for non-CBM runs.
+   */
+  indexingOverheadMs: number;
 };
 
 const SUCCESS_REASONS = new Set(["complete", "done"]);
@@ -82,7 +106,37 @@ export function scoreTrajectory(
       stages.reduce((n, s) => n + (s.skillsUsed?.length ?? 0), 0),
     planQualityRatio: opts.planScore ? opts.planScore.ratio : null,
     reportLegibilityRatio: opts.reportScore ? opts.reportScore.ratio : null,
+    toolCallCount:
+      (manifest.toolsUsed?.length ?? 0) +
+      stages.reduce((n, s) => n + (s.toolsUsed?.length ?? 0), 0),
+    tokensAvoided:
+      (manifest.toolsUsed?.reduce((n, t) => n + (t.tokensAvoided ?? 0), 0) ??
+        0) +
+      stages.reduce(
+        (n, s) =>
+          n +
+          (s.toolsUsed?.reduce((m, t) => m + (t.tokensAvoided ?? 0), 0) ?? 0),
+        0
+      ),
+    impactRecall: 0,
+    indexingOverheadMs:
+      (manifest.codebaseMemory?.buildMs ?? 0) +
+      (manifest.codebaseMemory?.refreshMs ?? 0),
   };
+}
+
+/**
+ * Score how many `knownImpactedFiles` a run's answer text surfaced — a thin
+ * wrapper over {@link assessFactSurvival} treating each impacted file path as
+ * a "fact" that must survive into the answer (P26 codebase-memory spike).
+ * Vacuously `1` for an empty impact list. Pure.
+ */
+export function scoreImpactRecall(
+  knownImpactedFiles: string[],
+  answerText: string
+): number {
+  if (knownImpactedFiles.length === 0) return 1;
+  return assessFactSurvival(knownImpactedFiles, answerText).survivalRate;
 }
 
 function elapsedMs(startedAt: string, finishedAt?: string): number | null {
@@ -119,7 +173,8 @@ const COMPARE_COLUMNS: CompareColumn[] = [
   { header: "Exit", cell: (s) => s.exitReason ?? "—" },
   {
     header: "Iterations",
-    cell: (s) => (s.completedIterations == null ? "—" : String(s.completedIterations)),
+    cell: (s) =>
+      s.completedIterations == null ? "—" : String(s.completedIterations),
   },
   { header: "Stages", cell: (s) => String(s.stageCount) },
   {
@@ -164,6 +219,26 @@ const COMPARE_COLUMNS: CompareColumn[] = [
         ? "—"
         : `${Math.round(s.reportLegibilityRatio * 100)}%`,
     rank: { value: (s) => s.reportLegibilityRatio, better: "higher" },
+  },
+  {
+    header: "Tool calls",
+    cell: (s) => String(s.toolCallCount),
+    rank: { value: (s) => s.toolCallCount, better: "lower" },
+  },
+  {
+    header: "Tokens avoided",
+    cell: (s) => String(s.tokensAvoided),
+    rank: { value: (s) => s.tokensAvoided, better: "higher" },
+  },
+  {
+    header: "Impact recall",
+    cell: (s) => `${Math.round(s.impactRecall * 100)}%`,
+    rank: { value: (s) => s.impactRecall, better: "higher" },
+  },
+  {
+    header: "Indexing overhead (ms)",
+    cell: (s) => String(s.indexingOverheadMs),
+    rank: { value: (s) => s.indexingOverheadMs, better: "lower" },
   },
 ];
 

@@ -16,6 +16,12 @@ import type {
 import type { PolicyViolationKind } from "./safety-policy.js";
 import type { TaintSource } from "./taint.js";
 import type { TokenUsage } from "./tokens.js";
+import type {
+  CbmIndexIdentity,
+  IndexFreshness,
+  WriteInventory,
+} from "./codebase-memory-adapter.js";
+import type { FanoutResult } from "./fanout.js";
 
 /**
  * A safety-relevant occurrence recorded in a run's trajectory so policy
@@ -98,6 +104,22 @@ export type ToolUsage = {
   retrievalHandle?: string;
   /** Why the tool was selected/used (so a run report can explain the choice). */
   reasons?: string[];
+  /** The tool's version, when known (P26 codebase-memory evidence). */
+  toolVersion?: string;
+  /** Identity of the index this invocation queried, when applicable (P26). */
+  indexIdentity?: CbmIndexIdentity;
+  /** Freshness classification of the index at invocation time (P26). */
+  indexFreshness?: IndexFreshness;
+  /** Estimated tokens avoided by retrieving via this tool instead of inline context (P26). */
+  tokensAvoided?: number;
+  /** Size of the result returned, if relevant (P26). */
+  resultSize?: number;
+  /** Wall-clock latency of the invocation in milliseconds (P26). */
+  latencyMs?: number;
+  /** The query issued to the tool, if applicable (P26). */
+  query?: string;
+  /** Reason the tool fell back to a degraded path, if it did (P26). */
+  fallbackReason?: string;
 };
 
 /**
@@ -192,9 +214,49 @@ export type RunManifest = {
   /** Matrix↔plan reconciliation when a matching plan exists (issue #201);
    *  a row shortfall means at least one plan task was never verified. */
   verificationPlan?: PlanReconciliation;
+  /** Run-level codebase-memory index record (P26 spike); absent for non-CBM runs. */
+  codebaseMemory?: {
+    indexIdentity?: CbmIndexIdentity;
+    buildMs?: number;
+    refreshMs?: number;
+    writeInventory?: WriteInventory;
+  };
+  /** Sub-agent fan-out evidence (issue #66 P11, P25 Task 4): per-task
+   *  contributions (status + changed files + defer reason) and the
+   *  cross-task interaction summary; absent when `--fan-out` did not run. */
+  fanout?: {
+    contributions: {
+      taskId: string;
+      status: string;
+      changedFiles: string[];
+      reason?: string;
+    }[];
+    crossTaskSummary: string;
+  };
   startedAt: string;
   finishedAt?: string;
 };
+
+/**
+ * Map a `runFanout` result onto the manifest's `fanout` evidence field (P25
+ * Task 4): one contribution per task outcome (status + changed files + defer
+ * reason, when any), plus the synthesizer's cross-task summary. Pure — no I/O
+ * — so the loop can call it directly on the in-memory `FanoutResult` and the
+ * mapping itself stays unit-testable without spawning sub-agents.
+ */
+export function summarizeFanout(
+  result: FanoutResult
+): NonNullable<RunManifest["fanout"]> {
+  return {
+    contributions: result.outcomes.map((o) => ({
+      taskId: o.task.id,
+      status: o.status,
+      changedFiles: o.handoff?.changedFiles ?? [],
+      ...(o.reason !== undefined ? { reason: o.reason } : {}),
+    })),
+    crossTaskSummary: result.crossTaskSummary,
+  };
+}
 
 /**
  * Allocate a sortable, filesystem-safe run id: an ISO timestamp with its

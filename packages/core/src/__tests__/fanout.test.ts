@@ -7,7 +7,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runFanout, type RunFanoutOptions } from "../fanout.js";
 import type { PlanTask } from "../plan-tasks.js";
 
-const t = (id: string, fileScope: string[], dependsOn: string[] = []): PlanTask => ({
+const t = (
+  id: string,
+  fileScope: string[],
+  dependsOn: string[] = []
+): PlanTask => ({
   id,
   title: id,
   fileScope,
@@ -17,7 +21,8 @@ const t = (id: string, fileScope: string[], dependsOn: string[] = []): PlanTask 
 
 let repo: string;
 
-const g = (...a: string[]) => execFileSync("git", a, { cwd: repo, stdio: "ignore" });
+const g = (...a: string[]) =>
+  execFileSync("git", a, { cwd: repo, stdio: "ignore" });
 
 beforeEach(() => {
   repo = mkdtempSync(join(tmpdir(), "otto-fanout-"));
@@ -35,10 +40,16 @@ afterEach(() => rmSync(repo, { recursive: true, force: true }));
 function commitInWorktree(dir: string, file: string, content: string): void {
   writeFileSync(join(dir, file), content);
   execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
-  execFileSync("git", ["commit", "-qm", `work ${file}`], { cwd: dir, stdio: "ignore" });
+  execFileSync("git", ["commit", "-qm", `work ${file}`], {
+    cwd: dir,
+    stdio: "ignore",
+  });
 }
 
-function baseOpts(tasks: PlanTask[], runSubAgent: RunFanoutOptions["runSubAgent"]): RunFanoutOptions {
+function baseOpts(
+  tasks: PlanTask[],
+  runSubAgent: RunFanoutOptions["runSubAgent"]
+): RunFanoutOptions {
   return {
     tasks,
     workspaceDir: repo,
@@ -56,7 +67,10 @@ function baseOpts(tasks: PlanTask[], runSubAgent: RunFanoutOptions["runSubAgent"
 
 /** True if the workspace worktree has a cherry-pick conflict / unmerged paths. */
 function treeConflicted(): boolean {
-  const s = execFileSync("git", ["status", "--porcelain"], { cwd: repo, encoding: "utf8" });
+  const s = execFileSync("git", ["status", "--porcelain"], {
+    cwd: repo,
+    encoding: "utf8",
+  });
   return /^(UU|AA|DD|U[ADU]|[ADU]U)/m.test(s);
 }
 
@@ -100,7 +114,10 @@ describe("runFanout (worktree merge)", () => {
         /* no commit */
       })
     );
-    expect(res.outcomes[0]).toMatchObject({ status: "deferred", reason: "no commit produced" });
+    expect(res.outcomes[0]).toMatchObject({
+      status: "deferred",
+      reason: "no commit produced",
+    });
   });
 
   it("defers a task whose sub-agent throws, tree stays clean", async () => {
@@ -119,7 +136,12 @@ describe("runFanout (worktree merge)", () => {
     let peak = 0;
     const res = await runFanout({
       ...baseOpts(
-        [t("t1", ["a.txt"]), t("t2", ["b.txt"]), t("t3", ["c.txt"]), t("t4", ["d.txt"])],
+        [
+          t("t1", ["a.txt"]),
+          t("t2", ["b.txt"]),
+          t("t3", ["c.txt"]),
+          t("t4", ["d.txt"]),
+        ],
         async (task, dir) => {
           inFlight++;
           peak = Math.max(peak, inFlight);
@@ -132,5 +154,68 @@ describe("runFanout (worktree merge)", () => {
     });
     expect(res.outcomes).toHaveLength(4);
     expect(peak).toBeLessThanOrEqual(2);
+  });
+
+  // P25 Task 3 regression guard: `runFanout` must forward `opts.planFileMap`
+  // into Phase B's conflict prediction, not the prior unconditional `[]`.
+  // Tasks are declared in the OPPOSITE order from their plan-map-grounded
+  // confidence, so only a forwarded, non-empty map can flip the merge order
+  // away from input order. "weak" has TWO fileScope entries so it lands at
+  // confidence 0.5 (grounded, not sealed into its own wave by the Minor P25
+  // Task 1 fix below) while still scoring below "strong"'s full 1.0 — the two
+  // tasks share a wave, and only Phase B's ordering (not wave-sealing) can
+  // explain the merge order this test checks.
+  it("forwards opts.planFileMap so the higher-confidence task merges first", async () => {
+    const res = await runFanout({
+      ...baseOpts(
+        [t("weak", ["b.txt", "c.txt"]), t("strong", ["a.txt"])],
+        async (task, dir) => {
+          commitInWorktree(
+            dir,
+            task.id === "strong" ? "a.txt" : "b.txt",
+            task.id
+          );
+        }
+      ),
+      // "a.txt" ("strong"'s scope) is fully grounded (confidence 1); "c.txt"
+      // grounds half of "weak"'s scope (confidence 0.5) — both clear the 0.5
+      // wave-admission threshold, so they still land in the same wave.
+      planFileMap: ["a.txt", "c.txt"],
+    });
+    expect(res.outcomes.map((o) => o.status)).toEqual(["landed", "landed"]);
+    const log = execFileSync("git", ["log", "--format=%s", "--reverse"], {
+      cwd: repo,
+      encoding: "utf8",
+    })
+      .trim()
+      .split("\n");
+    const strongIdx = log.indexOf("work a.txt");
+    const weakIdx = log.indexOf("work b.txt");
+    expect(strongIdx).toBeGreaterThan(-1);
+    expect(weakIdx).toBeGreaterThan(-1);
+    // "strong" (higher plan-map confidence) was cherry-picked before "weak",
+    // even though it was declared second in `tasks` — proving the map, not
+    // input order, drove the merge order.
+    expect(strongIdx).toBeLessThan(weakIdx);
+  });
+
+  // Task 2/6 regression guard: `readSubAgentHandoff` must harness-compute
+  // `outOfScopeFiles` from the sub-agent's actual changed files vs. the
+  // task's declared `fileScope` — never trust a self-report (the subtask
+  // template doesn't even ask for one). Without the fix, `outOfScopeFiles`
+  // is always `[]`, so this must fail before the fix and pass after.
+  it("computes outOfScopeFiles from real changed files vs. declared fileScope", async () => {
+    const res = await runFanout(
+      baseOpts([t("t1", ["a.txt"])], async (task, dir) => {
+        commitInWorktree(dir, "a.txt", "in-scope");
+        commitInWorktree(dir, "outside.txt", "out-of-scope");
+      })
+    );
+    expect(res.outcomes).toHaveLength(1);
+    const [outcome] = res.outcomes;
+    expect(outcome.status).toBe("landed");
+    expect(outcome.handoff?.outOfScopeFiles).toContain("outside.txt");
+    expect(res.crossTaskSummary).toContain("out-of-scope");
+    expect(res.crossTaskSummary).toContain("outside.txt");
   });
 });

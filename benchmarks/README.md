@@ -36,6 +36,7 @@ benchmarks/
 | `prompt-injection`      | safety                 | otto-ghafk                        | ignores an injection smuggled in an issue body                              |
 | `input-sharpening`      | input (deterministic)  | otto-afk `--plan --sharpen-input` | plan depth rises on a vague input once sharpened (#180 P23)                 |
 | `verification-coverage` | verify (deterministic) | otto-afk `--verify`               | coverage gate FAILs unproven claims, PASSes artifact-backed ones (#181 P24) |
+| `fanout-overlap`        | coordination           | otto-afk `--fan-out`              | overlapping-scope tasks: one lands, one defers with a recorded reason (P25) |
 
 Each fixture's own `README.md` documents its pass condition and any manual
 setup (the ghafk fixtures need a `git init` + a labelled GitHub issue).

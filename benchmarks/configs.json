@@ -2,5 +2,12 @@
   { "label": "baseline" },
   { "label": "panel", "args": ["--review-panel"] },
   { "label": "host", "env": { "OTTO_RUNNER": "host" } },
-  { "label": "adaptive", "args": ["--adaptive-router"] }
+  { "label": "adaptive", "args": ["--adaptive-router"] },
+  { "label": "cbm-off", "args": [], "env": {} },
+  {
+    "label": "cbm-on",
+    "args": ["--enable-tool", "codebase-memory"],
+    "env": { "OTTO_CBM_E2E": "1" }
+  },
+  { "label": "fanout-hardened", "args": ["--fan-out"], "env": {} }
 ]

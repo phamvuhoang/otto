@@ -27,6 +27,23 @@ much as you safely can within scope and note the gap in your commit message.
 Write the failing test first where it applies, implement, run the relevant
 feedback loop, and make a single focused commit for this task. Do not push.
 
+**Mandatory: before finishing, write `handoff.json` at the worktree root** so
+the orchestrator can reconcile your work without re-deriving it. It must be a
+JSON object with these keys:
+
+```
+{
+  "changedFiles": ["path/one.ts", "path/two.ts"],
+  "testsRun": [{ "command": "pnpm test", "passed": true }],
+  "risks": ["anything the orchestrator or reviewer should double-check"],
+  "deferred": ["work you knowingly left out of scope"]
+}
+```
+
+`testsRun` entries are `{command, passed}` pairs for every feedback-loop
+command you ran. Leave `risks`/`deferred` as empty arrays if there are none —
+do not omit the file or any key.
+
 </task>
 
 @include:prompt.md

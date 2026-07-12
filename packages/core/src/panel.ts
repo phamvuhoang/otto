@@ -39,9 +39,10 @@ export function routedLenses(
 
 /** Parse every lens's findings file, tag with its lens, and dedupe across lenses
  *  so the verifier sees each issue once. `total` is the pre-dedupe count. */
-export function mergeLensFindings(
-  files: { lens: string; text: string }[]
-): { findings: Finding[]; total: number } {
+export function mergeLensFindings(files: { lens: string; text: string }[]): {
+  findings: Finding[];
+  total: number;
+} {
   const all: Finding[] = [];
   for (const { lens, text } of files)
     all.push(...parseFindings(text, lens).findings);
@@ -161,6 +162,11 @@ export type RunPanelOptions = {
   agentId?: AgentRuntimeId;
   /** Resume/switch note injected into each panel sub-stage prompt. */
   resumeNote?: string;
+  /** Cross-task interaction notes from a fan-out run (P25 Task 3's
+   *  `FanoutResult.crossTaskSummary`); `undefined`/`""` when fan-out didn't run
+   *  or found nothing noteworthy. Injected into the lens + verify prompts and,
+   *  when it flags an out-of-scope touch, forces the `structural` lens in. */
+  crossTaskSummary?: string;
   /**
    * Called after every panel sub-agent (each lens + synth) so the loop owns
    * budget + adaptive pacing for them too. Returns whether the budget is now
@@ -178,7 +184,13 @@ export type RunPanelOptions = {
     stageName: string,
     sr: StageResult,
     startedAt: string,
-    reviewSeverity?: { blocker: number; major: number; minor: number; nit: number; suppressed: number }
+    reviewSeverity?: {
+      blocker: number;
+      major: number;
+      minor: number;
+      nit: number;
+      suppressed: number;
+    }
   ) => void;
 };
 
@@ -198,6 +210,15 @@ function lensMutatedRepo(
   return trackedStatus(workspaceDir) !== "";
 }
 
+/** Bounded block surfacing a fan-out run's cross-task interactions (shared
+ *  files, out-of-scope touches, deferrals) to the review panel — analogous to
+ *  `formatSharpeningGuidance`. `""` when there is no summary to show, so the
+ *  prompt is byte-for-byte unchanged on a non-fan-out run. */
+export function formatCrossTaskBlock(summary: string | undefined): string {
+  if (!summary) return "";
+  return `<cross-task-summary>\nThe implementation ran in parallel. Review these interactions:\n${summary}\n</cross-task-summary>`;
+}
+
 /** Harness-orchestrated reviewer panel: read-only lens reviews → one synth fix(review) commit. */
 export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
   const {
@@ -210,15 +231,34 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     signal,
     agentId,
     resumeNote = "",
+    crossTaskSummary,
     onStage,
     recordStage,
   } = opts;
   // Router off → the full configured pool (today's behavior); on → risk-routed.
-  const lenses = routedLenses(
+  let lenses = routedLenses(
     opts.changedPaths ?? [],
     opts.lenses,
     opts.adaptiveRouter ?? false
   );
+  // A fan-out sub-agent that strayed outside its declared scope needs the
+  // structural lens's eyes on it even when the router would otherwise route a
+  // narrower subset — but only when `structural` is actually configured.
+  if (
+    crossTaskSummary?.includes("out-of-scope") &&
+    opts.lenses.includes("structural") &&
+    !lenses.includes("structural")
+  ) {
+    lenses = [...lenses, "structural"];
+  }
+  // Cross-task block prepended to RESUME (not a new template var) — both
+  // review-lens.md and review-verify.md already interpolate `{{ RESUME }}` at
+  // line 1, so this needs no template change and stays inert (empty string)
+  // when there's no fan-out summary.
+  const xtaskBlock = formatCrossTaskBlock(crossTaskSummary);
+  const resumeWithXtask = xtaskBlock
+    ? `${xtaskBlock}\n\n${resumeNote}`
+    : resumeNote;
   const isoNow = (): string => new Date().toISOString();
   const panelRel = `panel-${process.pid}-${iteration}-${Date.now()}`;
   const panelHostDir = join(workspaceDir, ".otto-tmp", panelRel);
@@ -268,7 +308,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     const results = await boundedMap(lenses, LENS_CONCURRENCY, (lens) =>
       executeStage({
         stage: { ...LENS_STAGE, tier: tierForLens(lens) },
-        vars: { LENS: lens, RESUME: resumeNote },
+        vars: { LENS: lens, RESUME: resumeWithXtask },
         workspaceDir,
         packageDir,
         iteration,
@@ -343,7 +383,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     const verifyStartedAt = isoNow();
     const verify = await executeStage({
       stage: VERIFY_STAGE,
-      vars: { FINDINGS_DIR: findingsDirRef, RESUME: resumeNote },
+      vars: { FINDINGS_DIR: findingsDirRef, RESUME: resumeWithXtask },
       workspaceDir,
       packageDir,
       iteration,

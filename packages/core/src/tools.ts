@@ -77,7 +77,12 @@ export type ToolDefinition = {
   approvalActions: string[];
   /** Registry-level enable flag; config can additionally disable per stage. */
   enabled: boolean;
+  /** Per-operation allowlist (issue #P26); absent = no op gating (today's behavior). */
+  operations?: ToolOperation[];
 };
+
+/** One MCP-style operation a tool exposes, and whether it writes. */
+export type ToolOperation = { name: string; write: boolean };
 
 /**
  * The structured result an adapter returns (issue #111 output contract). Beyond
@@ -151,6 +156,16 @@ export function parseTool(raw: unknown): ToolDefinition | null {
   if (typeof o.healthCheck === "string") tool.healthCheck = o.healthCheck;
   if (typeof o.timeoutMs === "number" && Number.isFinite(o.timeoutMs)) {
     tool.timeoutMs = o.timeoutMs;
+  }
+  if (Array.isArray(o.operations)) {
+    tool.operations = o.operations
+      .filter(
+        (op): op is Record<string, unknown> =>
+          op !== null &&
+          typeof op === "object" &&
+          typeof (op as Record<string, unknown>).name === "string"
+      )
+      .map((op) => ({ name: op.name as string, write: op.write === true }));
   }
   return tool;
 }
@@ -385,4 +400,65 @@ export function authorizeToolInvocation(
   }));
 
   return { allowed: violations.length === 0, violations, events };
+}
+
+/**
+ * Build a blocked {@link ToolAuthorization} for `authorizeToolOperation`'s
+ * allowlist checks (an operation the tool hasn't declared, or a stage it isn't
+ * enabled for). Mirrors the `PolicyViolation`/`SafetyEvent` field names
+ * `authorizeToolInvocation` uses for a blocked call. The event reuses the
+ * passed axis `kind` (same as the invocation-level mapping).
+ */
+function blocked(
+  kind: PolicyViolation["kind"],
+  subject: string,
+  message: string
+): ToolAuthorization {
+  const violation: PolicyViolation = { kind, subject, message };
+  const event: SafetyEvent = {
+    category: "policy-violation",
+    kind,
+    subject,
+    message,
+    blocked: true,
+  };
+  return { allowed: false, violations: [violation], events: [event] };
+}
+
+/**
+ * Authorize one named operation on a tool (issue #P26): allowed only if the
+ * tool is enabled for `stage`, `operation` is declared in `tool.operations`,
+ * and — when that operation is a write — the invocation also clears
+ * {@link authorizeToolInvocation}. Read ops need no invocation-level check
+ * once declared. A tool with no `operations` list blocks every operation
+ * (nothing is declared), leaving `authorizeToolInvocation` as the only gate
+ * for tools that don't opt into per-operation authority. Pure.
+ */
+export function authorizeToolOperation(
+  policy: SafetyPolicy,
+  tool: ToolDefinition,
+  config: ToolConfig,
+  stage: string,
+  operation: string,
+  invocation: ToolInvocation
+): ToolAuthorization {
+  const stageGate = toolEnabledForStage(tool, config, stage);
+  if (!stageGate.enabled) {
+    return blocked(
+      "approval-required",
+      operation,
+      `tool not enabled for stage ${stage}: ${stageGate.reason}`
+    );
+  }
+  const op = tool.operations?.find((o) => o.name === operation);
+  if (!op) {
+    return blocked(
+      "approval-required",
+      operation,
+      `operation not in allowlist: ${operation}`
+    );
+  }
+  // Read ops need no write authority; write ops go through the full intersection.
+  if (!op.write) return { allowed: true, violations: [], events: [] };
+  return authorizeToolInvocation(policy, tool, invocation);
 }

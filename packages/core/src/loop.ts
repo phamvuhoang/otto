@@ -50,6 +50,7 @@ import {
   hasRunReport,
   readStageRecords,
   removeStageRecords,
+  summarizeFanout,
   writeManifest,
   writeRunReport,
   writeStageRecord,
@@ -97,6 +98,7 @@ import type { Stage } from "./stages.js";
 import { maybeJournal } from "./journal.js";
 import {
   detectScopeDrift,
+  extractPlanFileMap,
   formatPlanDepthRubric,
   scorePlanDepth,
   scorePlanQuality,
@@ -693,6 +695,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   let reportRewriteUsed = false;
   let runCostUsd = 0;
   let runTokenUsage = emptyTokenUsage();
+  // Sub-agent fan-out evidence (P25 Task 4): set once the first iteration's
+  // `runFanout` resolves; absent for non-fan-out runs, so the manifest's
+  // `fanout` field stays unset (mirrors the `inputSharpness` optional pattern).
+  let fanoutSummary: RunManifest["fanout"];
   let cooldownFactor = 1;
   // Model-routing escalation (issue #66 P11): count consecutive iterations whose
   // gate stage (the implementer) returned an error, then escalate the routed tier
@@ -878,6 +884,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               },
             }
           : {}),
+        ...(fanoutSummary ? { fanout: fanoutSummary } : {}),
         ...(verification ? { verification } : {}),
         ...(mode === "verify" && verificationDropped > 0
           ? { verificationDropped }
@@ -892,6 +899,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         headSha: headSha(workspaceDir),
         changedFiles,
         scopeDrift,
+        ...(fanoutSummary ? { fanout: fanoutSummary } : {}),
       });
       writeRunReport(workspaceDir, runId, report);
       writeManifest(workspaceDir, {
@@ -921,6 +929,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               },
             }
           : {}),
+        ...(fanoutSummary ? { fanout: fanoutSummary } : {}),
         ...(verification ? { verification } : {}),
         ...(mode === "verify" && verificationDropped > 0
           ? { verificationDropped }
@@ -1134,6 +1143,29 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           process.stderr.write(
             `${bold(SYM.bullet)} ${bold("fan-out")} ${dim(`· ${planTasks.length} task(s), concurrency ${fanOutConcurrency}`)}\n`
           );
+          // Ground merge-order confidence in the plan's real file map (P25 Task
+          // 3) — the same doc + extraction the scope-drift check uses below. No
+          // plan doc available (fan-out without --plan) degrades to `[]`,
+          // reproducing prior (uniform-confidence) ordering.
+          const fanoutPlanDoc = latestTaskPlanDocument(workspaceDir);
+          const planFileMap = fanoutPlanDoc
+            ? extractPlanFileMap(fanoutPlanDoc.doc)
+            : [];
+          // P25/P26 seam (Task 7): bind each fan-out worktree to a retrieval
+          // identity only when the repo has actually opted the
+          // `codebase-memory` tool in — the simplest correct "is it enabled"
+          // check, mirroring the registry/config merge `toolEnabledForStage`
+          // uses for its own registry-level gate (`.otto/tools/*.json`
+          // `enabled` + `.otto/config.json` `tools.codebase-memory.enabled`
+          // override). Absent tool or explicit off ⇒ `false`, so a bare repo
+          // (no `codebase-memory` registration) never sets this.
+          const cbmTool = readTools(workspaceDir).find(
+            (t) => t.name === "codebase-memory"
+          );
+          const bindWorktreeIdentity = cbmTool
+            ? (readToolConfig(workspaceDir).overrides["codebase-memory"]
+                ?.enabled ?? cbmTool.enabled)
+            : false;
           const fr = await runFanout({
             tasks: planTasks,
             workspaceDir,
@@ -1147,6 +1179,9 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             runtimeId: activeAgentId,
             signal: activeSignal,
             onSubAgent: accountStage,
+            planFileMap,
+            retrievalStore,
+            bindWorktreeIdentity,
           });
           fanoutLanded = fr.outcomes.filter(
             (o) => o.status === "landed"
@@ -1154,6 +1189,32 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           process.stderr.write(
             `${dim(SYM.cont)} ${greenOut(String(fanoutLanded))} landed, ${fr.deferred.length} deferred ${dim("(deferred tasks continue in the sequential loop)")}\n`
           );
+          // Evidence (P25 Task 4): roll the fan-out outcomes onto the manifest
+          // and give each sub-agent its own inspectable stage record — today
+          // that per-task detail (status + defer reason) only ever reached
+          // stderr. Cost/tokens were already rolled into the run total above
+          // via `onSubAgent: accountStage`, so these synthetic records carry
+          // no cost/usage of their own (avoids double-counting). `summarizeFanout`
+          // is pure over a well-formed `FanoutResult` and `recordStage` already
+          // guards its own fs write internally, so no outer try/catch here —
+          // a real regression should surface, not be swallowed.
+          fanoutSummary = summarizeFanout(fr);
+          const fanoutRecordedAt = nowIso();
+          for (const o of fr.outcomes) {
+            recordStage(
+              i,
+              `subImplementer:${o.task.id}`,
+              {
+                result: o.reason ?? o.status,
+                costUsd: 0,
+                isError: o.status !== "landed",
+                apiErrorStatus: null,
+                usage: emptyTokenUsage(),
+                runtimeId: activeAgentId,
+              },
+              fanoutRecordedAt
+            );
+          }
         }
       }
 
@@ -1262,6 +1323,11 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               modelRouting,
               tierLadder,
               riskAssessment,
+              // Cross-task interactions from this run's fan-out (P25 Task 6):
+              // `fanoutSummary` is set once, on the fan-out iteration, and
+              // persists for the rest of the run — undefined on a non-fan-out
+              // run, so the panel's injection stays inert.
+              crossTaskSummary: fanoutSummary?.crossTaskSummary,
               onStage: accountStage,
               recordStage: (stageName, subSr, startedAt, reviewSeverity) =>
                 recordStage(i, stageName, subSr, startedAt, reviewSeverity),

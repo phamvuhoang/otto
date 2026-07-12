@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { compareTrajectories, scoreTrajectory, type EvalSignals } from "../eval.js";
+import {
+  compareTrajectories,
+  scoreTrajectory,
+  type EvalSignals,
+} from "../eval.js";
 import type { RunManifest, StageRecord } from "../run-report.js";
 import { emptyTokenUsage } from "../tokens.js";
 
@@ -18,6 +22,10 @@ function signals(overrides: Partial<EvalSignals> = {}): EvalSignals {
     skillUsageCount: 0,
     planQualityRatio: null,
     reportLegibilityRatio: null,
+    toolCallCount: 0,
+    tokensAvoided: 0,
+    impactRecall: 0,
+    indexingOverheadMs: 0,
     ...overrides,
   };
 }
@@ -58,12 +66,12 @@ function stage(overrides: Partial<StageRecord> = {}): StageRecord {
 
 describe("scoreTrajectory", () => {
   it("marks complete/done runs as succeeded", () => {
-    expect(scoreTrajectory(manifest({ exitReason: "complete" }), []).succeeded).toBe(
-      true
-    );
-    expect(scoreTrajectory(manifest({ exitReason: "done" }), []).succeeded).toBe(
-      true
-    );
+    expect(
+      scoreTrajectory(manifest({ exitReason: "complete" }), []).succeeded
+    ).toBe(true);
+    expect(
+      scoreTrajectory(manifest({ exitReason: "done" }), []).succeeded
+    ).toBe(true);
   });
 
   it("does not mark non-success exit reasons as succeeded", () => {
@@ -159,10 +167,10 @@ describe("scoreTrajectory", () => {
       message: "m",
       blocked: false,
     };
-    const s = scoreTrajectory(
-      manifest({ safetyEvents: [taint] }),
-      [stage({ safetyEvents: [taint, taint] }), stage()]
-    );
+    const s = scoreTrajectory(manifest({ safetyEvents: [taint] }), [
+      stage({ safetyEvents: [taint, taint] }),
+      stage(),
+    ]);
     expect(s.safetyEventCount).toBe(3);
   });
 
@@ -172,10 +180,10 @@ describe("scoreTrajectory", () => {
 
   it("counts skills used across the manifest and stage records", () => {
     const use = { name: "release-flow", version: "1.0.0" };
-    const s = scoreTrajectory(
-      manifest({ skillsUsed: [use] }),
-      [stage({ skillsUsed: [use, use] }), stage()]
-    );
+    const s = scoreTrajectory(manifest({ skillsUsed: [use] }), [
+      stage({ skillsUsed: [use, use] }),
+      stage(),
+    ]);
     expect(s.skillUsageCount).toBe(3);
     expect(scoreTrajectory(manifest(), [stage()]).skillUsageCount).toBe(0);
   });
@@ -206,7 +214,8 @@ describe("scoreTrajectory", () => {
       missing: [],
     };
     expect(
-      scoreTrajectory(manifest(), [stage()], { reportScore }).reportLegibilityRatio
+      scoreTrajectory(manifest(), [stage()], { reportScore })
+        .reportLegibilityRatio
     ).toBeCloseTo(5 / 7);
   });
 
@@ -229,10 +238,10 @@ describe("compareTrajectories", () => {
     ]);
     const lines = out.split("\n");
     expect(lines[0]).toBe(
-      "| Run | Succeeded | Exit | Iterations | Stages | Errors | Cost (USD) | Tokens | Elapsed (ms) | Safety events | Skills used | Plan quality | Report legibility |"
+      "| Run | Succeeded | Exit | Iterations | Stages | Errors | Cost (USD) | Tokens | Elapsed (ms) | Safety events | Skills used | Plan quality | Report legibility | Tool calls | Tokens avoided | Impact recall | Indexing overhead (ms) |"
     );
     expect(lines[1]).toBe(
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     );
     expect(lines).toHaveLength(4);
     expect(lines[2]).toContain("| baseline |");
@@ -241,8 +250,14 @@ describe("compareTrajectories", () => {
 
   it("marks best and worst per directional signal", () => {
     const out = compareTrajectories([
-      { label: "cheap", signals: signals({ costUsd: 0.2, errorStageCount: 0 }) },
-      { label: "pricey", signals: signals({ costUsd: 0.9, errorStageCount: 3 }) },
+      {
+        label: "cheap",
+        signals: signals({ costUsd: 0.2, errorStageCount: 0 }),
+      },
+      {
+        label: "pricey",
+        signals: signals({ costUsd: 0.9, errorStageCount: 3 }),
+      },
     ]);
     expect(out).toContain("$0.2 (best)");
     expect(out).toContain("$0.9 (worst)");

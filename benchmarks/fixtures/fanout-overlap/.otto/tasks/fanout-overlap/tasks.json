@@ -1,0 +1,18 @@
+{
+  "tasks": [
+    {
+      "id": "add-price-formatter",
+      "title": "Implement formatPrice(cents) in src/widgets/format.mjs so it renders integer cents as a dollar string (e.g. 150 -> \"$1.50\"). Make format.test.mjs pass.",
+      "fileScope": ["src/widgets/"],
+      "dependsOn": [],
+      "parallelSafe": true
+    },
+    {
+      "id": "verify-price-formatter",
+      "title": "Confirm src/widgets/format.mjs's formatPrice(cents) renders integer cents as a dollar string and format.test.mjs passes; fix it if it does not.",
+      "fileScope": ["src/widgets/format.mjs"],
+      "dependsOn": [],
+      "parallelSafe": true
+    }
+  ]
+}

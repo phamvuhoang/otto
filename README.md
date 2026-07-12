@@ -183,6 +183,8 @@ otto-afk --fan-out --fan-out-concurrency 4 "./docs/plans/feature.md" 20
 > **Note:** `--fan-out` is not available in `--watch` mode. For issue-driven watch runs (`otto-ghafk --watch`), Otto works sequentially per issue. Fan-out applies when you drive `otto-afk` directly against a plan file.
 >
 > **`--plan` + `--fan-out` together:** when a previously authored task graph already exists and fan-out lands implementation work, that run is treated as an _implement_ — Otto reviews the aggregated fan-out diff and finalizes, rather than re-authoring the next plan over the slice docs. If fan-out lands nothing, the run authors a plan as usual.
+>
+> **Multi-agent coordination (P25):** fan-out now predicts file-scope conflicts before merging, requires each sub-agent to hand off a structured summary of what it touched, and reports per-agent contributions and deferrals (with reasons) in the run's evidence bundle.
 
 ---
 
@@ -469,11 +471,13 @@ otto-tools health                               # run each tool's health-check c
 # MCP/plugin config is never inherited into a run. No .otto/tools/ ⇒ unchanged behavior.
 
 # Extensions: start from a curated profile instead of raw source/tool config (P21)
-otto-extensions list                            # coding-superpowers | pm-planning | context-saver | security-review
+otto-extensions list                            # coding-superpowers | pm-planning | context-saver | security-review | codebase-intelligence
 otto-extensions init context-saver --dry-run    # preview every file it would write
 otto-extensions init context-saver              # writes normal .otto/ config — git status --short .otto/ to review (new files are untracked)
 # Profiles are generated config, not hidden behavior; sources stay unverified until you validate.
 # See docs/EXTENSIONS.md for the compatibility matrix + update/lock/rollback.
+# codebase-intelligence (P26, spike): local code-knowledge graph, report/eval-only, no live prompt
+# injection — needs an operator-provided pinned binary. See docs/EXTENSIONS.md#codebase-memory-p26-spike.
 ```
 
 **Bringing in a specific pack?** [**docs/INTEGRATIONS.md**](./docs/INTEGRATIONS.md) is a from-scratch, step-by-step guide for [Superpowers](https://github.com/obra/superpowers) (coding), [Product-Manager-Skills](https://github.com/deanpeters/Product-Manager-Skills) (planning), a single [Cursor review skill](https://github.com/cursor/plugins/blob/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md), and [Headroom](https://github.com/headroomlabs-ai/headroom) (context compression) — clone → register → validate → activate, with the gotchas (capability tagging, interactive-skill flagging, local-vs-git sync) called out.

@@ -2,7 +2,8 @@
 
 Last updated: 2026-07-03
 
-> **Status:** P22–P24 have landed their core slices; P25–P26 are planned.
+> **Status:** P22–P25 have landed their core slices; the P26 governance/retrieval
+> spike has landed; the P26 production adapter remains planned.
 > P22: lifecycle reporting, real Headroom compression — scoped to retrievable
 > spills and guarded by a runtime anchor-survival floor (#200) — and a
 > CI-runnable fact-survival eval that drives the real compress path (#202).
@@ -10,6 +11,12 @@ Last updated: 2026-07-03
 > under eval (#202). P24: verification matrix + gallery with existence and
 > produced-this-run artifact checks and matrix↔plan reconciliation (#201);
 > artifact existence is machine-checked, relevance remains reviewer judgment.
+> P25: fan-out conflict prediction, sub-agent handoff contracts, a conflict-aware
+> synthesizer, and per-agent/defer-reason evidence — opt-in under `--fan-out` (#206).
+> P26 spike: an off-by-default `codebase-memory` MCP stdio adapter, write
+> inventory + index freshness contract, eval signals/A-B configs, and the
+> `codebase-intelligence` extension profile — report/eval-only, no live prompt
+> injection and no indexing of a live target in this slice (#198, #206).
 >
 > **Tracking:** Phase 5 epic
 > [#183](https://github.com/phamvuhoang/otto/issues/183); initiatives

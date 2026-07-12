@@ -69,5 +69,20 @@
         }
       ]
     }
+  },
+  {
+    "id": "fanout-overlap",
+    "kind": "coordination",
+    "fixture": "fixtures/fanout-overlap",
+    "bin": "otto-afk",
+    "args": ["--fan-out"],
+    "inputs": "Two tasks are already declared in .otto/tasks/fanout-overlap/tasks.json with overlapping fileScope; let --fan-out land what it can, then finish anything left so `node --test` is green.",
+    "expect": {
+      "succeeded": true,
+      "checks": [
+        { "name": "tests", "command": "node --test" },
+        { "name": "fanout-contributions", "command": "node check-fanout.mjs" }
+      ]
+    }
   }
 ]

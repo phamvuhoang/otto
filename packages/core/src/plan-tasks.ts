@@ -83,7 +83,10 @@ export function parsePlanTasks(json: string): PlanTask[] {
 }
 
 /** Read + parse `.otto/tasks/<taskKey>/tasks.json`; `[]` when absent/invalid. */
-export function readPlanTasks(workspaceDir: string, taskKey: string): PlanTask[] {
+export function readPlanTasks(
+  workspaceDir: string,
+  taskKey: string
+): PlanTask[] {
   try {
     const txt = readFileSync(
       join(workspaceDir, ".otto", "tasks", taskKey, "tasks.json"),
@@ -130,33 +133,130 @@ export function discoverPlanTasks(workspaceDir: string): PlanTask[] {
   return best?.tasks ?? [];
 }
 
+/** Predicted conflict info for one task, reconciled against the plan's file map. */
+export type ConflictPrediction = {
+  taskId: string;
+  overlapsWith: string[];
+  confidence: number;
+  reason?: string;
+};
+
+/** Escape a `fileScope` glob (only `*` is a wildcard) into a matching RegExp. */
+function globToRegExp(glob: string): RegExp {
+  const escaped = glob
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, "[^/]*");
+  return new RegExp(`^${escaped}$`);
+}
+
+/**
+ * True if two `fileScope` entries collide — exact match, directory/prefix
+ * containment (either side may be a directory the other is nested under), or
+ * a glob on either side matching the other. Exported: P25 Task 2 reuses this
+ * for reconciling scopes against the plan's file map.
+ */
+export function pathsCollide(a: string, b: string): boolean {
+  if (a === b) return true;
+  const dir = (p: string) => (p.endsWith("/") ? p : `${p}/`);
+  if (a.startsWith(dir(b)) || b.startsWith(dir(a))) return true;
+  if (a.includes("*") && globToRegExp(a).test(b)) return true;
+  if (b.includes("*") && globToRegExp(b).test(a)) return true;
+  return false;
+}
+
+/** True if any path in `a` collides with any path in `b` (see {@link pathsCollide}). */
+export function scopesOverlap(a: string[], b: string[]): boolean {
+  return a.some((x) => b.some((y) => pathsCollide(x, y)));
+}
+
+/**
+ * Fraction of `task.fileScope` grounded in the plan's file map (paths the
+ * plan actually names). `1` when `planFileMap` is empty (no plan map to check
+ * against — no penalty) or the task declares no scope.
+ */
+export function scopeConfidence(task: PlanTask, planFileMap: string[]): number {
+  if (planFileMap.length === 0 || task.fileScope.length === 0) return 1;
+  const grounded = task.fileScope.filter((f) =>
+    planFileMap.some((m) => pathsCollide(f, m))
+  );
+  return grounded.length / task.fileScope.length;
+}
+
+/**
+ * Predict cross-task file-scope conflicts and per-task scope confidence
+ * against the plan's file map. Pure/side-effect-free — callers decide what to
+ * do with the predictions (e.g. {@link planParallelGroups} defers low-
+ * confidence or overlapping tasks to singleton waves).
+ */
+export function predictConflicts(
+  tasks: PlanTask[],
+  planFileMap: string[]
+): ConflictPrediction[] {
+  return tasks.map((t) => {
+    const overlapsWith = tasks
+      .filter((o) => o.id !== t.id && scopesOverlap(t.fileScope, o.fileScope))
+      .map((o) => o.id);
+    const confidence = scopeConfidence(t, planFileMap);
+    const reasons: string[] = [];
+    if (overlapsWith.length)
+      reasons.push(`file-scope overlaps ${overlapsWith.join(", ")}`);
+    if (confidence < 0.5)
+      reasons.push(
+        `scope not grounded in plan map (confidence ${confidence.toFixed(2)})`
+      );
+    return {
+      taskId: t.id,
+      overlapsWith,
+      confidence,
+      reason: reasons.join("; ") || undefined,
+    };
+  });
+}
+
 /**
  * Group tasks into execution waves. A task joins the current wave iff all its
- * deps are in earlier waves, it is `parallelSafe`, and its `fileScope` is
- * disjoint from every task already in the wave. A non-`parallelSafe` task (or
- * one whose scope overlaps the wave) runs alone in its own wave, preserving
- * correctness. Assumes a validated (acyclic) graph from {@link parsePlanTasks}.
+ * deps are in earlier waves, it is `parallelSafe`, its `fileScope` is
+ * disjoint (via {@link pathsCollide}) from every task already in the wave,
+ * and its plan-map-reconciled confidence is `>= 0.5`. A non-`parallelSafe`
+ * task, one whose scope collides with the wave, or one with low scope
+ * confidence runs alone in its own wave, preserving correctness.
+ * `planFileMap` is optional and defaults to `[]`, which yields confidence `1`
+ * for every task (see {@link scopeConfidence}) — omitting it reproduces
+ * today's exact-scope-disjointness behavior. Assumes a validated (acyclic)
+ * graph from {@link parsePlanTasks}.
  */
-export function planParallelGroups(tasks: PlanTask[]): PlanTask[][] {
+export function planParallelGroups(
+  tasks: PlanTask[],
+  planFileMap: string[] = []
+): PlanTask[][] {
+  const conflicts = new Map(
+    predictConflicts(tasks, planFileMap).map((c) => [c.taskId, c])
+  );
+  const confident = (t: PlanTask): boolean =>
+    (conflicts.get(t.id)?.confidence ?? 1) >= 0.5;
+
   const waves: PlanTask[][] = [];
   const done = new Set<string>();
   let remaining = [...tasks];
   while (remaining.length > 0) {
     const wave: PlanTask[] = [];
-    const usedScope = new Set<string>();
+    const usedScope: string[] = [];
     for (const t of remaining) {
       const depsReady = t.dependsOn.every((d) => done.has(d));
       if (!depsReady) continue;
-      const disjoint = t.fileScope.every((f) => !usedScope.has(f));
+      const disjoint = t.fileScope.every(
+        (f) => !usedScope.some((u) => pathsCollide(f, u))
+      );
       if (wave.length === 0) {
         // First task in the wave always admitted (deps ready). A non-parallel
-        // task seals the wave as a singleton.
+        // task, or one with low plan-map confidence, seals the wave as a
+        // singleton.
         wave.push(t);
-        t.fileScope.forEach((f) => usedScope.add(f));
-        if (!t.parallelSafe) break;
-      } else if (t.parallelSafe && disjoint) {
+        usedScope.push(...t.fileScope);
+        if (!t.parallelSafe || !confident(t)) break;
+      } else if (t.parallelSafe && disjoint && confident(t)) {
         wave.push(t);
-        t.fileScope.forEach((f) => usedScope.add(f));
+        usedScope.push(...t.fileScope);
       }
     }
     if (wave.length === 0) {

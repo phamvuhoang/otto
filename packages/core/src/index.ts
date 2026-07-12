@@ -207,6 +207,18 @@ export {
   type HeadroomRunner,
 } from "./headroom-adapter.js";
 export {
+  codebaseMemoryToolDefinition,
+  createStdioCbmRunner,
+  classifyIndexFreshness,
+  diffWriteInventory,
+  type CbmRequest,
+  type CbmResponse,
+  type CbmRunner,
+  type CbmIndexIdentity,
+  type IndexFreshness,
+  type WriteInventory,
+} from "./codebase-memory-adapter.js";
+export {
   formatPlanReport,
   readTaskPlans,
   runPlanReport,
@@ -294,6 +306,7 @@ export {
 } from "./taint.js";
 export {
   authorizeToolInvocation,
+  authorizeToolOperation,
   parseTool,
   readToolConfig,
   readTools,
@@ -306,6 +319,7 @@ export {
   type ToolDefinition,
   type ToolInvocation,
   type ToolKind,
+  type ToolOperation,
   type ToolOverride,
   type ToolResult,
   type ToolSelection,
@@ -440,6 +454,7 @@ export {
 } from "./skill-validation.js";
 export {
   compareTrajectories,
+  scoreImpactRecall,
   scoreTrajectory,
   type EvalSignals,
   type LabelledSignals,
@@ -560,9 +575,20 @@ export {
   parsePlanTasks,
   planParallelGroups,
   readPlanTasks,
+  pathsCollide,
+  scopesOverlap,
+  scopeConfidence,
+  predictConflicts,
   type PlanTask,
+  type ConflictPrediction,
 } from "./plan-tasks.js";
 export { reviewsFanoutInsteadOfReplan } from "./plan-fanout.js";
+export {
+  parseHandoff,
+  computeOutOfScope,
+  type TestRun,
+  type SubAgentHandoff,
+} from "./handoff.js";
 export {
   INPUT_DIMENSIONS,
   formatInputSharpness,
@@ -574,6 +600,8 @@ export {
 } from "./input-sharpness.js";
 export { createWorktree, reapWorktrees } from "./worktree.js";
 export {
+  buildCrossTaskSummary,
+  orderByConflictRisk,
   runFanout,
   type FanoutResult,
   type FanoutTaskOutcome,

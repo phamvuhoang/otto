@@ -42,6 +42,8 @@ const COMPLETE = [
   "- [ ] 2. Write a failing test in packages/core/src/b.test.ts, then wire it. verify: `pnpm -r typecheck`",
   "## Success criteria",
   "Done when: the test command passes and reviewers can check the expected result.",
+  "## Risks (what would make this plan wrong?)",
+  "- If `a.ts` has another consumer, the change needs a shim; check callers first.",
 ].join("\n");
 
 function deps(cwd: string) {

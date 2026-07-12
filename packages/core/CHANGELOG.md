@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.33.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.32.0...otto-core-v0.33.0) (2026-07-03)
+
+
+### Features
+
+* **p22:** eval-backed fact-survival proof for retrievable compression ([#197](https://github.com/phamvuhoang/otto/issues/197)) ([3b4ccaf](https://github.com/phamvuhoang/otto/commit/3b4ccaf6b8731e4326bcacfd78c265492a34f639))
+
+
+### Bug Fixes
+
+* close the Phase 5 review findings — selective compression, provable verification, real evals, plan risks ([#200](https://github.com/phamvuhoang/otto/issues/200) [#201](https://github.com/phamvuhoang/otto/issues/201) [#202](https://github.com/phamvuhoang/otto/issues/202) [#203](https://github.com/phamvuhoang/otto/issues/203)) ([#204](https://github.com/phamvuhoang/otto/issues/204)) ([15d491d](https://github.com/phamvuhoang/otto/commit/15d491db15518952561e73d8c441af3036b17d7f))
+
 ## [0.32.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.31.0...otto-core-v0.32.0) (2026-07-01)
 
 

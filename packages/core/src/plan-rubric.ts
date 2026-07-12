@@ -142,7 +142,8 @@ export type PlanRubricScore = {
 export type PlanDepthCriterion =
   | "realFileMap"
   | "taskTestAndVerify"
-  | "testableSuccessCriteria";
+  | "testableSuccessCriteria"
+  | "planWrongRisks";
 
 export type PlanDepthCriterionResult = {
   criterion: PlanDepthCriterion;
@@ -213,6 +214,16 @@ function successSection(doc: string): string {
   return next ? rest.slice(0, next.index) : rest;
 }
 
+/** Body of the `## Risks` ("what would make this plan wrong?") section, "" when
+ *  absent (issue #203 P23). */
+function risksSection(doc: string): string {
+  const m = /(?:^|\n)#{1,6}\s+[^\n]*\brisks?\b[^\n]*\n/i.exec(doc);
+  if (!m) return "";
+  const rest = doc.slice(m.index + m[0].length);
+  const next = /(?:^|\n)#{1,6}\s+/.exec(rest);
+  return next ? rest.slice(0, next.index) : rest;
+}
+
 export function scorePlanDepth(doc: string): PlanDepthScore {
   const fileMap = extractPlanFileMap(doc);
   const tasks = taskBlocks(doc);
@@ -223,6 +234,7 @@ export function scorePlanDepth(doc: string): PlanDepthScore {
       !VERIFY_CMD_RE.test(t)
   );
   const success = successSection(doc);
+  const risks = risksSection(doc);
   const results: PlanDepthCriterionResult[] = [
     {
       criterion: "realFileMap",
@@ -251,6 +263,14 @@ export function scorePlanDepth(doc: string): PlanDepthScore {
       detail: success.trim()
         ? "success criteria section is concrete"
         : "missing success criteria section",
+    },
+    {
+      criterion: "planWrongRisks",
+      label: 'Risks: "what would make this plan wrong?"',
+      met: risks.trim().length > 0,
+      detail: risks.trim()
+        ? "risks section present"
+        : 'missing risks section ("what would make this plan wrong?")',
     },
   ];
   const metCount = results.reduce((n, r) => n + (r.met ? 1 : 0), 0);

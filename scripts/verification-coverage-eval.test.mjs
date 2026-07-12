@@ -11,13 +11,22 @@
 // `pnpm -r build` first.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import {
   parseVerificationMatrix,
   scoreVerificationCoverage,
+  validateVerificationEvidence,
 } from "../packages/core/dist/index.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -68,4 +77,52 @@ test("artifact coverage rises from the unproven matrix to the proven one", () =>
     after > before,
     `expected coverage to rise, got ${before} -> ${after}`
   );
+});
+
+test("evidence validation runs against a real workspace — existence and produced-this-run gate coverage (issue #202)", () => {
+  // The anti-fabrication layer itself, not just gate plumbing: a real temp
+  // workspace where one cited artifact exists, one is fabricated, and one is a
+  // scratch leftover from a "previous run" (mtime before the run start).
+  const ws = mkdtempSync(join(tmpdir(), "otto-eval-verify-"));
+  try {
+    writeFileSync(join(ws, "impl.ts"), "line1\nline2\n");
+    mkdirSync(join(ws, ".otto-tmp"), { recursive: true });
+    const stale = join(ws, ".otto-tmp", "old-shot.png");
+    writeFileSync(stale, "png-bytes");
+    const hourAgo = new Date(Date.now() - 3_600_000);
+    utimesSync(stale, hourAgo, hourAgo);
+
+    const row = (requirement, artifactPath) => ({
+      requirement,
+      method: "inspection",
+      check: "read the code",
+      artifactPath,
+      result: "pass",
+      confidence: "high",
+    });
+    const out = validateVerificationEvidence(
+      [
+        row("real file:line evidence", "impl.ts:2"),
+        row("fabricated path", "proof/does-not-exist.png"),
+        row("stale prior-run screenshot", ".otto-tmp/old-shot.png"),
+      ],
+      {
+        workspaceDir: ws,
+        runId: "eval",
+        startedAtMs: Date.now() - 1_000,
+        commitExists: () => false,
+      }
+    );
+    assert.equal(out[0].artifactExists, true, "existing file:line counts");
+    assert.equal(out[1].artifactExists, false, "fabricated path rejected");
+    assert.equal(out[2].artifactExists, false, "stale scratch rejected");
+    assert.equal(out[2].artifactBundled, false, "stale scratch not bundled");
+
+    const gate = scoreVerificationCoverage(out);
+    assert.equal(gate.passed, false);
+    assert.ok(gate.unproven.includes("fabricated path"));
+    assert.ok(gate.unproven.includes("stale prior-run screenshot"));
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
 });

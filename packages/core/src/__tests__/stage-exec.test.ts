@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -273,5 +280,70 @@ describe("executeStage safety policy", () => {
         blocked: true,
       },
     ]);
+  });
+});
+
+describe("executeStage spill compression gating (issue #200)", () => {
+  let root: string;
+  let workspaceDir: string;
+  let packageDir: string;
+  const gateStage: Stage = { name: "reviewer", template: "gate.md" };
+  const bulk = "alpha beta gamma delta ".repeat(30).trim();
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "otto-stage-gate-"));
+    workspaceDir = join(root, "workspace");
+    packageDir = join(root, "pkg");
+    mkdirSync(join(packageDir, "templates"), { recursive: true });
+    mkdirSync(workspaceDir, { recursive: true });
+    writeFileSync(
+      join(packageDir, "templates", gateStage.template),
+      "issue: @spill:issue.json=`echo " +
+        bulk +
+        "`\npatch: @spill:head.diff=`echo " +
+        bulk +
+        "`\n",
+      "utf8"
+    );
+    mocks.runStage.mockReset().mockResolvedValue(ok);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("compresses retrievable issue-body spills but never the patch under review", async () => {
+    const sr = await executeStage({
+      stage: gateStage,
+      vars: {},
+      workspaceDir,
+      packageDir,
+      iteration: 1,
+      maxRetries: 0,
+      compressor: {
+        name: "headroom",
+        version: "gate-1",
+        available: true,
+        compress: () => ({ ok: true, text: "COMPRESSED" }),
+      },
+      retrievalStore: (key) => `handle:${key}`,
+    });
+
+    const tmp = join(workspaceDir, ".otto-tmp");
+    const spillDir = readdirSync(tmp).find((d) => d.startsWith("spill-"));
+    expect(spillDir).toBeDefined();
+    const spilled = (name: string) =>
+      readFileSync(join(tmp, spillDir as string, name), "utf8");
+
+    // issue-body (retrievable) → compressed; command-log diff → untouched.
+    expect(spilled("issue.json")).toBe("COMPRESSED");
+    expect(spilled("head.diff")).toContain(bulk);
+
+    // Evidence records only the compression that actually ran.
+    const headroom = (sr.toolsUsed ?? []).filter((t) => t.name === "headroom");
+    expect(headroom).toHaveLength(1);
+    expect(headroom[0]?.reasons?.[0]).toContain("issue-body");
   });
 });

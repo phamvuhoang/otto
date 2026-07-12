@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import {
+  formatSharpeningGuidance,
   scoreInputSharpness,
   scorePlanDepth,
   scorePlanQuality,
@@ -44,6 +45,29 @@ test("the vague-input fixture scores low and flags the gaps a sharpening pass mu
   ]) {
     assert.ok(s.unknowns.includes(dim), `expected unknown: ${dim}`);
   }
+});
+
+test("the sharpening pass itself names each detected gap and directs the decision log (issue #202)", () => {
+  // End-to-end through the real pass, not fixture ordering: score the vague
+  // input, render the guidance the plan stage receives, and assert it (a) names
+  // every gap the rubric detected and (b) directs the `## Decisions` log the
+  // plan gate scores. Breaking formatSharpeningGuidance now fails this eval.
+  const s = scoreInputSharpness(vagueInput);
+  const guidance = formatSharpeningGuidance(s);
+  assert.ok(guidance.length > 0, "vague input must produce guidance");
+  for (const gap of s.unknowns) {
+    assert.ok(guidance.includes(gap), `guidance must name the gap: ${gap}`);
+  }
+  assert.match(
+    guidance,
+    /## Decisions/,
+    "guidance must direct the decision log the plan gate scores"
+  );
+  assert.match(
+    guidance,
+    /assumption/i,
+    "guidance must direct recording assumptions (AFK never asks a human)"
+  );
 });
 
 test("addressing the flagged gaps raises the plan-quality rubric score", () => {

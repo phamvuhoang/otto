@@ -7,6 +7,7 @@ import {
   isValidArtifactReference,
   parseVerificationMatrix,
   parseVerificationMatrixWithDiagnostics,
+  reconcileMatrixWithPlan,
   scoreVerificationCoverage,
   summarizeVerification,
   type VerificationEntry,
@@ -419,5 +420,54 @@ describe("formatVisualEvidence", () => {
         visual({ artifactPath: undefined, confidence: "low" }),
       ])
     ).toBe("");
+  });
+});
+
+describe("reconcileMatrixWithPlan (issue #201)", () => {
+  const row = (requirement: string): VerificationEntry => ({
+    requirement,
+    method: "test",
+    check: "node --test",
+    result: "pass",
+    confidence: "high",
+    artifactPath: "a.ts:1",
+    artifactExists: true,
+  });
+  const entries = [
+    row("Add retry logic to fetchUser"),
+    row("Document the retry flag"),
+  ];
+  const planTitles = [
+    "Add retry logic to fetchUser",
+    "Document the retry flag",
+    "Handle timeout errors in fetchUser",
+  ];
+
+  it("reports no shortfall when every plan task has a matrix row", () => {
+    const r = reconcileMatrixWithPlan(entries, planTitles.slice(0, 2));
+    expect(r.shortfall).toBe(false);
+    expect(r.unmatched).toEqual([]);
+  });
+
+  it("flags a shortfall and names the omitted plan task", () => {
+    const r = reconcileMatrixWithPlan(entries, planTitles);
+    expect(r.shortfall).toBe(true);
+    expect(r.planTasks).toBe(3);
+    expect(r.matrixRows).toBe(2);
+    expect(r.unmatched).toEqual(["Handle timeout errors in fetchUser"]);
+  });
+
+  it("an omitted plan task FAILS the coverage gate, naming the gap", () => {
+    const recon = reconcileMatrixWithPlan(entries, planTitles);
+    const gate = scoreVerificationCoverage(entries, 0, recon);
+    expect(gate.passed).toBe(false);
+    const text = formatVerificationCoverageGate(entries, 0, recon);
+    expect(text).toContain("FAIL");
+    expect(text).toContain("Handle timeout errors in fetchUser");
+  });
+
+  it("a full matrix still passes the gate with a plan attached", () => {
+    const recon = reconcileMatrixWithPlan(entries, planTitles.slice(0, 2));
+    expect(scoreVerificationCoverage(entries, 0, recon).passed).toBe(true);
   });
 });

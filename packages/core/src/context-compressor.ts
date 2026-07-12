@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { assessFactSurvival, extractAnchors } from "./compression-survival.js";
 import { estimateTokens } from "./context-report.js";
 import { runReportDir } from "./run-report.js";
 import type { ToolUsage } from "./run-report.js";
@@ -50,6 +51,18 @@ export const COMPRESSION_CATEGORIES = [
   "memory-projection",
 ] as const;
 export type CompressionCategory = (typeof COMPRESSION_CATEGORIES)[number];
+
+/**
+ * Whether a category is authorized for live compression (issue #200). The
+ * roadmap scopes Headroom to the `retrievable` lifecycle class — today only
+ * `issue-body` (re-fetchable from the tracker). `command-log` diffs/patches
+ * feed the *current* decision (the reviewer reads `head.diff` line by line),
+ * and `read-artifact` is the unknown default bucket, so both stay verbatim.
+ * Pure.
+ */
+export function isCompressibleCategory(category: CompressionCategory): boolean {
+  return category === "issue-body";
+}
 
 /** Content handed to the compressor, tagged by source category + a stable key. */
 export type CompressInput = {
@@ -180,6 +193,14 @@ export function runRetrievalStore(
 type RawResult = { text: string; ok: boolean; note?: string };
 
 /**
+ * Minimum share of extracted anchors that must survive for a compression to be
+ * kept. At the default 12-anchor cap this tolerates one dropped anchor —
+ * summarizers legitimately trim repetition, but losing more than that means
+ * load-bearing identifiers are being destroyed.
+ */
+const SURVIVAL_FLOOR = 0.9;
+
+/**
  * Turn a raw compression attempt into a measured {@link CompressOutput}, shared
  * by the async ({@link compressContent}) and sync ({@link compressContentSync})
  * entry points so their decision logic never drifts. `result === null` means the
@@ -218,6 +239,20 @@ function assembleOutput(
       !result.ok,
       result.note ??
         (result.ok ? "no token reduction — kept original" : undefined)
+    );
+  }
+  // Runtime fact-survival floor (issue #200): a compression that blanks the
+  // content or drops mechanically extracted load-bearing anchors (paths,
+  // identifier codes, versions) is rejected in favor of the original.
+  if (result.text.trim().length === 0) {
+    return passthrough(true, "blank compression result — kept original");
+  }
+  const survival = assessFactSurvival(extractAnchors(input.text), result.text);
+  if (survival.survivalRate < SURVIVAL_FLOOR) {
+    return passthrough(
+      true,
+      `survival floor: only ${survival.survived}/${survival.total} anchors ` +
+        `survived (missing: ${survival.missing.slice(0, 3).join(", ")}) — kept original`
     );
   }
   const retrievalHandle = store ? store(input.key, input.text) : undefined;

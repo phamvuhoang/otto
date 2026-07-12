@@ -387,7 +387,11 @@ describe("runBin --plan (author spec+plan, one-shot)", () => {
   let workspace: string | undefined;
   const planCfg: RunBinConfig = {
     ...cfg,
-    planStage: { name: "plan", template: "plan.md", permissionMode: "bypassPermissions" },
+    planStage: {
+      name: "plan",
+      template: "plan.md",
+      permissionMode: "bypassPermissions",
+    },
   };
 
   afterEach(() => {
@@ -446,7 +450,9 @@ describe("runBin --verbose", () => {
     mockBranch(workspace);
     captureStdout();
 
-    await expect(runBin(["--verbose", "plan", "1"], cfg)).resolves.toBeUndefined();
+    await expect(
+      runBin(["--verbose", "plan", "1"], cfg)
+    ).resolves.toBeUndefined();
 
     expect(mocks.runLoop).toHaveBeenCalledWith(
       expect.objectContaining({ verbose: true })
@@ -468,7 +474,9 @@ describe("runBin --verbose", () => {
 
   it("shows verbose in --print-config", async () => {
     const stdout = captureStdout();
-    await expect(runBin(["--verbose", "--print-config"], cfg)).resolves.toBeUndefined();
+    await expect(
+      runBin(["--verbose", "--print-config"], cfg)
+    ).resolves.toBeUndefined();
     expect(stdout.join("")).toMatch(/verbose\s+true/);
   });
 });
@@ -501,7 +509,9 @@ describe("runBin --plan-report", () => {
   it("exits 0 when an authored plan can be reported", async () => {
     workspace = makeWorkspace();
     process.env.OTTO_WORKSPACE = workspace;
-    mkdirSync(join(workspace, ".otto", "tasks", "issue-1"), { recursive: true });
+    mkdirSync(join(workspace, ".otto", "tasks", "issue-1"), {
+      recursive: true,
+    });
     writeFileSync(
       join(workspace, ".otto", "tasks", "issue-1", "plan.md"),
       "## Problem\nx\n## Tasks\n- [ ] 1. write a failing test. verify: `pnpm -r test`\n- [ ] 2. go"
@@ -513,5 +523,57 @@ describe("runBin --plan-report", () => {
 
     await expect(runBin(["--plan-report"], cfg)).resolves.toBeUndefined();
     expect(exit).not.toHaveBeenCalled();
+  });
+});
+
+describe("runBin --sharpen-input outside --plan (issue #203)", () => {
+  const oldWorkspace = process.env.OTTO_WORKSPACE;
+  let workspace: string | undefined;
+  const planCfg: RunBinConfig = {
+    ...cfg,
+    planStage: {
+      name: "plan",
+      template: "plan.md",
+      permissionMode: "bypassPermissions",
+    },
+  };
+
+  beforeEach(() => {
+    workspace = makeWorkspace();
+    process.env.OTTO_WORKSPACE = workspace;
+    mockBranch(workspace);
+    mockLoopSuccess();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (workspace) rmSync(workspace, { recursive: true, force: true });
+    workspace = undefined;
+    if (oldWorkspace === undefined) delete process.env.OTTO_WORKSPACE;
+    else process.env.OTTO_WORKSPACE = oldWorkspace;
+  });
+
+  function captureStderr(): string[] {
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((s: unknown) => {
+      errs.push(String(s));
+    });
+    return errs;
+  }
+
+  it("warns that the flag is inert without --plan, and still runs", async () => {
+    const errs = captureStderr();
+    captureStdout();
+    await runBin(["--sharpen-input", "plan.md", "1"], planCfg);
+    expect(errs.join("\n")).toMatch(/--sharpen-input.*--plan/);
+    expect(mocks.runLoop).toHaveBeenCalled(); // a warning, not an error
+  });
+
+  it("stays silent when --plan is present", async () => {
+    const errs = captureStderr();
+    captureStdout();
+    await runBin(["--plan", "--sharpen-input", "build a thing"], planCfg);
+    expect(errs.join("\n")).not.toMatch(/--sharpen-input/);
+    expect(mocks.runLoop).toHaveBeenCalled();
   });
 });

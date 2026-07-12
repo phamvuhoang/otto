@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.33.0...otto-core-v0.33.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **cbm:** normalize trailing-slash write roots in diffWriteInventory (P26) ([f377e60](https://github.com/phamvuhoang/otto/commit/f377e60d6c76ca40a9dc4762c1ac0ceb7541b990))
+
 ## [0.33.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.32.0...otto-core-v0.33.0) (2026-07-03)
 
 

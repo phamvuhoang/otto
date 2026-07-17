@@ -220,8 +220,11 @@ export {
 } from "./codebase-memory-adapter.js";
 export {
   runIndexRepository,
+  decideIndexAction,
+  canInject,
   type IndexResult,
   type IndexInputs,
+  type IndexAction,
 } from "./cbm-index.js";
 export {
   formatPlanReport,

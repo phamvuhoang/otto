@@ -1,7 +1,9 @@
 import {
   diffWriteInventory,
+  classifyIndexFreshness,
   type CbmIndexIdentity,
   type CbmRunner,
+  type IndexFreshness,
   type WriteInventory,
 } from "./codebase-memory-adapter.js";
 
@@ -55,4 +57,42 @@ export function runIndexRepository(inputs: IndexInputs): IndexResult {
     identity: { ...inputs.identity, indexStatus: "ready" },
     writeInventory: inventory,
   };
+}
+
+export type IndexAction = {
+  action: "reuse" | "reindex";
+  freshness: IndexFreshness;
+  reason: string;
+};
+
+/**
+ * Decides whether a persisted index can be reused as-is or must be rebuilt,
+ * based on {@link classifyIndexFreshness}'s verdict against the current
+ * workspace state. Pure — no filesystem access.
+ */
+export function decideIndexAction(
+  current: {
+    workspace: string;
+    sourceRevision: string;
+    worktreeDirty: boolean;
+  } | null,
+  persisted: CbmIndexIdentity | null
+): IndexAction {
+  const freshness = classifyIndexFreshness(current, persisted);
+  return freshness === "fresh"
+    ? { action: "reuse", freshness, reason: "index fresh" }
+    : { action: "reindex", freshness, reason: `index ${freshness}` };
+}
+
+/**
+ * Gates whether index-derived context is safe to inject into a prompt: only
+ * a `fresh` index is trusted; anything else falls back with a reason.
+ */
+export function canInject(freshness: IndexFreshness): {
+  inject: boolean;
+  fallbackReason?: string;
+} {
+  return freshness === "fresh"
+    ? { inject: true }
+    : { inject: false, fallbackReason: `index ${freshness}` };
 }

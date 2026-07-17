@@ -219,6 +219,11 @@ export {
   type WriteInventory,
 } from "./codebase-memory-adapter.js";
 export {
+  runIndexRepository,
+  type IndexResult,
+  type IndexInputs,
+} from "./cbm-index.js";
+export {
   formatPlanReport,
   readTaskPlans,
   runPlanReport,

@@ -580,6 +580,93 @@ describe("runLoop", () => {
     expect(manifest?.inputSharpness).toBeUndefined();
   });
 
+  // Codebase-memory loop wiring (P26 slice2, Task 5). A stub runner keeps the
+  // test out of any real process; the tool file drives the registry gate.
+  const stubCbmRunner = () => ({
+    available: () => true,
+    call: (req: { operation: string }) => ({
+      ok: true,
+      result: `CBM:${req.operation}`,
+    }),
+  });
+  const writeCbmTool = (
+    workspaceDir: string,
+    stages: string[],
+    enabled = true
+  ) => {
+    mkdirSync(join(workspaceDir, ".otto", "tools"), { recursive: true });
+    writeFileSync(
+      join(workspaceDir, ".otto", "tools", "codebase-memory.json"),
+      JSON.stringify({
+        name: "codebase-memory",
+        kind: "mcp",
+        stages,
+        writeRoots: [".otto/cbm-scratch"],
+        enabled,
+        command: "codebase-memory",
+        timeoutMs: 120000,
+        operations: [
+          { name: "index_repository", write: true },
+          { name: "search_graph", write: false },
+          { name: "get_architecture", write: false },
+          { name: "detect_changes", write: false },
+          { name: "trace_path", write: false },
+        ],
+      }),
+      "utf8"
+    );
+  };
+
+  it("injects a <graph-map> block + records a codebase-memory ToolUsage into an enabled stage (P26 slice2)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    // Enabled for the running `implementer` stage AND for `plan` (the context
+    // the preflight index_repository write is authorized under).
+    writeCbmTool(dirs.workspaceDir, ["plan", "implementer"]);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    await runLoop(loopOptions(dirs, { cbmRunner: stubCbmRunner }));
+
+    // The graph-map block actually reached the rendered stage prompt.
+    const prompt = String(mocks.runStage.mock.calls[0][1]);
+    expect(prompt).toContain("<graph-map>");
+
+    // The invocation is recorded as evidence on the stage record.
+    const records = readStageRecords(
+      dirs.workspaceDir,
+      listRunIds(dirs.workspaceDir)[0]
+    );
+    const impl = records.find((r) => r.stage === "implementer");
+    expect(impl?.toolsUsed?.some((t) => t.name === "codebase-memory")).toBe(
+      true
+    );
+
+    // The run manifest carries the index build evidence.
+    const manifest = readManifest(
+      dirs.workspaceDir,
+      listRunIds(dirs.workspaceDir)[0]
+    );
+    expect(manifest?.codebaseMemory?.indexIdentity).toBeTruthy();
+  });
+
+  it("injects nothing when codebase-memory is not registered (byte-for-byte inert) (P26 slice2)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    // No .otto/tools/codebase-memory.json — the feature must be fully inert.
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    await runLoop(loopOptions(dirs, { cbmRunner: stubCbmRunner }));
+
+    for (const call of mocks.runStage.mock.calls) {
+      expect(String(call[1])).not.toContain("<graph-map>");
+    }
+    const manifest = readManifest(
+      dirs.workspaceDir,
+      listRunIds(dirs.workspaceDir)[0]
+    );
+    expect(manifest?.codebaseMemory).toBeUndefined();
+  });
+
   it("records a --verify run's verification matrix from the scratch file onto the manifest (#181 P24)", async () => {
     const dirs = makeDirs();
     roots.push(dirs.root);

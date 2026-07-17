@@ -1,11 +1,19 @@
-import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { join, relative } from "node:path";
 
 import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
 import { readCoreVersion } from "./cli-help.js";
 import { acquire, type Releaser } from "./keepalive.js";
 import { notifyComplete, notifyError } from "./notify.js";
-import { changedFilesSince, commitExists, headSha } from "./git.js";
+import { changedFilesSince, commitExists, git, headSha } from "./git.js";
 import { sleep, isThrottle, nextCooldownFactor } from "./pacing.js";
 import { decide } from "./policy.js";
 import { deriveProgress, type IterationObservation } from "./progress.js";
@@ -44,7 +52,20 @@ import {
   createHeadroomSyncCompressor,
 } from "./headroom-adapter.js";
 import { readSafetyPolicy } from "./safety-policy.js";
-import { readToolConfig, readTools } from "./tools.js";
+import {
+  authorizeToolOperation,
+  readToolConfig,
+  readTools,
+  toolEnabledForStage,
+} from "./tools.js";
+import { decideIndexAction, runIndexRepository } from "./cbm-index.js";
+import { buildCbmInjection, stageQueries } from "./cbm-inject.js";
+import {
+  createStdioCbmRunner,
+  type CbmIndexIdentity,
+  type CbmRunner,
+  type IndexFreshness,
+} from "./codebase-memory-adapter.js";
 import {
   allocateRunId,
   hasRunReport,
@@ -59,6 +80,7 @@ import {
   type SafetyEvent,
   type SkillUsage,
   type StageRecord,
+  type ToolUsage,
 } from "./run-report.js";
 import {
   DEFAULT_REPORT_LEGIBILITY_THRESHOLD,
@@ -288,6 +310,12 @@ export type LoopOptions = {
    *  spill output verbatim. A requested-but-unavailable compressor warns once and
    *  continues uncompressed — never a broken run. */
   contextCompressor?: CompressorMode;
+  /** Injectable codebase-memory transport factory (P26 slice2). Mirrors how
+   *  fan-out's `runSubAgent` is injectable so tests drive a stub with no real
+   *  process. Defaults to `createStdioCbmRunner`; only consulted when the
+   *  `codebase-memory` tool is registered + enabled for a chain stage, so a bare
+   *  run never constructs one. */
+  cbmRunner?: (command: string, cwd: string, timeoutMs: number) => CbmRunner;
 };
 
 export type LoopOutcome = {
@@ -417,6 +445,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     autoSwitchOnLimit = false,
     verbose = false,
     contextCompressor = "off",
+    cbmRunner = createStdioCbmRunner,
   } = opts;
 
   // Input sharpening (issue #180 P23): in --plan mode, score the run's input once.
@@ -550,6 +579,150 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     }
   }
   const retrievalStore: RetrievalStore = runRetrievalStore(workspaceDir, runId);
+
+  // Codebase-memory (P26 slice2): confined preflight indexing + per-stage graph
+  // injection. INERT by default — every line below is gated on `cbmActiveForRun`,
+  // which is false unless a repo has registered `.otto/tools/codebase-memory.json`
+  // AND enabled it for a stage in this run's chain (registry `enabled` merged with
+  // `.otto/config.json` `tools.codebase-memory.enabled`, exactly like P25 Task 7's
+  // worktree-identity gate + the per-stage allowlist). A bare run constructs no
+  // runner, indexes nothing, and renders every stage prompt byte-for-byte as before.
+  const cbmTool =
+    readTools(workspaceDir).find((t) => t.name === "codebase-memory") ?? null;
+  const cbmToolConfig = readToolConfig(workspaceDir);
+  const cbmPolicy = readSafetyPolicy(workspaceDir);
+  const cbmChainStages: Stage[] = reviewStage
+    ? [...stages, reviewStage]
+    : [...stages];
+  const cbmActiveForRun =
+    cbmTool != null &&
+    cbmChainStages.some(
+      (st) => toolEnabledForStage(cbmTool, cbmToolConfig, st.name).enabled
+    );
+  // Confinement: the index cache lives entirely under `.otto/cbm-scratch` and the
+  // persisted identity stamp sits beside it, so a run can tell whether a prior
+  // index is still safe to trust without rebuilding.
+  const cbmScratchRel = join(".otto", "cbm-scratch");
+  const cbmScratchDir = join(workspaceDir, cbmScratchRel);
+  const cbmIdentityPath = join(cbmScratchDir, "index-identity.json");
+  let cbmRunnerInstance: CbmRunner | null = null;
+  let cbmManifest: RunManifest["codebaseMemory"] | undefined;
+  let lastCbmFreshness: IndexFreshness = "absent";
+  if (cbmActiveForRun && cbmTool) {
+    const candidate = cbmRunner(
+      cbmTool.command ?? "codebase-memory",
+      workspaceDir,
+      cbmTool.timeoutMs ?? 120_000
+    );
+    // Unavailable tool ⇒ skip all CBM work, no throw. Leave the manifest field
+    // unset so an inert (uninstalled) run stays byte-for-byte comparable.
+    if (candidate.available()) cbmRunnerInstance = candidate;
+  }
+  // List files under `dir` as workspace-relative paths, so the write-inventory
+  // diff can classify them against the declared `.otto/cbm-scratch` root.
+  const listCbmFilesRel = (dir: string): string[] => {
+    const out: string[] = [];
+    const walk = (d: string): void => {
+      try {
+        for (const e of readdirSync(d, { withFileTypes: true })) {
+          const full = join(d, String(e.name));
+          if (e.isDirectory()) walk(full);
+          else out.push(relative(workspaceDir, full));
+        }
+      } catch {
+        // unreadable/absent dir contributes no files to the inventory.
+      }
+    };
+    walk(dir);
+    return out;
+  };
+  const currentCbmIdentity = () => ({
+    workspace: workspaceDir,
+    sourceRevision: headSha(workspaceDir) ?? "",
+    worktreeDirty: (git(["status", "--porcelain"], workspaceDir) ?? "") !== "",
+  });
+  const readPersistedCbmIdentity = (): CbmIndexIdentity | null => {
+    try {
+      return JSON.parse(
+        readFileSync(cbmIdentityPath, "utf8")
+      ) as CbmIndexIdentity;
+    } catch {
+      return null;
+    }
+  };
+  // One index pass (preflight `build` or pre-reviewer `refresh`): decide reuse vs
+  // rebuild against the current workspace identity, (re)index under confinement
+  // when needed, and set `lastCbmFreshness` — only a `fresh` verdict lets a stage
+  // inject (see `buildCbmInjection`/`canInject`). Best-effort + no throw: any
+  // failure degrades to a non-fresh verdict (no injection), never a broken run.
+  const runCbmIndexPass = (which: "build" | "refresh"): void => {
+    if (!cbmRunnerInstance || !cbmTool) return;
+    const t0 = Date.now();
+    const current = currentCbmIdentity();
+    const persisted = readPersistedCbmIdentity();
+    const decision = decideIndexAction(current, persisted);
+    if (decision.action === "reuse") {
+      lastCbmFreshness = "fresh";
+      if (persisted) {
+        cbmManifest = { ...(cbmManifest ?? {}), indexIdentity: persisted };
+      }
+    } else {
+      // A rebuild is a write op authorized under the `plan` stage context (the
+      // index is authored, not reviewed). Denied ⇒ fall back to a non-fresh
+      // verdict so nothing is injected, but the run continues normally.
+      const auth = authorizeToolOperation(
+        cbmPolicy,
+        cbmTool,
+        cbmToolConfig,
+        "plan",
+        "index_repository",
+        { writePaths: [cbmScratchRel] }
+      );
+      if (!auth.allowed) {
+        lastCbmFreshness = decision.freshness;
+      } else {
+        try {
+          mkdirSync(cbmScratchDir, { recursive: true });
+        } catch {
+          // best-effort; runIndexRepository/snapshot tolerate an absent dir.
+        }
+        const result = runIndexRepository({
+          runner: cbmRunnerInstance,
+          scratchDir: cbmScratchDir,
+          declaredRoots: [cbmScratchRel],
+          snapshot: listCbmFilesRel,
+          identity: { ...current, toolVersion: "", indexedAt: nowIso() },
+        });
+        if (result.ok && result.identity) {
+          try {
+            writeFileSync(cbmIdentityPath, JSON.stringify(result.identity));
+          } catch {
+            // persisting the identity is best-effort; a fresh in-run verdict holds.
+          }
+          lastCbmFreshness = "fresh";
+          cbmManifest = {
+            ...(cbmManifest ?? {}),
+            indexIdentity: result.identity,
+            writeInventory: result.writeInventory,
+          };
+        } else {
+          // Failed/aborted index (e.g. a write escaped confinement) ⇒ not fresh.
+          lastCbmFreshness = "stale";
+        }
+      }
+    }
+    const ms = Date.now() - t0;
+    cbmManifest = {
+      ...(cbmManifest ?? {}),
+      ...(which === "build" ? { buildMs: ms } : { refreshMs: ms }),
+    };
+  };
+  // Concatenate the non-empty injected blocks (skills, graph-map) so the
+  // graph-map merges with — never clobbers — the existing sharpening/skill block.
+  const mergeInjected = (...blocks: string[]): string =>
+    blocks.filter((b) => b && b.trim().length > 0).join("\n\n");
+  // Preflight (re)index once, before the first iteration runs.
+  if (cbmRunnerInstance) runCbmIndexPass("build");
 
   // Per-stage evidence records: `stageSeq` is a monotonic counter that orders
   // them under the bundle's `stages/` dir. Recording is best-effort — a bundle
@@ -930,6 +1103,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             }
           : {}),
         ...(fanoutSummary ? { fanout: fanoutSummary } : {}),
+        ...(cbmManifest ? { codebaseMemory: cbmManifest } : {}),
         ...(verification ? { verification } : {}),
         ...(mode === "verify" && verificationDropped > 0
           ? { verificationDropped }
@@ -1344,6 +1518,40 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
                 : []
             : [];
           const injected = injectSkills(stage.name, skillChanged);
+          // Codebase-memory per-stage injection (P26 slice2). Inert unless the
+          // tool is enabled for THIS stage: a bare/other stage gets `cbmBlock=""`
+          // + no usage, so `mergeInjected` returns the skill block unchanged and
+          // the rendered prompt is byte-for-byte as before.
+          let cbmBlock = "";
+          let cbmUsage: ToolUsage | undefined;
+          const cbmStageActive =
+            cbmRunnerInstance != null &&
+            cbmTool != null &&
+            toolEnabledForStage(cbmTool, cbmToolConfig, stage.name).enabled;
+          if (cbmStageActive) {
+            // Refresh the index before the change-impact consumers: the
+            // implementer stage(s) changed source, so recompute freshness (and
+            // rebuild when stale) before the reviewer/verifier query it.
+            if (stage.name === "reviewer" || stage.name === "verifier") {
+              runCbmIndexPass("refresh");
+            }
+            const cbmChanged = resolveChangedPaths
+              ? resolveChangedPaths(workspaceDir)
+              : changedFilesSince(workspaceDir, iterStartSha);
+            const inj = buildCbmInjection({
+              stage: stage.name,
+              requests: stageQueries(stage.name, {
+                changedFiles: cbmChanged,
+                taskHint: inputs,
+              }),
+              runner: cbmRunnerInstance!,
+              freshness: lastCbmFreshness,
+              maxChars: 4000,
+              store: retrievalStore,
+            });
+            cbmBlock = inj.block;
+            cbmUsage = inj.toolUsage;
+          }
           const r = await executeStage({
             stage,
             vars: {
@@ -1351,7 +1559,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               RESUME: resumeNote,
               SHARPENING: sharpeningGuidance,
             },
-            injectedContext: injected.block,
+            injectedContext: mergeInjected(injected.block, cbmBlock),
             workspaceDir,
             packageDir,
             iteration: i,
@@ -1370,6 +1578,12 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           if (injected.usages.length > 0) {
             r.skillsUsed = injected.usages;
             runSkillsUsed.push(...injected.usages);
+          }
+          // Attach the graph-map evidence so this stage's record carries the
+          // codebase-memory ToolUsage (query, freshness, retrieval handle or
+          // fallback reason) even when nothing was injected.
+          if (cbmUsage) {
+            r.toolsUsed = [...(r.toolsUsed ?? []), cbmUsage];
           }
           accountStage(r);
           if (explainRouting && modelRouting && r.routedTier) {

@@ -86,7 +86,15 @@ const SUCCESS_REASONS = new Set(["complete", "done"]);
 export function scoreTrajectory(
   manifest: RunManifest,
   stages: StageRecord[],
-  opts: { planScore?: PlanRubricScore; reportScore?: ReportRubricScore } = {}
+  opts: {
+    planScore?: PlanRubricScore;
+    reportScore?: ReportRubricScore;
+    /** Precomputed impact recall for fixtures that declare a known impacted-file
+     *  set (P26). The trajectory alone can't derive it — the eval harness scores
+     *  it via {@link scoreImpactRecall} against the fixture's impact list and the
+     *  run's answer text, then threads it in here. Absent ⇒ 0 (not applicable). */
+    impactRecall?: number;
+  } = {}
 ): EvalSignals {
   const exitReason = manifest.exitReason ?? null;
   return {
@@ -118,7 +126,7 @@ export function scoreTrajectory(
           (s.toolsUsed?.reduce((m, t) => m + (t.tokensAvoided ?? 0), 0) ?? 0),
         0
       ),
-    impactRecall: 0,
+    impactRecall: opts.impactRecall ?? 0,
     indexingOverheadMs:
       (manifest.codebaseMemory?.buildMs ?? 0) +
       (manifest.codebaseMemory?.refreshMs ?? 0),

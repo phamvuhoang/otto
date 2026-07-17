@@ -10,10 +10,15 @@ import {
   type BenchmarkTask,
   type CheckResult,
 } from "./bench.js";
-import { compareTrajectories, scoreTrajectory } from "./eval.js";
+import {
+  compareTrajectories,
+  scoreImpactRecall,
+  scoreTrajectory,
+} from "./eval.js";
 import {
   listRunIds,
   readManifest as readManifestFs,
+  readRunReport,
   readStageRecords as readStageRecordsFs,
   type RunManifest,
   type StageRecord,
@@ -63,6 +68,12 @@ export type EvalDeps = {
   readManifest: (workspaceDir: string, runId: string) => RunManifest | null;
   readStageRecords: (workspaceDir: string, runId: string) => StageRecord[];
   runChecks: (checks: BenchmarkCheck[], cwd: string) => CheckResult[];
+  /** Known impacted-file set a fixture declares (its `impact.json`); `[]` when
+   *  the fixture declares none, which leaves impact recall at 0 (P26). */
+  readImpactSet: (fixtureDir: string) => string[];
+  /** The run's answer text (its rendered report) impact recall is scored
+   *  against; `""` when no report was written (P26). */
+  readReportText: (fixtureDir: string, runId: string) => string;
 };
 
 const defaultInvoke: EvalInvoker = async (inv) => {
@@ -92,6 +103,19 @@ const defaultDeps: EvalDeps = {
   readManifest: readManifestFs,
   readStageRecords: readStageRecordsFs,
   runChecks: runFixtureChecks,
+  readImpactSet: (fixtureDir) => {
+    try {
+      const parsed = JSON.parse(
+        readFileSync(resolve(fixtureDir, "impact.json"), "utf8")
+      );
+      return Array.isArray(parsed)
+        ? parsed.filter((f): f is string => typeof f === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  },
+  readReportText: (fixtureDir, runId) => readRunReport(fixtureDir, runId) ?? "",
 };
 
 const USAGE =
@@ -149,7 +173,10 @@ export async function runEvalCompare(
   }
 
   const workspaceDir = resolve(deps.env.OTTO_WORKSPACE ?? deps.cwd);
-  const labelled: { label: string; signals: ReturnType<typeof scoreTrajectory> }[] = [];
+  const labelled: {
+    label: string;
+    signals: ReturnType<typeof scoreTrajectory>;
+  }[] = [];
   for (const arg of [aArg, bArg]) {
     const runId = resolveRunId(workspaceDir, arg);
     const manifest = runId ? readManifestFs(workspaceDir, runId) : null;
@@ -162,7 +189,10 @@ export async function runEvalCompare(
     }
     labelled.push({
       label: runId!,
-      signals: scoreTrajectory(manifest, readStageRecordsFs(workspaceDir, runId!)),
+      signals: scoreTrajectory(
+        manifest,
+        readStageRecordsFs(workspaceDir, runId!)
+      ),
     });
   }
 
@@ -187,11 +217,19 @@ export function parseEvalConfigs(raw: unknown): EvalConfig[] {
       throw new Error(`eval config [${i}]: 'label' must be a non-empty string`);
     }
     const args = rec.args;
-    if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== "string"))) {
-      throw new Error(`eval config '${rec.label}': 'args' must be an array of strings`);
+    if (
+      args !== undefined &&
+      (!Array.isArray(args) || args.some((a) => typeof a !== "string"))
+    ) {
+      throw new Error(
+        `eval config '${rec.label}': 'args' must be an array of strings`
+      );
     }
     const env = rec.env;
-    if (env !== undefined && (env == null || typeof env !== "object" || Array.isArray(env))) {
+    if (
+      env !== undefined &&
+      (env == null || typeof env !== "object" || Array.isArray(env))
+    ) {
       throw new Error(`eval config '${rec.label}': 'env' must be an object`);
     }
     return {
@@ -282,7 +320,10 @@ export async function runEval(
 
   for (const task of tasks) {
     const fixtureDir = resolve(suiteDir, task.fixture);
-    const labelled: { label: string; signals: ReturnType<typeof scoreTrajectory> }[] = [];
+    const labelled: {
+      label: string;
+      signals: ReturnType<typeof scoreTrajectory>;
+    }[] = [];
     const verdictLines: string[] = [];
 
     for (const config of configs) {
@@ -299,10 +340,27 @@ export async function runEval(
       const manifest = deps.readManifest(fixtureDir, runId);
       if (!manifest) {
         allPassed = false;
-        verdictLines.push(`  - ${config.label}: FAIL (no evidence bundle for run '${runId}')`);
+        verdictLines.push(
+          `  - ${config.label}: FAIL (no evidence bundle for run '${runId}')`
+        );
         continue;
       }
-      const signals = scoreTrajectory(manifest, deps.readStageRecords(fixtureDir, runId));
+      // Impact recall only applies to fixtures that declare a known
+      // impacted-file set; otherwise it stays 0 (scoreImpactRecall is
+      // vacuously 1 for an empty set, which would wrongly inflate it).
+      const impactSet = deps.readImpactSet(fixtureDir);
+      const signals = scoreTrajectory(
+        manifest,
+        deps.readStageRecords(fixtureDir, runId),
+        impactSet.length > 0
+          ? {
+              impactRecall: scoreImpactRecall(
+                impactSet,
+                deps.readReportText(fixtureDir, runId)
+              ),
+            }
+          : {}
+      );
       const checks = deps.runChecks(task.expect.checks ?? [], fixtureDir);
       const verdict = evaluateExpectation(task.expect, signals, checks);
       if (!verdict.passed) allPassed = false;

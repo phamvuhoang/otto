@@ -98,12 +98,28 @@ export function codebaseMemoryToolDefinition(
  * constraints as the Headroom runners. Only exercised under the gated e2e —
  * unit tests inject a {@link CbmRunner} stub instead.
  */
+/**
+ * Split a command string into argv, respecting single/double quotes so a
+ * binary path containing spaces (e.g. `"/opt/My Tools/codebase-memory" serve`)
+ * stays one token instead of being shredded by a naive `split(" ")`. Minimal:
+ * no escape sequences or environment expansion. Pure.
+ */
+export function tokenizeCommand(command: string): string[] {
+  const tokens: string[] = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(command)) !== null) {
+    tokens.push(m[1] ?? m[2] ?? m[3]);
+  }
+  return tokens;
+}
+
 export function createStdioCbmRunner(
   command: string,
   cwd: string,
   timeoutMs: number
 ): CbmRunner {
-  const [bin, ...args] = command.split(" ");
+  const [bin, ...args] = tokenizeCommand(command);
   const available = () => {
     const probe = spawnSync(bin, ["--version"], { cwd, timeout: 5000 });
     return probe.status === 0;

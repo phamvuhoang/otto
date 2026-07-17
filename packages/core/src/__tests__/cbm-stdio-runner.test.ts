@@ -3,7 +3,10 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 vi.mock("node:child_process", () => ({ spawnSync: vi.fn() }));
 
 import { spawnSync } from "node:child_process";
-import { createStdioCbmRunner } from "../codebase-memory-adapter.js";
+import {
+  createStdioCbmRunner,
+  tokenizeCommand,
+} from "../codebase-memory-adapter.js";
 
 const mockSpawn = spawnSync as unknown as ReturnType<typeof vi.fn>;
 
@@ -14,6 +17,46 @@ const reply = (obj: unknown) => ({
 });
 
 beforeEach(() => mockSpawn.mockReset());
+
+describe("tokenizeCommand", () => {
+  it("splits a plain command on whitespace", () => {
+    expect(tokenizeCommand("node server.js --flag")).toEqual([
+      "node",
+      "server.js",
+      "--flag",
+    ]);
+  });
+  it("keeps a double-quoted spaced path as one token (regression)", () => {
+    expect(tokenizeCommand('"/opt/My Tools/cbm" serve')).toEqual([
+      "/opt/My Tools/cbm",
+      "serve",
+    ]);
+  });
+  it("keeps a single-quoted spaced path as one token", () => {
+    expect(tokenizeCommand("'/opt/My Tools/cbm' --port 9")).toEqual([
+      "/opt/My Tools/cbm",
+      "--port",
+      "9",
+    ]);
+  });
+  it("collapses extra whitespace and returns [] for blank input", () => {
+    expect(tokenizeCommand("  a   b ")).toEqual(["a", "b"]);
+    expect(tokenizeCommand("   ")).toEqual([]);
+  });
+});
+
+describe("createStdioCbmRunner spawns the tokenized binary", () => {
+  it("invokes the quoted spaced binary path, not a shredded first word", () => {
+    mockSpawn.mockReturnValue(reply({ jsonrpc: "2.0", id: 2, result: {} }));
+    createStdioCbmRunner('"/opt/My Tools/cbm" serve', "/tmp", 1000).call({
+      operation: "get_architecture",
+      params: {},
+    });
+    // First positional arg to spawnSync is the resolved binary path.
+    expect(mockSpawn.mock.calls[0][0]).toBe("/opt/My Tools/cbm");
+    expect(mockSpawn.mock.calls[0][1]).toEqual(["serve"]);
+  });
+});
 
 describe("createStdioCbmRunner.call parsing", () => {
   it("returns ok for a valid falsy result (regression: result:false)", () => {

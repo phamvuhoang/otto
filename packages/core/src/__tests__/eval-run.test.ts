@@ -40,7 +40,11 @@ describe("parseEvalConfigs", () => {
   it("parses configs and fills defaults", () => {
     const configs = parseEvalConfigs([
       { label: "baseline" },
-      { label: "panel", args: ["--review-panel"], env: { OTTO_RUNNER: "host" } },
+      {
+        label: "panel",
+        args: ["--review-panel"],
+        env: { OTTO_RUNNER: "host" },
+      },
     ]);
     expect(configs[0]).toEqual({ label: "baseline", args: [], env: {} });
     expect(configs[1]).toEqual({
@@ -63,7 +67,12 @@ describe("runEval", () => {
   let dir: string;
   let out: string[];
   let err: string[];
-  let invoked: Array<{ bin: string; label: string; args: string[]; env: Record<string, string> }>;
+  let invoked: Array<{
+    bin: string;
+    label: string;
+    args: string[];
+    env: Record<string, string>;
+  }>;
 
   function deps(overrides: Partial<EvalDeps> = {}): EvalDeps {
     return {
@@ -83,6 +92,8 @@ describe("runEval", () => {
       readManifest: () => manifest(),
       readStageRecords: (): StageRecord[] => [],
       runChecks: () => [],
+      readImpactSet: () => [],
+      readReportText: () => "",
       ...overrides,
     };
   }
@@ -129,7 +140,10 @@ describe("runEval", () => {
     const configsPath = join(dir, "configs.json");
     writeFileSync(
       configsPath,
-      JSON.stringify([{ label: "baseline" }, { label: "panel", args: ["--review-panel"] }])
+      JSON.stringify([
+        { label: "baseline" },
+        { label: "panel", args: ["--review-panel"] },
+      ])
     );
 
     const code = await runEval([suite, configsPath], deps());
@@ -154,16 +168,25 @@ describe("runEval", () => {
 
   it("returns 1 and marks FAIL when an expectation is not met", async () => {
     const suite = writeSuite([task]);
-    const code = await runEval([suite], deps({
-      readManifest: () => manifest({ exitReason: "stopped (budget)" }),
-    }));
+    const code = await runEval(
+      [suite],
+      deps({
+        readManifest: () => manifest({ exitReason: "stopped (budget)" }),
+      })
+    );
     expect(code).toBe(1);
     expect(out.join("\n")).toMatch(/FAIL/);
   });
 
   it("runs fixture checks in the task's fixture dir", async () => {
     const suite = writeSuite([
-      { ...task, expect: { succeeded: true, checks: [{ name: "tests", command: "pnpm test" }] } },
+      {
+        ...task,
+        expect: {
+          succeeded: true,
+          checks: [{ name: "tests", command: "pnpm test" }],
+        },
+      },
     ]);
     const runChecks = vi.fn(() => [{ name: "tests", passed: true }]);
     await runEval([suite], deps({ runChecks }));
@@ -173,15 +196,39 @@ describe("runEval", () => {
     expect(cwd).toBe(join(dir, "fixtures/bug-fix"));
   });
 
+  it("scores impact recall from the fixture impact set against the run report", async () => {
+    const suite = writeSuite([task]);
+    const readImpactSet = vi.fn(() => ["src/a.ts", "src/b.ts"]);
+    const readReportText = vi.fn(() => "the change to src/a.ts is isolated");
+    await runEval([suite], deps({ readImpactSet, readReportText }));
+    // Only src/a.ts of the two impacted files surfaced in the report → 50%.
+    // (Impact recall is the only percentage cell here — plan/report ratios
+    // render "—" when unscored — so the exact cell is unambiguous.)
+    expect(out.join("\n")).toContain("| 50% |");
+    expect(readImpactSet).toHaveBeenCalledWith(join(dir, "fixtures/bug-fix"));
+  });
+
+  it("leaves impact recall at 0 and skips the report read when no impact set is declared", async () => {
+    const suite = writeSuite([task]);
+    const readReportText = vi.fn(() => "src/a.ts src/b.ts");
+    await runEval([suite], deps({ readImpactSet: () => [], readReportText }));
+    expect(out.join("\n")).toContain("| 0% |");
+    // No declared impact set ⇒ the vacuous-1 path is avoided entirely.
+    expect(readReportText).not.toHaveBeenCalled();
+  });
+
   it("passes the iterations flag through to the invoker", async () => {
     const suite = writeSuite([task]);
     const captured: number[] = [];
-    await runEval([suite, "--iterations", "5"], deps({
-      invoke: vi.fn(async (inv) => {
-        captured.push(inv.iterations);
-        return { runId: "r" };
-      }),
-    }));
+    await runEval(
+      [suite, "--iterations", "5"],
+      deps({
+        invoke: vi.fn(async (inv) => {
+          captured.push(inv.iterations);
+          return { runId: "r" };
+        }),
+      })
+    );
     expect(captured).toEqual([5]);
   });
 });
@@ -207,8 +254,14 @@ describe("runEvalCompare", () => {
   afterEach(() => rmSync(ws, { recursive: true, force: true }));
 
   it("scores two existing bundles and prints a comparison table", async () => {
-    writeManifest(ws, manifest({ runId: "run-a", costUsd: 0.5, exitReason: "complete" }));
-    writeManifest(ws, manifest({ runId: "run-b", costUsd: 2.0, exitReason: "done" }));
+    writeManifest(
+      ws,
+      manifest({ runId: "run-a", costUsd: 0.5, exitReason: "complete" })
+    );
+    writeManifest(
+      ws,
+      manifest({ runId: "run-b", costUsd: 2.0, exitReason: "done" })
+    );
     const code = await runEvalCompare(["run-a", "run-b"], deps());
     expect(code).toBe(0);
     const table = out.join("\n");
@@ -221,7 +274,10 @@ describe("runEvalCompare", () => {
   it("resolves 'latest' to the most recent bundle", async () => {
     writeManifest(ws, manifest({ runId: "2026-06-19T00-00-00-000Z-1" }));
     writeManifest(ws, manifest({ runId: "2026-06-19T09-00-00-000Z-1" }));
-    const code = await runEvalCompare(["2026-06-19T00-00-00-000Z-1", "latest"], deps());
+    const code = await runEvalCompare(
+      ["2026-06-19T00-00-00-000Z-1", "latest"],
+      deps()
+    );
     expect(code).toBe(0);
     expect(out.join("\n")).toContain("2026-06-19T09-00-00-000Z-1");
   });

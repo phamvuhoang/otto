@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.34.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.33.1...otto-core-v0.34.0) (2026-07-17)
+
+
+### Features
+
+* **cbm:** wire impact-recall scoring into the eval harness + quote-safe command tokenizer (P26) ([#208](https://github.com/phamvuhoang/otto/issues/208)) ([4a0f658](https://github.com/phamvuhoang/otto/commit/4a0f658d572e3f7a9be16b8cc30c6c706973b7cf))
+
 ## [0.33.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.33.0...otto-core-v0.33.1) (2026-07-12)
 
 

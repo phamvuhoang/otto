@@ -227,6 +227,12 @@ export {
   type IndexAction,
 } from "./cbm-index.js";
 export {
+  stageQueries,
+  buildCbmInjection,
+  GRAPH_BLOCK_TAG,
+  type CbmInjection,
+} from "./cbm-inject.js";
+export {
   formatPlanReport,
   readTaskPlans,
   runPlanReport,

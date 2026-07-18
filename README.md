@@ -476,8 +476,9 @@ otto-extensions init context-saver --dry-run    # preview every file it would wr
 otto-extensions init context-saver              # writes normal .otto/ config — git status --short .otto/ to review (new files are untracked)
 # Profiles are generated config, not hidden behavior; sources stay unverified until you validate.
 # See docs/EXTENSIONS.md for the compatibility matrix + update/lock/rollback.
-# codebase-intelligence (P26, spike): local code-knowledge graph, report/eval-only, no live prompt
-# injection — needs an operator-provided pinned binary. See docs/EXTENSIONS.md#codebase-memory-p26-spike.
+# codebase-intelligence (P26): local code-knowledge graph, now a production adapter — confined
+# indexing + bounded per-stage graph-map injection — off by default until you enable it per stage.
+# Needs an operator-provided pinned binary. See docs/EXTENSIONS.md#codebase-memory-p26.
 ```
 
 **Bringing in a specific pack?** [**docs/INTEGRATIONS.md**](./docs/INTEGRATIONS.md) is a from-scratch, step-by-step guide for [Superpowers](https://github.com/obra/superpowers) (coding), [Product-Manager-Skills](https://github.com/deanpeters/Product-Manager-Skills) (planning), a single [Cursor review skill](https://github.com/cursor/plugins/blob/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md), and [Headroom](https://github.com/headroomlabs-ai/headroom) (context compression) — clone → register → validate → activate, with the gotchas (capability tagging, interactive-skill flagging, local-vs-git sync) called out.

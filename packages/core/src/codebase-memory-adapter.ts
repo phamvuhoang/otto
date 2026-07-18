@@ -164,7 +164,7 @@ export function createStdioCbmRunner(
 }
 
 /**
- * Identity stamp a persisted `.codebase-memory/` index carries, so a later
+ * Identity stamp a persisted `.otto/cbm-scratch` index carries, so a later
  * run can tell whether it's safe to trust without re-indexing: which
  * workspace it was built for, the source revision it was built at, whether
  * the worktree was dirty at build time, and tool/index bookkeeping.
@@ -209,9 +209,9 @@ export function classifyIndexFreshness(
 /**
  * New files written during a run (`after \ before`) plus which of those
  * escaped the tool's declared write roots — i.e. wrote outside
- * `.codebase-memory/` (see `writeRoots` on {@link codebaseMemoryToolDefinition}).
+ * `.otto/cbm-scratch` (see `writeRoots` on {@link codebaseMemoryToolDefinition}).
  * A declared root matches itself exactly or any path under `root + "/"`, so
- * a root doesn't accidentally prefix-match a sibling like `.codebase-memory-foo`.
+ * a root doesn't accidentally prefix-match a sibling like `.otto/cbm-scratch-foo`.
  */
 export type WriteInventory = { files: string[]; escaped: string[] };
 
@@ -225,8 +225,8 @@ export function diffWriteInventory(
   const files = after.filter((f) => !beforeSet.has(f));
   const under = (f: string) =>
     declaredRoots.some((raw) => {
-      // Normalize a trailing slash so a root declared as `.codebase-memory/`
-      // classifies the bare directory the same as `.codebase-memory` does.
+      // Normalize a trailing slash so a root declared as `.otto/cbm-scratch/`
+      // classifies the bare directory the same as `.otto/cbm-scratch` does.
       const r = raw.replace(/\/+$/, "");
       return f === r || f.startsWith(`${r}/`);
     });

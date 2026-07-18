@@ -3,7 +3,7 @@
 Last updated: 2026-07-03
 
 > **Status:** P22–P25 have landed their core slices; the P26 governance/retrieval
-> spike has landed; the P26 production adapter remains planned.
+> spike has landed; the P26 production adapter (slice 2) has also landed.
 > P22: lifecycle reporting, real Headroom compression — scoped to retrievable
 > spills and guarded by a runtime anchor-survival floor (#200) — and a
 > CI-runnable fact-survival eval that drives the real compress path (#202).
@@ -17,6 +17,12 @@ Last updated: 2026-07-03
 > inventory + index freshness contract, eval signals/A-B configs, and the
 > `codebase-intelligence` extension profile — report/eval-only, no live prompt
 > injection and no indexing of a live target in this slice (#198, #206).
+> P26 production adapter (slice 2): harness-driven, bounded per-stage
+> `<graph-map>` injection into plan/implement/review/verify, confined
+> indexing into `.otto/cbm-scratch` with a write-inventory abort on escape,
+> and preflight/pre-review freshness + refresh — still off by default
+> (`stages: []`) pending operator enablement on acceptable `cbm-off` vs.
+> `cbm-inject` eval numbers (`otto-eval compare`).
 >
 > **Tracking:** Phase 5 epic
 > [#183](https://github.com/phamvuhoang/otto/issues/183); initiatives

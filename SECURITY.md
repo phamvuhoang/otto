@@ -43,10 +43,26 @@ may act on. The trust boundary is:
   authenticates from `~/.codex/auth.json`, `CODEX_API_KEY`, or the compatibility
   `OPENAI_API_KEY` environment variable, and does **not** use Claude's `--settings` sandbox — it
   combines global `--ask-for-approval never` with its own `exec --ignore-user-config --sandbox
-  <mode>` confinement, so the blast-radius controls are runtime-specific. `--ignore-user-config`
+<mode>` confinement, so the blast-radius controls are runtime-specific. `--ignore-user-config`
   keeps personal Codex MCP/plugin config out of unattended stages while preserving Codex auth.
   Each runtime exposes only its own provider's credentials to the agent; review the active runtime
   with `--print-config` before a run.
+
+- **P32 read-only PR-review stages run in a stricter sandbox than everything else.** The
+  automated PR-review stages (`pr-review-lens`, `pr-review-verify`) exist specifically to analyze
+  **untrusted contributor code** — an arbitrary PR head — so they never get the default
+  `--permission-mode bypassPermissions` write access that every other stage uses. Instead they run
+  `claude --permission-mode plan --tools Read,Glob,Grep --safe-mode --disable-slash-commands
+--no-chrome --strict-mcp-config --mcp-config {}`: `plan` mode denies edits, the tool allowlist is
+  read-only (`Read,Glob,Grep` — no `Bash`, no write/edit tools), the empty strict MCP config blocks
+  any repo-declared MCP server, and safe mode disables hooks/plugins/custom agents and
+  auto-loaded repo customizations. The child process also gets a credential-scrubbed environment
+  (`GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, `GIT_ASKPASS`, etc. stripped, plus a neutralized
+  git/gh config) so a malicious PR head cannot exfiltrate or abuse the operator's push/pull
+  credentials — see `buildReviewChildEnv` and `buildClaudeArgs` in
+  `packages/core/src/runner.ts`. In short: `bypassPermissions` is the default for trusted,
+  operator-directed work; `plan` is reserved for read-only review of untrusted input, and is
+  strictly more restrictive.
 
 ### Reducing blast radius
 

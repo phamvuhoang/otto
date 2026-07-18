@@ -38,17 +38,22 @@ function section(md, headingPrefix) {
 }
 
 test("threat model pins the real bypassPermissions permission mode", () => {
-  // Source of truth: every stage's permissionMode. They are uniform today; the
-  // doc claims that exact value, so a stage that drops/changes the mode breaks
-  // this test and forces SECURITY.md to be re-justified.
+  // Source of truth: every stage's permissionMode. Almost all stages use
+  // "bypassPermissions"; the P32 read-only PR-review stages (prReviewLens /
+  // prReviewVerify) intentionally use "plan" instead — they review untrusted
+  // contributor PR code, so they run in a stricter, read-only sandbox rather
+  // than the default write-capable mode. Both values are real and must be
+  // documented, so the doc claims exactly this two-element set: a stage that
+  // drops/changes either mode breaks this test and forces SECURITY.md to be
+  // re-justified.
   const modes = new Set(
     [...stagesSrc.matchAll(/permissionMode:\s*"([^"]+)"/g)].map((m) => m[1])
   );
   assert.ok(modes.size > 0, "parsed no permissionMode from stages.ts");
   assert.deepEqual(
     modes,
-    new Set(["bypassPermissions"]),
-    `stages.ts permissionMode drifted from "bypassPermissions": ${[...modes]}`
+    new Set(["bypassPermissions", "plan"]),
+    `stages.ts permissionMode drifted from {"bypassPermissions", "plan"}: ${[...modes]}`
   );
 
   const threat = section(security, "Threat model");
@@ -61,6 +66,10 @@ test("threat model pins the real bypassPermissions permission mode", () => {
   assert.ok(
     threat.includes("--permission-mode bypassPermissions"),
     "threat model must show the real `--permission-mode bypassPermissions` run line"
+  );
+  assert.ok(
+    threat.includes("--permission-mode plan"),
+    "threat model must show the real `--permission-mode plan` run line used by the read-only PR-review stages"
   );
 });
 

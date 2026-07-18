@@ -361,6 +361,30 @@ test("docs/ARCHITECTURE.md adds P32 module rows to the module map", () => {
   );
 });
 
+test("docs/ARCHITECTURE.md never universally claims permissionMode is bypassPermissions for ALL stages (the P32 read-only review stages use plan)", () => {
+  // Guard against the pre-P32 universal claim regressing. A bare "always
+  // bypassPermissions for all stages" contradicts the read-only review stages,
+  // which run under permissionMode "plan". The assertion is deliberately narrow
+  // so it does not misfire on the legitimate qualified sentences.
+  assert.ok(
+    !/always\s+`?bypassPermissions`?\s+for\s+all\s+stages/i.test(architecture),
+    "docs/ARCHITECTURE.md still universally claims bypassPermissions for all stages"
+  );
+  assert.ok(
+    !/`--permission-mode`\s+is\s+always\s+`?bypassPermissions`?/i.test(
+      architecture
+    ),
+    "docs/ARCHITECTURE.md still claims --permission-mode is always bypassPermissions"
+  );
+  // Wherever the read-only review stages are described, `plan` must be named.
+  assert.ok(
+    /pr-review-lens[\s\S]*?permissionMode|permissionMode[\s\S]*?plan[\s\S]*?pr-review|pr-review-(?:lens|verify)[\s\S]*?`?plan`?|`?plan`?[\s\S]*?pr-review-(?:lens|verify)/i.test(
+      architecture
+    ),
+    "docs/ARCHITECTURE.md never names permissionMode plan for the pr-review stages"
+  );
+});
+
 test("docs record that target-repo ignoring uses local .git/info/exclude, never the tracked .gitignore", () => {
   assert.ok(
     /info\/exclude/.test(all),

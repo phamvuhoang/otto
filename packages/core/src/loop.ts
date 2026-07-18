@@ -594,6 +594,19 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   const cbmChainStages: Stage[] = reviewStage
     ? [...stages, reviewStage]
     : [...stages];
+  // The first chain stage the tool is actually enabled for — used to authorize
+  // `index_repository` below. Indexing itself isn't stage-scoped work; a repo
+  // may enable codebase-memory only for e.g. `reviewer` (change-impact at
+  // review), never `plan`, so authorizing under a hardcoded `"plan"` would
+  // deny indexing and silently no-op the whole feature for that (valid)
+  // config. Falls back to "plan" when inactive — the authz call is unreached
+  // in that case (`cbmRunnerInstance` stays null).
+  const cbmIndexStage =
+    (cbmTool &&
+      cbmChainStages.find(
+        (st) => toolEnabledForStage(cbmTool, cbmToolConfig, st.name).enabled
+      )?.name) ??
+    "plan";
   const cbmActiveForRun =
     cbmTool != null &&
     cbmChainStages.some(
@@ -677,14 +690,16 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         cbmManifest = { ...(cbmManifest ?? {}), indexIdentity: persisted };
       }
     } else {
-      // A rebuild is a write op authorized under the `plan` stage context (the
-      // index is authored, not reviewed). Denied ⇒ fall back to a non-fresh
-      // verdict so nothing is injected, but the run continues normally.
+      // A rebuild is a write op authorized under `cbmIndexStage` — the first
+      // chain stage the tool is actually enabled for (indexing is authored,
+      // not reviewed, but a repo may only enable the tool for e.g. `reviewer`,
+      // never `plan`). Denied ⇒ fall back to a non-fresh verdict so nothing is
+      // injected, but the run continues normally.
       const auth = authorizeToolOperation(
         cbmPolicy,
         cbmTool,
         cbmToolConfig,
-        "plan",
+        cbmIndexStage,
         "index_repository",
         { writePaths: [cbmScratchRel] }
       );
@@ -722,7 +737,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           };
         } else {
           // Failed/aborted index (e.g. a write escaped confinement) ⇒ not fresh.
+          // Still record the write inventory so `otto-inspect` can show WHICH
+          // file(s) escaped confinement, even though the index itself is untrusted.
           lastCbmFreshness = "stale";
+          cbmManifest = {
+            ...(cbmManifest ?? {}),
+            writeInventory: result.writeInventory,
+          };
         }
       }
     }

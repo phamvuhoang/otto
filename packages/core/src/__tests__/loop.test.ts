@@ -649,6 +649,30 @@ describe("runLoop", () => {
     expect(manifest?.codebaseMemory?.indexIdentity).toBeTruthy();
   });
 
+  it("authorizes index_repository under a non-`plan` enabled stage instead of hardcoded plan (P26 slice2 fix)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    // The tool is enabled ONLY for `implementer` (the stage that actually runs
+    // in this test's chain) — `plan` is not in the allowlist at all. Before
+    // the fix, indexing was authorized under a hardcoded `"plan"` stage, so
+    // `toolEnabledForStage(tool, config, "plan")` was denied and the index
+    // build silently no-opped even though the tool is legitimately enabled
+    // for the running stage.
+    writeCbmTool(dirs.workspaceDir, ["implementer"]);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+
+    await runLoop(loopOptions(dirs, { cbmRunner: stubCbmRunner }));
+
+    const prompt = String(mocks.runStage.mock.calls[0][1]);
+    expect(prompt).toContain("<graph-map>");
+
+    const manifest = readManifest(
+      dirs.workspaceDir,
+      listRunIds(dirs.workspaceDir)[0]
+    );
+    expect(manifest?.codebaseMemory?.indexIdentity).toBeTruthy();
+  });
+
   it("injects nothing when codebase-memory is not registered (byte-for-byte inert) (P26 slice2)", async () => {
     const dirs = makeDirs();
     roots.push(dirs.root);
@@ -702,6 +726,11 @@ describe("runLoop", () => {
       listRunIds(dirs.workspaceDir)[0]
     );
     expect(manifest?.codebaseMemory?.indexIdentity).toBeUndefined();
+    // ...but the write inventory IS persisted, so `otto-inspect` can show
+    // which file escaped confinement (P26 slice2 review fix).
+    expect(manifest?.codebaseMemory?.writeInventory?.escaped).toContain(
+      ".gitattributes"
+    );
   });
 
   it("records a --verify run's verification matrix from the scratch file onto the manifest (#181 P24)", async () => {

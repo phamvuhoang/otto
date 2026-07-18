@@ -1,7 +1,7 @@
 # Design: Automated pull-request code review (P32)
 
 Date: 2026-07-18
-Status: Review-input amendment approved in brainstorming; pending written-spec review
+Status: Approved, including review-input amendment
 Roadmap: Proposed urgent P32, parallel to Phase 6
 Primary user story: CR-001
 

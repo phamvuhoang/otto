@@ -240,6 +240,12 @@ export type ReviewAnalysisResult = {
   severity: ReviewSeverityCounts;
   stageResults: StageResult[];
   contractErrors: string[];
+  /** File/substrate path only: the verifier's ORIGINAL `verdicts.md` text (its
+   *  real CONFIRMED + REJECTED split), captured before cleanup and handed to the
+   *  substrate synth so it fixes ONLY the CONFIRMED subset — never a reconstructed
+   *  all-CONFIRMED file. Absent in the `verdictSource:"result"` (P32) path, which
+   *  exposes the true split structurally via `confirmed`/`rejected`. */
+  verifierVerdicts?: string;
 };
 
 /**
@@ -588,23 +594,40 @@ export async function analyzeReview(
       outcomeLine("skipping synth — no validated verdicts to act on", false);
       return makeResult([], [], emptySeverity());
     }
-    // The verifier's own verdicts.md is authoritative on CONFIRMED count here;
-    // the candidate findings stand in as the confirmed set for the substrate
-    // synth (which re-reads the verdicts itself). No CONFIRMED ⇒ nothing to fix.
+    // The verifier's own verdicts.md is authoritative on CONFIRMED count here.
+    // The candidate findings stand in as the confirmed set only for the gate +
+    // severity tally; the substrate synth is handed the verifier's ORIGINAL
+    // verdicts.md (its real CONFIRMED/REJECTED split) so it fixes only the
+    // confirmed subset. No CONFIRMED ⇒ nothing to fix.
     const allConfirmed = verdicts.confirmed > 0 ? findings : [];
     const counts = severityCounts(allConfirmed);
     const kept = suppressLowValue(allConfirmed).kept;
+    // Capture the verifier's real verdicts.md now — `finally` deletes panelHostDir
+    // before runPanelSynth runs.
+    let verifierVerdicts: string | undefined;
+    if (kept.length > 0) {
+      try {
+        verifierVerdicts = readFileSync(
+          join(panelHostDir, "verdicts.md"),
+          "utf8"
+        );
+      } catch {
+        verifierVerdicts = undefined;
+      }
+    }
     if (kept.length > 0 && cooldownMs > 0) {
       await sleep(cooldownMs * vctrl.cooldownFactor, signal);
     }
-    return makeResult(kept, [], counts);
+    return { ...makeResult(kept, [], counts), verifierVerdicts };
   } finally {
     rmSync(panelHostDir, { recursive: true, force: true });
   }
 }
 
-/** Synthesize & fix the CONFIRMED findings in one `fix(review:)` commit. Writes
- *  only `analysis.confirmed` as the synth input and runs the existing
+/** Synthesize & fix the CONFIRMED findings in one `fix(review:)` commit. Hands
+ *  synth the verifier's ORIGINAL verdicts.md (its true CONFIRMED/REJECTED split)
+ *  via `analysis.verifierVerdicts`, so CONFIRMED-only semantics are preserved and
+ *  rejected findings are never presented as CONFIRMED. Runs the existing
  *  `review-synth.md`, retaining today's onStage/recordStage/commit-status. */
 async function runPanelSynth(
   opts: RunPanelOptions,
@@ -628,15 +651,17 @@ async function runPanelSynth(
   const findingsDirRef = `./${posix.join(".otto-tmp", synthRel)}/`;
   const baseHead = git(["rev-parse", "HEAD"], workspaceDir);
   try {
-    // Only the CONFIRMED (kept) findings reach synth, as CONFIRMED verdict lines
-    // the existing review-synth.md reads from verdicts.md.
-    writeFileSync(
-      join(synthHostDir, "verdicts.md"),
+    // Faithful CONFIRMED-only semantics: synth reads the verifier's ORIGINAL
+    // verdicts.md (its real CONFIRMED + REJECTED lines), so it fixes only the
+    // confirmed subset and ignores rejected false positives. Fall back to
+    // reconstructing CONFIRMED lines from the kept findings only when the
+    // verifier's text wasn't captured (e.g. a non-file verdict source).
+    const verdictsText =
+      analysis.verifierVerdicts ??
       analysis.confirmed
         .map((f) => `CONFIRMED ${findingToWire(f)}`)
-        .join("\n") + "\n",
-      "utf8"
-    );
+        .join("\n") + "\n";
+    writeFileSync(join(synthHostDir, "verdicts.md"), verdictsText, "utf8");
     phaseLine("synthesize & fix");
     const synthStartedAt = new Date().toISOString();
     const synth = await executeStage({

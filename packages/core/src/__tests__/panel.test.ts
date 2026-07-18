@@ -142,6 +142,64 @@ describe("runPanel", () => {
     ).toBe(true);
   });
 
+  it("feeds synth the verifier's REAL verdicts (CONFIRMED-only), not a reconstructed all-CONFIRMED file", async () => {
+    // Two candidates; the verifier confirms a strict SUBSET (1 of 2) and REJECTS
+    // the other. Synth must see the verifier's true split so it never fixes a
+    // finding the skeptic rejected as a false positive.
+    let synthVerdicts = "";
+    mocks.executeStage.mockImplementation(
+      (opts: {
+        stage: { template: string };
+        vars: { LENS?: string; FINDINGS_DIR?: string };
+      }) => {
+        if (opts.stage.template === "review-synth.md") {
+          synthVerdicts = readFileSync(
+            join(ws, opts.vars.FINDINGS_DIR!, "verdicts.md"),
+            "utf8"
+          );
+          return Promise.resolve(ok("<review>OK</review>", 0.5));
+        }
+        if (opts.stage.template === "review-verify.md") {
+          writeFileSync(
+            join(ws, opts.vars.FINDINGS_DIR!, "verdicts.md"),
+            "CONFIRMED major | a.ts:1 | bug in correctness | genuine\n" +
+              "REJECTED | a.ts:2 | bug in security | false positive\n",
+            "utf8"
+          );
+          return Promise.resolve(
+            ok("<verify>1 confirmed, 1 rejected</verify>", 0.2)
+          );
+        }
+        // Distinct candidate per lens so they don't dedupe into one.
+        const loc =
+          opts.vars.LENS === "correctness"
+            ? "a.ts:1 | bug in correctness"
+            : "a.ts:2 | bug in security";
+        return Promise.resolve(ok(`major | ${loc} | why |`, 0.1));
+      }
+    );
+
+    await runPanel({
+      lenses: ["correctness", "security"],
+      workspaceDir: ws,
+      packageDir: "/pkg",
+      iteration: 1,
+      maxRetries: 0,
+      cooldownMs: 0,
+      onStage: noStop,
+    });
+
+    // The rejected finding is presented to synth as REJECTED (never CONFIRMED),
+    // and the one true defect as CONFIRMED — the verifier's real verdicts.md.
+    expect(synthVerdicts).toContain("REJECTED");
+    expect(synthVerdicts).toContain("bug in security");
+    expect(synthVerdicts).toContain(
+      "CONFIRMED major | a.ts:1 | bug in correctness"
+    );
+    // The rejected finding must NOT appear as a CONFIRMED line.
+    expect(synthVerdicts).not.toContain("CONFIRMED major | a.ts:2");
+  });
+
   it("stops before verify + synth when onStage signals the budget is spent", async () => {
     // Lenses run as one concurrent batch, so all of them execute; the budget
     // stop is honored afterwards by skipping verify + synth.

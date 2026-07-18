@@ -545,10 +545,26 @@ export {
 } from "./watch.js";
 export {
   runPreflight,
+  runReviewPreflight,
   whichBin,
   type PreflightResult,
   type PreflightProbes,
 } from "./preflight.js";
+export {
+  createGitHubPrClient,
+  canonicalGithubOrigin,
+  classifyGitHubPrError,
+  GitHubPrError,
+  type GhInvocation,
+  type GhRunner,
+  type GitHubPrErrorKind,
+  type GitHubActor,
+  type GitHubIssueSpec,
+  type GitHubComment,
+  type GitHubReview,
+  type CreateGitHubReviewInput,
+  type GitHubPrClient,
+} from "./github-pr.js";
 export {
   parseLinearRef,
   parseLinearIssueArg,

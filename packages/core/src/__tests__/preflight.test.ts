@@ -4,7 +4,12 @@ import { delimiter, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { runPreflight, whichBin, type PreflightProbes } from "../preflight.js";
+import {
+  runPreflight,
+  runReviewPreflight,
+  whichBin,
+  type PreflightProbes,
+} from "../preflight.js";
 
 /** Probes where everything is present; tests flip individual pieces off. */
 function allPresentProbes(
@@ -133,6 +138,101 @@ describe("runPreflight", () => {
     const ghAuth = byLabel(results)["gh auth"];
     expect(ghAuth.ok).toBe(false);
     expect(ghAuth.detail).toMatch(/gh auth login/);
+  });
+
+  it("includes gh CLI/auth checks for otto-review (P32 automated review)", () => {
+    const results = runPreflight(
+      { bin: "otto-review", workspaceDir: "/repo" },
+      allPresentProbes()
+    );
+    expect(results.map((r) => r.label)).toContain("gh CLI");
+    expect(results.map((r) => r.label)).toContain("gh auth");
+  });
+
+  it("flags missing gh CLI for otto-review", () => {
+    const results = runPreflight(
+      { bin: "otto-review", workspaceDir: "/repo" },
+      allPresentProbes({ resolveBin: (n) => (n === "gh" ? null : "/bin/x") })
+    );
+    const gh = byLabel(results)["gh CLI"];
+    expect(gh.ok).toBe(false);
+    expect(gh.detail).toMatch(/PATH/);
+  });
+});
+
+describe("runReviewPreflight", () => {
+  it("reports ok for a matching GitHub origin and an existing label", () => {
+    const results = runReviewPreflight({
+      workspaceDir: "/repo",
+      repository: "acme/web",
+      label: "otto-review",
+      originUrl: "https://github.com/acme/web.git",
+      labelExists: true,
+    });
+    expect(results.every((r) => r.ok)).toBe(true);
+    expect(results.map((r) => r.label)).toContain("repository origin");
+    expect(results.map((r) => r.label)).toContain("review label");
+  });
+
+  it("matches an origin case-insensitively and across remote URL forms", () => {
+    const ssh = runReviewPreflight({
+      workspaceDir: "/repo",
+      repository: "acme/web",
+      label: "otto-review",
+      originUrl: "git@github.com:Acme/Web.git",
+      labelExists: true,
+    });
+    expect(byLabel(ssh)["repository origin"].ok).toBe(true);
+  });
+
+  it("fails when the origin resolves to a different repository", () => {
+    const results = runReviewPreflight({
+      workspaceDir: "/repo",
+      repository: "acme/web",
+      label: "otto-review",
+      originUrl: "https://github.com/other/repo.git",
+      labelExists: true,
+    });
+    const origin = byLabel(results)["repository origin"];
+    expect(origin.ok).toBe(false);
+    expect(origin.detail).toMatch(/other\/repo/);
+  });
+
+  it("fails when the origin is missing", () => {
+    const results = runReviewPreflight({
+      workspaceDir: "/repo",
+      repository: "acme/web",
+      label: "otto-review",
+      originUrl: null,
+      labelExists: true,
+    });
+    const origin = byLabel(results)["repository origin"];
+    expect(origin.ok).toBe(false);
+  });
+
+  it("fails when the origin is not a GitHub remote", () => {
+    const results = runReviewPreflight({
+      workspaceDir: "/repo",
+      repository: "acme/web",
+      label: "otto-review",
+      originUrl: "https://gitlab.com/acme/web.git",
+      labelExists: true,
+    });
+    const origin = byLabel(results)["repository origin"];
+    expect(origin.ok).toBe(false);
+  });
+
+  it("fails when the label does not exist", () => {
+    const results = runReviewPreflight({
+      workspaceDir: "/repo",
+      repository: "acme/web",
+      label: "otto-review",
+      originUrl: "https://github.com/acme/web.git",
+      labelExists: false,
+    });
+    const label = byLabel(results)["review label"];
+    expect(label.ok).toBe(false);
+    expect(label.detail).toMatch(/otto-review/);
   });
 });
 

@@ -390,8 +390,9 @@ const REVIEW_STRIPPED_ENV_VARS = [
  * (issue P32). Returns a fresh copy — the caller's env is never mutated.
  *
  * It (1) removes GitHub/SSH/askpass credential carriers; (2) clears any
- * inherited `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*`
- * config-injection env so a leaked helper cannot ride in; (3) points `gh` at a
+ * inherited `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*` /
+ * `GIT_CONFIG_PARAMETERS` config-injection env so a leaked helper cannot ride
+ * in; (3) points `gh` at a
  * harness-created empty config dir and neutralizes git's ambient config
  * (no system/global config, no interactive prompt); and (4) installs exactly
  * one empty `credential.helper` override so even a repository-local helper from
@@ -408,8 +409,9 @@ export function buildReviewChildEnv(
   // (1) Strip credential carriers.
   for (const key of REVIEW_STRIPPED_ENV_VARS) delete next[key];
 
-  // (2) Clear inherited git-config env injection (both the count and the
-  // numbered key/value pairs) before installing our own single override.
+  // (2) Clear inherited git-config env injection (the count, the numbered
+  // key/value pairs, and the inline `-c`-equivalent GIT_CONFIG_PARAMETERS)
+  // before installing our own single override.
   for (const key of Object.keys(next)) {
     if (
       key === "GIT_CONFIG_COUNT" ||
@@ -419,6 +421,7 @@ export function buildReviewChildEnv(
       delete next[key];
     }
   }
+  delete next.GIT_CONFIG_PARAMETERS;
 
   // (3) Redirect gh + neutralize git's ambient configuration.
   next.GH_CONFIG_DIR = emptyGithubConfigDir;

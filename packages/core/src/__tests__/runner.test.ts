@@ -800,6 +800,7 @@ describe("buildReviewChildEnv (P32 credential scrubbing)", () => {
         GIT_CONFIG_VALUE_0: "store",
         GIT_CONFIG_KEY_1: "url.https://x.insteadof",
         GIT_CONFIG_VALUE_1: "ssh://x",
+        GIT_CONFIG_PARAMETERS: "'credential.helper=store'",
       },
       "/ws/empty"
     );
@@ -809,6 +810,9 @@ describe("buildReviewChildEnv (P32 credential scrubbing)", () => {
     expect(env.GIT_CONFIG_VALUE_0).toBe("");
     expect(env.GIT_CONFIG_KEY_1).toBeUndefined();
     expect(env.GIT_CONFIG_VALUE_1).toBeUndefined();
+    // GIT_CONFIG_PARAMETERS is git's inline `-c`-equivalent injection vector —
+    // it must be scrubbed too, not just the count/key/value trio.
+    expect(env.GIT_CONFIG_PARAMETERS).toBeUndefined();
   });
 
   it("does not mutate the caller's env object", () => {

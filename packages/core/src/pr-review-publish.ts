@@ -24,6 +24,7 @@
  * every GitHub write goes through the typed adapter passed in by the pipeline.
  */
 
+import { normalizeFindingPath } from "./pr-review-diff.js";
 import {
   GitHubPrError,
   type CreateGitHubReviewInput,
@@ -285,7 +286,7 @@ export function publishFormalReview(opts: {
         typeof f.mappedLine === "number"
     )
     .map((f) => ({
-      path: normalizeCommentPath(f.file),
+      path: normalizeFindingPath(f.file),
       line: f.mappedLine as number,
       side: f.side as "LEFT" | "RIGHT",
       body: renderInlineComment(f),
@@ -300,14 +301,6 @@ export function publishFormalReview(opts: {
     comments,
   });
   return { reviewId: created.id, action: "created", body };
-}
-
-/** Strip a leading `./` (repeated) and a single `a/`/`b/` from a comment path. */
-function normalizeCommentPath(path: string): string {
-  let s = path;
-  while (s.startsWith("./")) s = s.slice(2);
-  if (s.startsWith("a/") || s.startsWith("b/")) s = s.slice(2);
-  return s;
 }
 
 // ---------------------------------------------------------------------------

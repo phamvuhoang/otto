@@ -38,7 +38,24 @@ import {
   type ReviewAnalysisResult,
   type ReviewSeverityCounts,
 } from "./panel.js";
-import type { GitHubPrClient } from "./github-pr.js";
+import { GitHubPrError, type GitHubPrClient } from "./github-pr.js";
+import {
+  reconcilePublication,
+  upsertSummaryComment,
+  nextPublicationRetryAt,
+} from "./pr-review-publish.js";
+import {
+  readReviewState,
+  writeReviewState,
+  claimRevision,
+  heartbeatClaim,
+  releaseClaim,
+  isStateRunnable,
+  REVIEW_LEASE_HEARTBEAT_MS,
+  type PullRequestReviewState,
+  type PullRequestReviewOutputState,
+  type PullRequestReviewClaim,
+} from "./pr-review-state.js";
 import {
   writeReviewInputArtifact,
   readReviewInputArtifact,
@@ -55,8 +72,11 @@ import {
   buildReviewContext,
 } from "./pr-review-worktree.js";
 import {
+  headMarker,
+  inputMarker,
   renderCanonicalReview,
   renderReviewText,
+  summaryMarker,
   writeCanonicalReview,
   type CanonicalReview,
   type PublishedReviewFinding,
@@ -167,8 +187,10 @@ const REVIEW_LENSES = [
 export type PullRequestReviewRunStatus =
   | "succeeded"
   | "analysis-failed"
+  | "publish-failed"
   | "superseded"
-  | "cancelled";
+  | "cancelled"
+  | "skipped";
 
 /** The result of one {@link runPullRequestReview} attempt. */
 export type PullRequestReviewRunResult = {
@@ -181,6 +203,12 @@ export type PullRequestReviewRunResult = {
   costUsd: number;
   outcome?: PullRequestReviewOutcome;
   reviewArtifact?: string;
+  /** The published summary comment id (comment output mode only). */
+  commentId?: number;
+  /** For a `publish-failed` result: whether a bounded retry may recover. */
+  retryable?: boolean;
+  /** For a retryable `publish-failed` result: the next-eligible timestamp. */
+  nextRetryAt?: string;
   error?: string;
 };
 
@@ -252,7 +280,23 @@ export function readReviewAnalysisArtifact(opts: {
 
 /** Injectable seams for {@link runPullRequestReview} (tests supply fakes). */
 export type PullRequestReviewDeps = {
-  github: Pick<GitHubPrClient, "getPullRequest">;
+  /**
+   * The typed GitHub adapter. `getPullRequest` is always required (the
+   * read-only re-query gate). The write/comment methods are consumed ONLY by
+   * the harness-owned publication path when `config.output === "comment"`, so a
+   * text/Markdown run can still be wired with a `getPullRequest`-only client and
+   * carry no GitHub write capability at all.
+   */
+  github: Pick<GitHubPrClient, "getPullRequest"> &
+    Partial<
+      Pick<
+        GitHubPrClient,
+        | "viewer"
+        | "listIssueComments"
+        | "createIssueComment"
+        | "updateIssueComment"
+      >
+    >;
   analyze: typeof analyzeReview;
   createWorktree: typeof createPullRequestWorktree;
   writeReviewInput: typeof writeReviewInputArtifact;
@@ -351,13 +395,80 @@ export async function runPullRequestReview(opts: {
 
   const repository = config.repository;
   const pullRequest = revision.number;
-  const runId = allocateRunId(deps.now());
+  const inputFingerprint = reviewInput.fingerprint;
+  const headSha = revision.headSha;
+  const requestedOutput = config.output;
+
+  // --- Stateful dedup (Slice 2): a terminal composite identity short-circuits.
+  //     `succeeded` is done; a permanent (or not-yet-eligible back-off) failure
+  //     is likewise not re-run. A prior `running`/`publish-failed` run with a
+  //     persisted analysis is RESUMED from `analysis.json` (no re-payment).
+  const priorState = readReviewState(
+    workspaceDir,
+    repository,
+    pullRequest,
+    headSha,
+    inputFingerprint
+  );
+  if (priorState && !isStateRunnable(priorState, deps.now())) {
+    return {
+      status: priorState.status as PullRequestReviewRunStatus,
+      runId: priorState.runId,
+      repository,
+      pullRequest,
+      headSha,
+      inputFingerprint,
+      costUsd: 0,
+      reviewArtifact: `.otto/runs/${priorState.runId}/review.md`,
+      ...(priorState.outputs.comment
+        ? { commentId: priorState.outputs.comment.commentId }
+        : {}),
+      ...(priorState.retryable !== undefined
+        ? { retryable: priorState.retryable }
+        : {}),
+      ...(priorState.nextRetryAt
+        ? { nextRetryAt: priorState.nextRetryAt }
+        : {}),
+      ...(priorState.error ? { error: priorState.error } : {}),
+    };
+  }
+
+  let resumedAnalysis: PullRequestReviewAnalysisArtifact | null = null;
+  let runId: string;
+  if (
+    priorState &&
+    (priorState.status === "running" ||
+      priorState.status === "publish-failed") &&
+    priorState.analysisArtifact
+  ) {
+    const resumed = readReviewAnalysisArtifact({
+      workspaceDir,
+      runId: priorState.runId,
+      repository,
+      pullRequest,
+      headSha,
+      inputFingerprint,
+    });
+    if (resumed) {
+      resumedAnalysis = resumed;
+      runId = priorState.runId;
+    } else {
+      // A tampered/missing analysis artifact is never trusted for resume — a
+      // fresh analysis is run under a new run id.
+      runId = allocateRunId(deps.now());
+    }
+  } else {
+    runId = allocateRunId(deps.now());
+  }
+  const priorOutputs: PullRequestReviewOutputState = priorState?.outputs ?? {};
+  const priorAttempts = priorState?.attempts ?? 0;
+
   const startedAt = deps.now().toISOString();
   const runDir = runReportDir(workspaceDir, runId);
-  const inputFingerprint = reviewInput.fingerprint;
   const expectedInputPath = `.otto/runs/${runId}/review-input.md`;
 
   let activeAgentId: AgentRuntimeId = opts.agentId;
+  let worktree: ReturnType<typeof createPullRequestWorktree> | undefined;
 
   // Running evidence accumulated across every recorded stage (both attempts of a
   // fallback switch). `addTokenUsage` keeps the manifest totals exact.
@@ -474,380 +585,669 @@ export async function runPullRequestReview(opts: {
     };
   };
 
-  // 1. Initial manifest (zero cost/tokens, composite evidence, expected input
-  //    artifact path) + the byte-exact, round-trip-validated input artifact.
-  writeManifest(workspaceDir, {
-    runId,
-    bin: "otto-review",
-    mode: "github-pr-review",
-    inputs: `${repository}#${pullRequest}`,
-    runtime: { id: activeAgentId, displayName: activeAgentId },
-    iterations: 1,
-    costUsd: 0,
-    tokenUsage: emptyTokenUsage(),
-    artifacts: artifactList(),
-    pullRequestReview: buildEvidence(),
-    startedAt,
-  });
+  const analysisArtifactRel = `.otto/runs/${runId}/analysis.json`;
 
-  let snapshot: ReviewInputSnapshot;
-  try {
-    snapshot = deps.writeReviewInput({
-      workspaceDir,
-      runId,
-      input: reviewInput,
-    });
-    const roundTrip = deps.readReviewInput({
-      workspaceDir,
-      runId,
-      expectedFingerprint: inputFingerprint,
-    });
-    if (roundTrip == null || roundTrip.content !== reviewInput.content) {
-      return fail(
-        "review-input artifact failed round-trip validation",
-        "re-run the review; the run directory could not persist the exact review input"
-      );
-    }
-    snapshot = roundTrip;
-  } catch (err) {
-    return fail(
-      `review-input artifact write failed: ${(err as Error).message}`,
-      "check that the run directory is writable, then re-run the review"
-    );
-  }
-
-  // 2. Resolve the governed skill BEFORE any model call.
-  let skill: ReviewSkillSelection;
-  try {
-    skill = resolveReviewSkill({
-      workspaceDir,
-      requested: config.reviewSkill,
-      changedPaths: revision.changedFiles,
-      now: deps.now(),
-    });
-  } catch (err) {
-    if (err instanceof ReviewSkillError) {
-      return fail(
-        `review skill selection failed: ${err.message}`,
-        `choose a valid --review-skill (or omit it to use the built-in) for ${repository}#${pullRequest}`
-      );
-    }
-    throw err;
-  }
-
-  // 3. Isolated worktree at the exact head + byte-exact diff artifact.
-  let worktree: ReturnType<typeof createPullRequestWorktree>;
-  try {
-    worktree = deps.createWorktree({
-      workspaceDir,
-      runId,
-      revision,
-      reviewInput: snapshot,
-    });
-  } catch (err) {
-    return fail(
-      `worktree creation failed: ${(err as Error).message}`,
-      `verify the git remote can fetch ${repository}#${pullRequest}, then re-run the review`
-    );
-  }
-
-  try {
-    const diffArtifactRel = `.otto/runs/${runId}/pr.diff`;
-    writeFileSync(join(runDir, "pr.diff"), worktree.diffText);
-    // The worktree's review-input copy MUST be byte-identical to the run artifact.
-    const runInputBytes = readFileSync(join(runDir, "review-input.md"), "utf8");
-    if (worktree.reviewInputText !== runInputBytes) {
-      return fail(
-        "worktree review-input copy is not byte-identical to the run artifact",
-        "re-run the review; the isolated worktree did not preserve the exact review input"
-      );
-    }
-
-    // 4. Optional PR-body compression, re-wrapped in a fresh untrusted fence.
-    //    Only the raw PR body is ever offered to the compressor — never the
-    //    review-input artifact.
-    let bodyForContext = revision.body;
-    if (opts.contextCompressor === "headroom") {
-      const compressor = buildReviewCompressor(workspaceDir, deps.env);
-      if (compressor) {
-        const store = runRetrievalStore(workspaceDir, runId);
-        const out = compressContentSync(
-          compressor,
-          { key: "pr-body", category: "issue-body", text: revision.body },
-          store
-        );
-        bodyForContext = out.text;
-        if (!out.degraded) {
-          runToolsUsed.push(
-            compressionToolUsage(out, "issue-body", "pr-review")
-          );
-        }
-      }
-    }
-    const reviewContext = buildReviewContext({
-      ...revision,
-      body: bodyForContext,
-    });
-
-    // 5. Read the TRUSTED operator policy before entering the PR worktree, and
-    //    scrub credentials for the read-only child.
-    const safetyPolicy = readSafetyPolicy(workspaceDir);
-    const emptyGithubConfigDir = join(worktree.dir, ".otto-tmp", "gh-empty");
-    mkdirSync(emptyGithubConfigDir, { recursive: true });
-    const childEnv = buildReviewChildEnv(deps.env, emptyGithubConfigDir);
-
-    const stageVars: Record<string, string> = {
-      REPO_INSTRUCTIONS_PATH: worktree.instructionsPath,
-      BASE_SHA: revision.baseSha,
-      HEAD_SHA: revision.headSha,
-      DIFF_PATH: worktree.diffPath,
-      REVIEW_INPUT_PATH: worktree.reviewInputPath,
-      REVIEW_CONTEXT: reviewContext,
-    };
-    const inputSafetyEvents: SafetyEvent[] = [
-      {
-        category: "taint",
-        kind: "pull-request",
-        subject: `${repository}#${pullRequest}`,
-        message: "pull-request context is untrusted review evidence",
-        blocked: false,
-      },
-      {
-        category: "taint",
-        kind: "review-input",
-        subject: inputFingerprint,
-        message: "review input is untrusted acceptance-criteria data",
-        blocked: false,
-      },
-    ];
-    const skillUsages: SkillUsage[] = [skill.usage];
-
-    let budgetExhausted = false;
-    let spentUsd = 0;
-    const onStage = (
-      sr: StageResult
-    ): { stop: boolean; cooldownFactor: number } => {
-      spentUsd += sr.costUsd;
-      const stop = opts.budgetUsd != null && spentUsd >= opts.budgetUsd;
-      if (stop) budgetExhausted = true;
-      return { stop, cooldownFactor: 1 };
-    };
-
-    const runAnalyzeOnce = (): Promise<ReviewAnalysisResult> =>
-      deps.analyze({
-        workspaceDir: worktree.dir,
-        packageDir,
-        iteration: 1,
-        maxRetries,
-        cooldownMs,
-        tokenMode,
-        signal,
-        agentId: activeAgentId,
-        lenses: [...REVIEW_LENSES],
-        lensStage: STAGES.prReviewLens,
-        verifyStage: STAGES.prReviewVerify,
-        stageVars,
-        verdictSource: "result",
-        mutationPolicy: "fail",
-        strictFindings: true,
-        childEnv,
-        safetyPolicy,
-        injectedContext: skill.injection,
-        skillUsages,
-        inputSafetyEvents,
-        sink: verbose ? new VerboseSink() : new ConsoleUi(),
-        modelRouting,
-        tierLadder,
-        onStage,
-        recordStage: persistStage,
+  /** Persist the durable per-composite-identity review state (best-effort). */
+  const persistState = (
+    over: Partial<PullRequestReviewState> &
+      Pick<PullRequestReviewState, "status" | "outputs" | "attempts">
+  ): void => {
+    try {
+      writeReviewState(workspaceDir, {
+        repository,
+        pullRequest,
+        headSha,
+        inputFingerprint,
+        runId,
+        updatedAt: deps.now().toISOString(),
+        ...over,
       });
-
-    // Analysis with a single fallback switch on a rate limit. A switch discards
-    // the (aborted) attempt entirely and re-runs fresh — never reusing partial
-    // verdicts — with both attempts' completed stages recorded.
-    let analysis: ReviewAnalysisResult;
-    let switched = false;
-    for (;;) {
-      try {
-        analysis = await runAnalyzeOnce();
-        break;
-      } catch (err) {
-        if (err instanceof ReviewAnalysisContractError) {
-          // Contract broken (stage error / strict malformed row / mutation under
-          // read-only). Record any completed stages not yet persisted, then fail.
-          for (
-            let i = stageRecords.length;
-            i < err.result.stageResults.length;
-            i++
-          ) {
-            persistStage(
-              `pr-review-stage-${i + 1}`,
-              err.result.stageResults[i],
-              startedAt
-            );
-          }
-          return fail(
-            `review analysis contract broken: ${err.result.contractErrors.join("; ") || "unknown"}`,
-            `inspect .otto/runs/${runId}/ evidence, then re-run the review for ${repository}#${pullRequest}`
-          );
-        }
-        if (
-          (err as Error)?.name === "RateLimitError" &&
-          opts.autoSwitchOnLimit &&
-          opts.fallbackAgentId &&
-          !switched &&
-          activeAgentId !== opts.fallbackAgentId
-        ) {
-          switched = true;
-          const from = activeAgentId;
-          activeAgentId = opts.fallbackAgentId;
-          deps.stdout(
-            `↪ auto-switch on rate limit: ${from} → ${activeAgentId}\n`
-          );
-          continue;
-        }
-        return fail(
-          `review analysis failed: ${(err as Error).message}`,
-          `re-run the review for ${repository}#${pullRequest}`
-        );
-      }
+    } catch {
+      // A state-write hiccup must not crash the run; idempotency degrades to the
+      // remote marker reconciliation, which is still single-comment safe.
     }
+  };
 
-    // Budget exhaustion before verification is a failure, never "approved".
-    if (budgetExhausted) {
-      return fail(
-        "review budget exhausted before verification completed",
-        `raise --budget or narrow the review, then re-run for ${repository}#${pullRequest}`
-      );
+  /** The 4 comment methods, present only when a comment output was requested. */
+  const commentClient = (): Pick<
+    GitHubPrClient,
+    "viewer" | "listIssueComments" | "createIssueComment" | "updateIssueComment"
+  > | null => {
+    const g = deps.github;
+    if (
+      g.viewer &&
+      g.listIssueComments &&
+      g.createIssueComment &&
+      g.updateIssueComment
+    ) {
+      return {
+        viewer: g.viewer.bind(g),
+        listIssueComments: g.listIssueComments.bind(g),
+        createIssueComment: g.createIssueComment.bind(g),
+        updateIssueComment: g.updateIssueComment.bind(g),
+      };
     }
+    return null;
+  };
 
-    // 6. Structured, schema-validated analysis artifact BEFORE any output.
-    const outcome = outcomeForFindings(analysis.confirmed);
-    const published: PublishedReviewFinding[] = analysis.confirmed.map((f) => ({
-      ...f,
-      inlineEligible: false,
-    }));
-    const analysisArtifact: PullRequestReviewAnalysisArtifact = {
-      schemaVersion: 1,
-      repository,
-      pullRequest,
-      url: revision.url,
-      title: revision.title,
-      baseSha: revision.baseSha,
-      headSha: revision.headSha,
-      reviewInput: {
-        kind: reviewInput.kind,
-        source: reviewInput.source,
-        fingerprint: inputFingerprint,
-        artifactPath: snapshot.artifactPath,
-      },
-      runId,
-      analyzedAt: deps.now().toISOString(),
-      outcome,
-      confirmed: published,
-      rejected: analysis.rejected,
-      severity: analysis.severity,
-      skill,
-      diffArtifact: diffArtifactRel,
-    };
-    atomicWriteJson(join(runDir, "analysis.json"), analysisArtifact);
+  /**
+   * Turn a persisted analysis into published output(s). Re-queries the PR
+   * IMMEDIATELY before any remote write (reconcilePublication): a moved head or
+   * an ineligible state marks the run superseded/cancelled and emits NO remote
+   * output. On a publishable PR the summary comment is upserted idempotently by
+   * marker — a restart with lost local state finds and reuses the existing
+   * comment instead of duplicating it. Each output writes an INDEPENDENT receipt
+   * and is never repeated once succeeded; a permanent GitHub error is a visible
+   * `publish-failed`, a transient one carries `retryable`/`nextRetryAt`.
+   */
+  const finishPublication = (
+    art: PullRequestReviewAnalysisArtifact,
+    startingOutputs: PullRequestReviewOutputState
+  ): PullRequestReviewRunResult => {
+    const outcome = art.outcome;
+    const published = art.confirmed;
+    const diffArtifactRel = art.diffArtifact;
+    const attempts = priorAttempts + 1;
 
-    // 7. Re-query the PR: the snapshotted input stays authoritative, but a moved
-    //    head supersedes and an ineligible state cancels this attempt.
+    // Re-query the PR immediately before any remote write.
     const current = deps.github.getPullRequest(repository, pullRequest);
+    const rec = reconcilePublication({
+      expected: revision,
+      current,
+      label: config.label,
+    });
     let status: PullRequestReviewRunStatus = "succeeded";
     let supersededBy: string | undefined;
     let staleReason: string | undefined;
-    if (current.headSha !== revision.headSha) {
-      status = "superseded";
-      supersededBy = current.headSha;
-      staleReason = `superseded: the PR head advanced to ${current.headSha} during review`;
-    } else {
-      const reason = ineligibleReason(current, config.label);
-      if (reason === "closed") {
-        status = "cancelled";
-        staleReason = "cancelled: the pull request is no longer open";
-      } else if (reason === "draft") {
-        status = "cancelled";
-        staleReason = "cancelled: the pull request was converted to draft";
-      } else if (reason === "label-missing") {
-        status = "cancelled";
-        staleReason = `cancelled: the required label "${config.label}" was removed`;
-      }
+    if (!rec.publishable) {
+      status = rec.status;
+      staleReason = `${rec.status}: ${rec.reason}`;
+      if (rec.status === "superseded") supersededBy = current.headSha;
     }
 
-    // 8. Canonical Markdown (with input marker/evidence + any stale reason), then
-    //    the text or Markdown copy.
     const canonical: CanonicalReview = {
       repository,
       pullRequest,
       url: revision.url,
       title: revision.title,
       baseSha: revision.baseSha,
-      headSha: revision.headSha,
-      reviewInput: {
-        kind: reviewInput.kind,
-        source: reviewInput.source,
-        fingerprint: inputFingerprint,
-        artifactPath: snapshot.artifactPath,
-      },
+      headSha,
+      reviewInput: art.reviewInput,
       runId,
       outcome,
       confirmed: published,
-      rejectedCount: analysis.rejected.length,
-      suppressedCount: analysis.severity.suppressed,
-      skill,
+      rejectedCount: art.rejected.length,
+      suppressedCount: art.severity.suppressed,
+      skill: art.skill,
       diffArtifact: diffArtifactRel,
-      analysisArtifact: `.otto/runs/${runId}/analysis.json`,
+      analysisArtifact: analysisArtifactRel,
       ...(staleReason ? { staleReason } : {}),
     };
     const canonicalMarkdown = renderCanonicalReview(canonical);
+    // The local review copy is always retained (run bundle + optional
+    // --output-file). A stale document is labelled stale, not marked successful.
     const written = writeCanonicalReview({
       workspaceDir,
       runId,
       markdown: canonicalMarkdown,
-      outputFile: config.output === "markdown" ? config.outputFile : undefined,
+      outputFile:
+        requestedOutput === "markdown" ? config.outputFile : undefined,
     });
     writeRunReport(workspaceDir, runId, canonicalMarkdown);
-    if (config.output === "markdown") {
-      deps.stdout(canonicalMarkdown);
+
+    const outputs: PullRequestReviewOutputState = { ...startingOutputs };
+    let commentId: number | undefined = outputs.comment?.commentId;
+    const finalArtifacts = artifactList([
+      { kind: "diff", path: diffArtifactRel },
+      { kind: "analysis", path: analysisArtifactRel },
+      { kind: "review", path: written.artifactPath },
+    ]);
+
+    if (status === "succeeded") {
+      if (requestedOutput === "text") {
+        if (!outputs.text) outputs.text = { status: "succeeded" };
+        deps.stdout(renderReviewText(canonical));
+      } else if (requestedOutput === "markdown") {
+        if (!outputs.markdown)
+          outputs.markdown = {
+            status: "succeeded",
+            path: written.copiedPath ?? written.artifactPath,
+          };
+        deps.stdout(canonicalMarkdown);
+      } else {
+        // comment: a HARNESS-OWNED remote write, only after a passing reconcile.
+        if (!outputs.comment) {
+          const github = commentClient();
+          try {
+            if (!github) {
+              throw new GitHubPrError(
+                "comment output requires a GitHub client with viewer/list/create/update capability",
+                "permission",
+                false
+              );
+            }
+            const receipt = upsertSummaryComment({
+              github,
+              repository,
+              pullRequest,
+              headSha,
+              inputFingerprint,
+              body: canonicalMarkdown,
+            });
+            outputs.comment = {
+              status: "succeeded",
+              commentId: receipt.commentId,
+            };
+            commentId = receipt.commentId;
+          } catch (err) {
+            const gerr =
+              err instanceof GitHubPrError
+                ? err
+                : new GitHubPrError(
+                    `summary comment publication failed: ${(err as Error).message}`,
+                    "unknown",
+                    false
+                  );
+            const retryable = gerr.retryable;
+            const nextRetryAt = retryable
+              ? nextPublicationRetryAt(attempts, deps.now())
+              : undefined;
+            persistState({
+              status: "publish-failed",
+              analysisArtifact: analysisArtifactRel,
+              outputs,
+              attempts,
+              retryable,
+              ...(nextRetryAt ? { nextRetryAt } : {}),
+              error: gerr.message,
+            });
+            finalizeManifest(
+              "publish-failed",
+              buildEvidence({
+                outcome,
+                confirmed: published.length,
+                rejected: art.rejected.length,
+              }),
+              finalArtifacts
+            );
+            deps.stdout(renderReviewText(canonical));
+            return {
+              status: "publish-failed",
+              runId,
+              repository,
+              pullRequest,
+              headSha,
+              inputFingerprint,
+              costUsd: manifestCost,
+              outcome,
+              reviewArtifact: written.artifactPath,
+              retryable,
+              ...(nextRetryAt ? { nextRetryAt } : {}),
+              error: gerr.message,
+            };
+          }
+        }
+        deps.stdout(renderReviewText(canonical));
+      }
     } else {
-      deps.stdout(renderReviewText(canonical));
+      // Superseded/cancelled: emit NO remote output; surface the stale copy.
+      if (requestedOutput === "markdown") deps.stdout(canonicalMarkdown);
+      else deps.stdout(renderReviewText(canonical));
     }
 
-    const evidence = buildEvidence({
-      outcome,
-      confirmed: published.length,
-      rejected: analysis.rejected.length,
-      ...(supersededBy ? { supersededBy } : {}),
+    persistState({
+      status: status === "succeeded" ? "succeeded" : status,
+      analysisArtifact: analysisArtifactRel,
+      outputs,
+      attempts,
     });
     finalizeManifest(
       status === "succeeded" ? outcome : status,
-      evidence,
-      artifactList([
-        { kind: "diff", path: diffArtifactRel },
-        { kind: "analysis", path: `.otto/runs/${runId}/analysis.json` },
-        { kind: "review", path: written.artifactPath },
-      ])
+      buildEvidence({
+        outcome,
+        confirmed: published.length,
+        rejected: art.rejected.length,
+        ...(supersededBy ? { supersededBy } : {}),
+      }),
+      finalArtifacts
     );
-
     return {
       status,
       runId,
       repository,
       pullRequest,
-      headSha: revision.headSha,
+      headSha,
       inputFingerprint,
       costUsd: manifestCost,
       outcome,
       reviewArtifact: written.artifactPath,
+      ...(commentId !== undefined ? { commentId } : {}),
     };
-  } catch (err) {
-    return fail(
-      `review failed: ${(err as Error).message}`,
-      `re-run the review for ${repository}#${pullRequest}`
+  };
+
+  /**
+   * Comment-mode remote-proof recovery. If the viewer already owns a summary
+   * comment carrying THIS composite identity's current head + input markers,
+   * the review is already published: reconstruct a succeeded state from the
+   * remote body WITHOUT paying for a fresh model analysis. Any adapter hiccup
+   * falls through to the normal analysis path.
+   */
+  const tryRemoteRecovery = (): PullRequestReviewRunResult | null => {
+    if (requestedOutput !== "comment") return null;
+    const github = commentClient();
+    if (!github) return null;
+    let owned;
+    try {
+      const viewer = github.viewer();
+      const marker = summaryMarker(repository, pullRequest);
+      const h = headMarker(headSha);
+      const i = inputMarker(inputFingerprint);
+      owned = github
+        .listIssueComments(repository, pullRequest)
+        .find(
+          (c) =>
+            c.author === viewer.login &&
+            c.body.includes(marker) &&
+            c.body.includes(h) &&
+            c.body.includes(i)
+        );
+    } catch {
+      return null;
+    }
+    if (!owned) return null;
+
+    // Persist the already-resolved exact input + the remote body as the
+    // recovered run's local artifacts, then reconstruct succeeded state.
+    try {
+      deps.writeReviewInput({ workspaceDir, runId, input: reviewInput });
+    } catch {
+      /* best-effort: the remote comment is authoritative proof either way */
+    }
+    const written = writeCanonicalReview({
+      workspaceDir,
+      runId,
+      markdown: owned.body,
+    });
+    writeRunReport(workspaceDir, runId, owned.body);
+    const outputs: PullRequestReviewOutputState = {
+      comment: { status: "succeeded", commentId: owned.id },
+    };
+    persistState({
+      status: "succeeded",
+      outputs,
+      attempts: priorAttempts + 1,
+    });
+    finalizeManifest(
+      "succeeded",
+      buildEvidence(),
+      artifactList([{ kind: "review", path: written.artifactPath }])
     );
+    return {
+      status: "succeeded",
+      runId,
+      repository,
+      pullRequest,
+      headSha,
+      inputFingerprint,
+      costUsd: 0,
+      reviewArtifact: written.artifactPath,
+      commentId: owned.id,
+    };
+  };
+
+  // --- Acquire the composite claim BEFORE writing run/input artifacts or a
+  //     worktree. A busy claim returns `skipped` with no analysis. Every
+  //     acquired path heartbeats (unref'd interval) and releases in `finally`.
+  const claimResult = claimRevision({
+    workspaceDir,
+    repository,
+    pullRequest,
+    headSha,
+    inputFingerprint,
+    runId,
+    now: deps.now(),
+  });
+  if (!claimResult.acquired) {
+    return {
+      status: "skipped",
+      runId,
+      repository,
+      pullRequest,
+      headSha,
+      inputFingerprint,
+      costUsd: 0,
+    };
+  }
+  const claim: PullRequestReviewClaim = claimResult.claim;
+  const heartbeat = setInterval(() => {
+    try {
+      heartbeatClaim({ workspaceDir, claim, now: new Date() });
+    } catch {
+      /* best-effort */
+    }
+  }, REVIEW_LEASE_HEARTBEAT_MS);
+  heartbeat.unref?.();
+
+  try {
+    // Resume a crashed/failed run from persisted analysis — never re-analyze.
+    if (resumedAnalysis) {
+      return finishPublication(resumedAnalysis, priorOutputs);
+    }
+    // Comment-mode: reuse an already-published remote comment (lost local state).
+    const recovered = tryRemoteRecovery();
+    if (recovered) return recovered;
+
+    return await runFreshReview();
   } finally {
-    worktree.cleanup();
+    clearInterval(heartbeat);
+    releaseClaim({ workspaceDir, claim });
+    if (worktree) worktree.cleanup();
+  }
+
+  // -------------------------------------------------------------------------
+  // Fresh analysis + publication (no resumable state, no remote proof).
+  // -------------------------------------------------------------------------
+  async function runFreshReview(): Promise<PullRequestReviewRunResult> {
+    // 1. Initial manifest (zero cost/tokens, composite evidence, expected input
+    //    artifact path) + the byte-exact, round-trip-validated input artifact.
+    writeManifest(workspaceDir, {
+      runId,
+      bin: "otto-review",
+      mode: "github-pr-review",
+      inputs: `${repository}#${pullRequest}`,
+      runtime: { id: activeAgentId, displayName: activeAgentId },
+      iterations: 1,
+      costUsd: 0,
+      tokenUsage: emptyTokenUsage(),
+      artifacts: artifactList(),
+      pullRequestReview: buildEvidence(),
+      startedAt,
+    });
+
+    let snapshot: ReviewInputSnapshot;
+    try {
+      snapshot = deps.writeReviewInput({
+        workspaceDir,
+        runId,
+        input: reviewInput,
+      });
+      const roundTrip = deps.readReviewInput({
+        workspaceDir,
+        runId,
+        expectedFingerprint: inputFingerprint,
+      });
+      if (roundTrip == null || roundTrip.content !== reviewInput.content) {
+        return fail(
+          "review-input artifact failed round-trip validation",
+          "re-run the review; the run directory could not persist the exact review input"
+        );
+      }
+      snapshot = roundTrip;
+    } catch (err) {
+      return fail(
+        `review-input artifact write failed: ${(err as Error).message}`,
+        "check that the run directory is writable, then re-run the review"
+      );
+    }
+
+    // 2. Resolve the governed skill BEFORE any model call.
+    let skill: ReviewSkillSelection;
+    try {
+      skill = resolveReviewSkill({
+        workspaceDir,
+        requested: config.reviewSkill,
+        changedPaths: revision.changedFiles,
+        now: deps.now(),
+      });
+    } catch (err) {
+      if (err instanceof ReviewSkillError) {
+        return fail(
+          `review skill selection failed: ${err.message}`,
+          `choose a valid --review-skill (or omit it to use the built-in) for ${repository}#${pullRequest}`
+        );
+      }
+      throw err;
+    }
+
+    // 3. Isolated worktree at the exact head + byte-exact diff artifact.
+    //    Assigns the OUTER `worktree` so the claim `finally` always cleans it.
+    let wt: ReturnType<typeof createPullRequestWorktree>;
+    try {
+      wt = deps.createWorktree({
+        workspaceDir,
+        runId,
+        revision,
+        reviewInput: snapshot,
+      });
+      worktree = wt;
+    } catch (err) {
+      return fail(
+        `worktree creation failed: ${(err as Error).message}`,
+        `verify the git remote can fetch ${repository}#${pullRequest}, then re-run the review`
+      );
+    }
+
+    try {
+      const diffArtifactRel = `.otto/runs/${runId}/pr.diff`;
+      writeFileSync(join(runDir, "pr.diff"), wt.diffText);
+      // The worktree's review-input copy MUST be byte-identical to the run artifact.
+      const runInputBytes = readFileSync(
+        join(runDir, "review-input.md"),
+        "utf8"
+      );
+      if (wt.reviewInputText !== runInputBytes) {
+        return fail(
+          "worktree review-input copy is not byte-identical to the run artifact",
+          "re-run the review; the isolated worktree did not preserve the exact review input"
+        );
+      }
+
+      // 4. Optional PR-body compression, re-wrapped in a fresh untrusted fence.
+      //    Only the raw PR body is ever offered to the compressor — never the
+      //    review-input artifact.
+      let bodyForContext = revision.body;
+      if (opts.contextCompressor === "headroom") {
+        const compressor = buildReviewCompressor(workspaceDir, deps.env);
+        if (compressor) {
+          const store = runRetrievalStore(workspaceDir, runId);
+          const out = compressContentSync(
+            compressor,
+            { key: "pr-body", category: "issue-body", text: revision.body },
+            store
+          );
+          bodyForContext = out.text;
+          if (!out.degraded) {
+            runToolsUsed.push(
+              compressionToolUsage(out, "issue-body", "pr-review")
+            );
+          }
+        }
+      }
+      const reviewContext = buildReviewContext({
+        ...revision,
+        body: bodyForContext,
+      });
+
+      // 5. Read the TRUSTED operator policy before entering the PR worktree, and
+      //    scrub credentials for the read-only child.
+      const safetyPolicy = readSafetyPolicy(workspaceDir);
+      const emptyGithubConfigDir = join(wt.dir, ".otto-tmp", "gh-empty");
+      mkdirSync(emptyGithubConfigDir, { recursive: true });
+      const childEnv = buildReviewChildEnv(deps.env, emptyGithubConfigDir);
+
+      const stageVars: Record<string, string> = {
+        REPO_INSTRUCTIONS_PATH: wt.instructionsPath,
+        BASE_SHA: revision.baseSha,
+        HEAD_SHA: revision.headSha,
+        DIFF_PATH: wt.diffPath,
+        REVIEW_INPUT_PATH: wt.reviewInputPath,
+        REVIEW_CONTEXT: reviewContext,
+      };
+      const inputSafetyEvents: SafetyEvent[] = [
+        {
+          category: "taint",
+          kind: "pull-request",
+          subject: `${repository}#${pullRequest}`,
+          message: "pull-request context is untrusted review evidence",
+          blocked: false,
+        },
+        {
+          category: "taint",
+          kind: "review-input",
+          subject: inputFingerprint,
+          message: "review input is untrusted acceptance-criteria data",
+          blocked: false,
+        },
+      ];
+      const skillUsages: SkillUsage[] = [skill.usage];
+
+      let budgetExhausted = false;
+      let spentUsd = 0;
+      const onStage = (
+        sr: StageResult
+      ): { stop: boolean; cooldownFactor: number } => {
+        spentUsd += sr.costUsd;
+        const stop = opts.budgetUsd != null && spentUsd >= opts.budgetUsd;
+        if (stop) budgetExhausted = true;
+        return { stop, cooldownFactor: 1 };
+      };
+
+      const runAnalyzeOnce = (): Promise<ReviewAnalysisResult> =>
+        deps.analyze({
+          workspaceDir: wt.dir,
+          packageDir,
+          iteration: 1,
+          maxRetries,
+          cooldownMs,
+          tokenMode,
+          signal,
+          agentId: activeAgentId,
+          lenses: [...REVIEW_LENSES],
+          lensStage: STAGES.prReviewLens,
+          verifyStage: STAGES.prReviewVerify,
+          stageVars,
+          verdictSource: "result",
+          mutationPolicy: "fail",
+          strictFindings: true,
+          childEnv,
+          safetyPolicy,
+          injectedContext: skill.injection,
+          skillUsages,
+          inputSafetyEvents,
+          sink: verbose ? new VerboseSink() : new ConsoleUi(),
+          modelRouting,
+          tierLadder,
+          onStage,
+          recordStage: persistStage,
+        });
+
+      // Analysis with a single fallback switch on a rate limit. A switch discards
+      // the (aborted) attempt entirely and re-runs fresh — never reusing partial
+      // verdicts — with both attempts' completed stages recorded.
+      let analysis: ReviewAnalysisResult;
+      let switched = false;
+      for (;;) {
+        try {
+          analysis = await runAnalyzeOnce();
+          break;
+        } catch (err) {
+          if (err instanceof ReviewAnalysisContractError) {
+            // Contract broken (stage error / strict malformed row / mutation under
+            // read-only). Record any completed stages not yet persisted, then fail.
+            for (
+              let i = stageRecords.length;
+              i < err.result.stageResults.length;
+              i++
+            ) {
+              persistStage(
+                `pr-review-stage-${i + 1}`,
+                err.result.stageResults[i],
+                startedAt
+              );
+            }
+            return fail(
+              `review analysis contract broken: ${err.result.contractErrors.join("; ") || "unknown"}`,
+              `inspect .otto/runs/${runId}/ evidence, then re-run the review for ${repository}#${pullRequest}`
+            );
+          }
+          if (
+            (err as Error)?.name === "RateLimitError" &&
+            opts.autoSwitchOnLimit &&
+            opts.fallbackAgentId &&
+            !switched &&
+            activeAgentId !== opts.fallbackAgentId
+          ) {
+            switched = true;
+            const from = activeAgentId;
+            activeAgentId = opts.fallbackAgentId;
+            deps.stdout(
+              `↪ auto-switch on rate limit: ${from} → ${activeAgentId}\n`
+            );
+            continue;
+          }
+          return fail(
+            `review analysis failed: ${(err as Error).message}`,
+            `re-run the review for ${repository}#${pullRequest}`
+          );
+        }
+      }
+
+      // Budget exhaustion before verification is a failure, never "approved".
+      if (budgetExhausted) {
+        return fail(
+          "review budget exhausted before verification completed",
+          `raise --budget or narrow the review, then re-run for ${repository}#${pullRequest}`
+        );
+      }
+
+      // 6. Structured, schema-validated analysis artifact + `running` state with
+      //    the analysisArtifact reference — persisted BEFORE any output so a crash
+      //    between here and publication resumes from `analysis.json` (no re-pay).
+      const outcome = outcomeForFindings(analysis.confirmed);
+      const published: PublishedReviewFinding[] = analysis.confirmed.map(
+        (f) => ({
+          ...f,
+          inlineEligible: false,
+        })
+      );
+      const analysisArtifact: PullRequestReviewAnalysisArtifact = {
+        schemaVersion: 1,
+        repository,
+        pullRequest,
+        url: revision.url,
+        title: revision.title,
+        baseSha: revision.baseSha,
+        headSha: revision.headSha,
+        reviewInput: {
+          kind: reviewInput.kind,
+          source: reviewInput.source,
+          fingerprint: inputFingerprint,
+          artifactPath: snapshot.artifactPath,
+        },
+        runId,
+        analyzedAt: deps.now().toISOString(),
+        outcome,
+        confirmed: published,
+        rejected: analysis.rejected,
+        severity: analysis.severity,
+        skill,
+        diffArtifact: diffArtifactRel,
+      };
+      atomicWriteJson(join(runDir, "analysis.json"), analysisArtifact);
+      persistState({
+        status: "running",
+        analysisArtifact: analysisArtifactRel,
+        outputs: {},
+        attempts: priorAttempts + 1,
+      });
+
+      // 7. Publish (re-query → reconcile → output) from the persisted analysis.
+      return finishPublication(analysisArtifact, {});
+    } catch (err) {
+      return fail(
+        `review failed: ${(err as Error).message}`,
+        `re-run the review for ${repository}#${pullRequest}`
+      );
+    }
   }
 }

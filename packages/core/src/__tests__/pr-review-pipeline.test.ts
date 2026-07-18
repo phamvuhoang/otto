@@ -29,6 +29,9 @@ import {
 } from "../pr-review-input.js";
 import type { PullRequestRevision } from "../pr-review.js";
 import { runPullRequestReview } from "../pr-review.js";
+import { claimRevision, readReviewState } from "../pr-review-state.js";
+import { headMarker, inputMarker, summaryMarker } from "../pr-review-output.js";
+import { GitHubPrError, type GitHubComment } from "../github-pr.js";
 import type { PullRequestReviewConfig } from "../review-cli.js";
 import type { ReviewAnalysisResult, ReviewSeverityCounts } from "../panel.js";
 import type { Finding } from "../review-severity.js";
@@ -677,6 +680,369 @@ describe("runPullRequestReview", () => {
         join(fx.workspaceDir, ".otto-tmp", "pr-review-worktrees", res.runId)
       )
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice 2 (Task 12): state-aware recovery + idempotent summary comment.
+// ---------------------------------------------------------------------------
+
+type CommentGithub = {
+  github: {
+    getPullRequest: () => PullRequestRevision;
+    viewer: () => { login: string };
+    listIssueComments: () => GitHubComment[];
+    createIssueComment: (r: string, n: number, b: string) => GitHubComment;
+    updateIssueComment: (r: string, id: number, b: string) => GitHubComment;
+  };
+  calls: { getPr: number; list: number; create: number; update: number };
+  store: GitHubComment[];
+};
+
+function makeCommentGithub(opts: {
+  current: () => PullRequestRevision;
+  viewerLogin?: string;
+  comments?: GitHubComment[];
+  createError?: Error;
+}): CommentGithub {
+  const login = opts.viewerLogin ?? "otto-bot";
+  const store: GitHubComment[] = [...(opts.comments ?? [])];
+  let nextId = 5000;
+  const calls = { getPr: 0, list: 0, create: 0, update: 0 };
+  const github = {
+    getPullRequest: () => {
+      calls.getPr++;
+      return opts.current();
+    },
+    viewer: () => ({ login }),
+    listIssueComments: () => {
+      calls.list++;
+      return store.map((c) => ({ ...c }));
+    },
+    createIssueComment: (_r: string, _n: number, body: string) => {
+      calls.create++;
+      if (opts.createError) throw opts.createError;
+      const c: GitHubComment = {
+        id: nextId++,
+        body,
+        author: login,
+        url: `https://github.com/acme/widget/issues/7#comment-${nextId}`,
+      };
+      store.push(c);
+      return c;
+    },
+    updateIssueComment: (_r: string, id: number, body: string) => {
+      calls.update++;
+      const found = store.find((c) => c.id === id);
+      if (!found) throw new Error(`no comment ${id}`);
+      found.body = body;
+      return { ...found };
+    },
+  };
+  return { github, calls, store };
+}
+
+/** A summary-comment body carrying the stable + head + input markers. */
+function summaryBody(headSha: string, fp: string): string {
+  return [
+    summaryMarker("acme/widget", 7),
+    headMarker(headSha),
+    inputMarker(fp),
+    "",
+    "canonical review body",
+  ].join("\n");
+}
+
+describe("runPullRequestReview — Slice 2 comment publication + recovery", () => {
+  let fx: Fixture;
+  const out: string[] = [];
+  const stdout = (t: string): void => void out.push(t);
+  const now = () => new Date("2026-07-18T12:00:00.000Z");
+  const later = () => new Date("2026-07-18T12:30:00.000Z");
+
+  beforeEach(() => {
+    fx = setupFixture();
+    out.length = 0;
+    mocks.executeStage.mockReset();
+    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const d of fx.cleanupDirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  const fp = () => resolvedInput(fx).fingerprint;
+
+  it("(S1) comment mode creates ONE summary comment and records a succeeded receipt", async () => {
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(gh.calls.create).toBe(1);
+    expect(gh.calls.update).toBe(0);
+    expect(res.commentId).toBe(gh.store[0].id);
+    // Comment body is the canonical markdown carrying all three markers.
+    expect(gh.store[0].body).toContain(summaryMarker("acme/widget", 7));
+    expect(gh.store[0].body).toContain(headMarker(fx.headSha));
+    // State persisted with the comment receipt.
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("succeeded");
+    expect(st?.outputs.comment?.commentId).toBe(gh.store[0].id);
+    // Local review.md still written; operator sees a text line.
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(existsSync(join(runDir, "review.md"))).toBe(true);
+    expect(out.join("")).toContain("acme/widget#7");
+  });
+
+  it("(S2) a moved head at re-query is superseded and writes NO comment", async () => {
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({
+      current: () => ({ ...fx.revision, headSha: "f".repeat(40) }),
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("superseded");
+    expect(gh.calls.create).toBe(0);
+    expect(gh.calls.update).toBe(0);
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(readFileSync(join(runDir, "review.md"), "utf8")).toMatch(/stale/i);
+  });
+
+  it("(S3) a busy composite claim returns skipped without analysis", async () => {
+    // Another daemon already holds the lease for this identity.
+    const acq = claimRevision({
+      workspaceDir: fx.workspaceDir,
+      repository: "acme/widget",
+      pullRequest: 7,
+      headSha: fx.headSha,
+      inputFingerprint: fp(),
+      runId: "other-daemon",
+      now: now(),
+    });
+    expect(acq.acquired).toBe(true);
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("skipped");
+    expect(fake.invocationCount()).toBe(0);
+    expect(gh.calls.create).toBe(0);
+  });
+
+  it("(S4) a transient comment error is publish-failed with retryable + nextRetryAt", async () => {
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({
+      current: () => fx.revision,
+      createError: new GitHubPrError(
+        "rate limited (HTTP 429)",
+        "rate-limit",
+        true,
+        429
+      ),
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(true);
+    expect(res.nextRetryAt).toBeTruthy();
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    expect(st?.retryable).toBe(true);
+    expect(st?.analysisArtifact).toBe(`.otto/runs/${res.runId}/analysis.json`);
+  });
+
+  it("(S5) an auth/validation comment error is a permanent publish-failed", async () => {
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({
+      current: () => fx.revision,
+      createError: new GitHubPrError(
+        "validation (HTTP 422)",
+        "validation",
+        false,
+        422
+      ),
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(false);
+    expect(res.nextRetryAt).toBeUndefined();
+  });
+
+  it("(S6) resumes publication from analysis.json after a crash WITHOUT re-analyzing", async () => {
+    // First attempt: analysis succeeds but the comment write throws transiently.
+    const fake1 = makeFakeAnalyze({});
+    const gh1 = makeCommentGithub({
+      current: () => fx.revision,
+      createError: new GitHubPrError(
+        "rate limited (HTTP 429)",
+        "rate-limit",
+        true,
+        429
+      ),
+    });
+    const res1 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake1.fn, github: gh1.github, stdout, now },
+    });
+    expect(res1.status).toBe("publish-failed");
+    expect(fake1.invocationCount()).toBe(1);
+
+    // Second attempt (past nextRetryAt): comment write now works. Analysis MUST
+    // NOT run again — the persisted analysis.json is reused.
+    const fake2 = {
+      fn: async () => {
+        throw new Error("analysis must not run on resume");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh2 = makeCommentGithub({ current: () => fx.revision });
+    const res2 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: fake2.fn as never,
+        github: gh2.github,
+        stdout,
+        now: later,
+      },
+    });
+    expect(res2.status).toBe("succeeded");
+    expect(res2.runId).toBe(res1.runId); // same run bundle, resumed
+    expect(gh2.calls.create).toBe(1);
+    expect(res2.commentId).toBe(gh2.store[0].id);
+  });
+
+  it("(S7) comment mode reuses an existing remote comment when local state was lost (no analysis, no pay)", async () => {
+    const body = summaryBody(fx.headSha, fp());
+    const existing: GitHubComment = {
+      id: 4242,
+      body,
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when the remote comment already exists"
+        );
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeCommentGithub({
+      current: () => fx.revision,
+      comments: [existing],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.commentId).toBe(4242);
+    expect(res.costUsd).toBe(0);
+    expect(gh.calls.create).toBe(0);
+    expect(gh.calls.update).toBe(0);
+    // The remote body is persisted locally as the recovered run's review.md.
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(readFileSync(join(runDir, "review.md"), "utf8")).toBe(body);
+  });
+
+  it("(S8) an owned marker with an OLDER head is UPDATED in place (same comment id), never duplicated", async () => {
+    // Remote has our marker but for a previous head → not proof; analysis runs,
+    // then the SAME comment id is updated (no new comment).
+    const stale: GitHubComment = {
+      id: 900,
+      body: summaryBody("e".repeat(40), fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-900",
+    };
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({
+      current: () => fx.revision,
+      comments: [stale],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(gh.calls.create).toBe(0);
+    expect(gh.calls.update).toBe(1);
+    expect(res.commentId).toBe(900);
+  });
+
+  it("(S9) a prior succeeded identity is skipped: no re-analysis and no repeated comment write", async () => {
+    const fake1 = makeFakeAnalyze({});
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const first = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake1.fn, github: gh.github, stdout, now },
+    });
+    expect(first.status).toBe("succeeded");
+    expect(gh.calls.create).toBe(1);
+
+    const fake2 = {
+      fn: async () => {
+        throw new Error("analysis must not repeat for a succeeded identity");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const second = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake2.fn as never, github: gh.github, stdout, now },
+    });
+    expect(second.status).toBe("succeeded");
+    // No second create/update — the successful output is never repeated.
+    expect(gh.calls.create).toBe(1);
+    expect(gh.calls.update).toBe(0);
   });
 });
 

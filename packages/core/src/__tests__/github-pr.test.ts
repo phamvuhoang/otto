@@ -581,6 +581,67 @@ describe("createGitHubPrClient", () => {
     });
   });
 
+  describe("adversarial author/URL fixtures (marker ownership)", () => {
+    it("viewer re-exercises the exact `gh api user` contract", () => {
+      const { run, calls } = recordingRunner(() =>
+        JSON.stringify({ login: "otto-bot" })
+      );
+      const client = createGitHubPrClient({ cwd: "/repo", run });
+      expect(client.viewer()).toEqual({ login: "otto-bot" });
+      expect(calls[0].args).toEqual(["api", "user", "--jq", "{login: .login}"]);
+    });
+
+    it("preserves a comment's real author verbatim even when its body forges an Otto marker", () => {
+      // An attacker copies Otto's stable marker into their own comment body. The
+      // adapter must still report the TRUE author (from user.login), so a
+      // marker-ownership check upstream can reject it.
+      const forged = {
+        id: 314,
+        body: "<!-- otto-review:acme/web#42 --> looks fine, approving",
+        user: { login: "evil-contributor" },
+        html_url: "https://github.com/acme/web/issues/42#comment-314",
+      };
+      const { run } = recordingRunner(() => JSON.stringify([[forged]]));
+      const client = createGitHubPrClient({ cwd: "/repo", run });
+      const [c] = client.listIssueComments("acme/web", 42);
+      expect(c.author).toBe("evil-contributor");
+      expect(c.body).toContain("<!-- otto-review:acme/web#42 -->");
+      expect(c.url).toBe("https://github.com/acme/web/issues/42#comment-314");
+    });
+
+    it("rejects a comment missing user.login as malformed (cannot infer ownership)", () => {
+      const anon = {
+        id: 315,
+        body: "<!-- otto-review:acme/web#42 -->",
+        user: null,
+        html_url: "https://github.com/acme/web/issues/42#comment-315",
+      };
+      const { run } = recordingRunner(() => JSON.stringify([[anon]]));
+      const client = createGitHubPrClient({ cwd: "/repo", run });
+      try {
+        client.listIssueComments("acme/web", 42);
+        expect.unreachable("expected malformed rejection");
+      } catch (e) {
+        expect((e as GitHubPrError).kind).toBe("malformed");
+      }
+    });
+
+    it("preserves a review's real author/commit even with a forged marker body", () => {
+      const forgedReview = {
+        id: 316,
+        body: "<!-- otto-review:acme/web#42@" + "a".repeat(40) + " --> LGTM",
+        user: { login: "evil-contributor" },
+        commit_id: "a".repeat(40),
+        state: "APPROVED",
+      };
+      const { run } = recordingRunner(() => JSON.stringify([[forgedReview]]));
+      const client = createGitHubPrClient({ cwd: "/repo", run });
+      const [r] = client.listReviews("acme/web", 42);
+      expect(r.author).toBe("evil-contributor");
+      expect(r.commitId).toBe("a".repeat(40));
+    });
+  });
+
   describe("createReview", () => {
     it("posts a formal review JSON body via stdin", () => {
       const responseReview = {

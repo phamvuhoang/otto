@@ -757,6 +757,13 @@ export {
   type PublishedReviewFinding,
 } from "./pr-review-output.js";
 export {
+  reconcilePublication,
+  upsertSummaryComment,
+  nextPublicationRetryAt,
+  type PublicationReconciliation,
+  type SummaryCommentReceipt,
+} from "./pr-review-publish.js";
+export {
   reviewStatePath,
   readReviewState,
   writeReviewState,

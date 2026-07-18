@@ -49,14 +49,11 @@ import { mapFindingsToDiff } from "./pr-review-diff.js";
 import {
   readReviewState,
   writeReviewState,
-  claimRevision,
-  heartbeatClaim,
-  releaseClaim,
+  acquireReviewLease,
   isStateRunnable,
-  REVIEW_LEASE_HEARTBEAT_MS,
   type PullRequestReviewState,
   type PullRequestReviewOutputState,
-  type PullRequestReviewClaim,
+  type ReviewLease,
 } from "./pr-review-state.js";
 import {
   writeReviewInputArtifact,
@@ -597,6 +594,22 @@ export async function runPullRequestReview(opts: {
 
   const analysisArtifactRel = `.otto/runs/${runId}/analysis.json`;
 
+  // Run-scoped abort: fed by the caller's `signal` AND a stolen-lock compromise
+  // (wired once the lease is acquired, below). Passed to the analysis pass and
+  // checked before any remote write so a compromised run publishes nothing.
+  const runAbort = new AbortController();
+
+  /** No lease held (busy) or lost (compromised): produce NO analysis/output. */
+  const leaseLostResult = (): PullRequestReviewRunResult => ({
+    status: "skipped",
+    runId,
+    repository,
+    pullRequest,
+    headSha,
+    inputFingerprint,
+    costUsd: 0,
+  });
+
   /** Persist the durable per-composite-identity review state (best-effort). */
   const persistState = (
     over: Partial<PullRequestReviewState> &
@@ -670,6 +683,10 @@ export async function runPullRequestReview(opts: {
     art: PullRequestReviewAnalysisArtifact,
     startingOutputs: PullRequestReviewOutputState
   ): PullRequestReviewRunResult => {
+    // The lock was stolen (another process stale-recovered this identity) or the
+    // run was aborted: publish NOTHING so the identity is never double-reviewed.
+    if (runAbort.signal.aborted) return leaseLostResult();
+
     const outcome = art.outcome;
     const published = art.confirmed;
     const diffArtifactRel = art.diffArtifact;
@@ -975,6 +992,8 @@ export async function runPullRequestReview(opts: {
    * falls through to the normal analysis path.
    */
   const tryRemoteRecovery = (): PullRequestReviewRunResult | null => {
+    // A stolen/aborted lease must never reuse-and-republish a remote comment.
+    if (runAbort.signal.aborted) return null;
     if (requestedOutput !== "comment") return null;
     const github = commentClient();
     if (!github) return null;
@@ -1085,38 +1104,36 @@ export async function runPullRequestReview(opts: {
     };
   };
 
-  // --- Acquire the composite claim BEFORE writing run/input artifacts or a
-  //     worktree. A busy claim returns `skipped` with no analysis. Every
-  //     acquired path heartbeats (unref'd interval) and releases in `finally`.
-  const claimResult = claimRevision({
+  // --- Acquire the ownership-atomic composite lease BEFORE writing run/input
+  //     artifacts or a worktree. A busy (LIVE) lock returns `skipped` with no
+  //     analysis. proper-lockfile auto-refreshes the lock (no manual heartbeat);
+  //     `lease.compromised` fires if another process stale-recovers this
+  //     identity, in which case this run ABORTS and publishes nothing rather
+  //     than double-review. The lease is released in `finally`.
+  const leaseResult = await acquireReviewLease({
     workspaceDir,
     repository,
     pullRequest,
     headSha,
     inputFingerprint,
     runId,
-    now: deps.now(),
   });
-  if (!claimResult.acquired) {
-    return {
-      status: "skipped",
-      runId,
-      repository,
-      pullRequest,
-      headSha,
-      inputFingerprint,
-      costUsd: 0,
-    };
+  if (!leaseResult.acquired) {
+    return leaseLostResult();
   }
-  const claim: PullRequestReviewClaim = claimResult.claim;
-  const heartbeat = setInterval(() => {
-    try {
-      heartbeatClaim({ workspaceDir, claim, now: new Date() });
-    } catch {
-      /* best-effort */
-    }
-  }, REVIEW_LEASE_HEARTBEAT_MS);
-  heartbeat.unref?.();
+  const lease: ReviewLease = leaseResult.lease;
+
+  // Wire the caller's abort AND a stolen-lock (compromise) into one run-scoped
+  // signal: the analysis is cancelled and every remote-write path bails (see the
+  // guards at the top of finishPublication/tryRemoteRecovery).
+  if (signal?.aborted || lease.compromised.aborted) runAbort.abort();
+  else {
+    const onSourceAbort = () => {
+      if (!runAbort.signal.aborted) runAbort.abort();
+    };
+    signal?.addEventListener("abort", onSourceAbort, { once: true });
+    lease.compromised.addEventListener("abort", onSourceAbort, { once: true });
+  }
 
   try {
     // Resume a crashed/failed run from persisted analysis — never re-analyze.
@@ -1129,8 +1146,7 @@ export async function runPullRequestReview(opts: {
 
     return await runFreshReview();
   } finally {
-    clearInterval(heartbeat);
-    releaseClaim({ workspaceDir, claim });
+    await lease.release();
     if (worktree) worktree.cleanup();
   }
 
@@ -1310,7 +1326,8 @@ export async function runPullRequestReview(opts: {
           maxRetries,
           cooldownMs,
           tokenMode,
-          signal,
+          // Run-scoped: aborts on caller signal OR a stolen-lock compromise.
+          signal: runAbort.signal,
           agentId: activeAgentId,
           lenses: [...REVIEW_LENSES],
           lensStage: STAGES.prReviewLens,

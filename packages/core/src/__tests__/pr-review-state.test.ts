@@ -4,6 +4,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,12 +14,11 @@ import {
   reviewStatePath,
   readReviewState,
   writeReviewState,
-  claimRevision,
-  heartbeatClaim,
-  releaseClaim,
+  acquireReviewLease,
   isStateRunnable,
   REVIEW_LEASE_HEARTBEAT_MS,
   REVIEW_LEASE_STALE_MS,
+  type ReviewLease,
   type PullRequestReviewState,
 } from "../pr-review-state.js";
 
@@ -186,131 +186,138 @@ describe("writeReviewState / readReviewState", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Atomic claim / lease
+// Ownership-atomic advisory lease (proper-lockfile)
 // ---------------------------------------------------------------------------
 
-const claimOpts = (over: Record<string, unknown> = {}) => ({
+const leaseOpts = (over: Record<string, unknown> = {}) => ({
   workspaceDir: ws,
   repository: REPO,
   pullRequest: PR,
   headSha: HEAD,
   inputFingerprint: FP,
   runId: RUN,
-  pid: 1000,
-  now: T0,
   ...over,
 });
 
-describe("claimRevision", () => {
-  it("first exclusive create wins, a second live attempt is busy", () => {
-    const first = claimRevision(claimOpts());
-    expect(first.acquired).toBe(true);
+/** The lock directory proper-lockfile creates for a composite identity. */
+function lockDir(repository = REPO, pr = PR, head = HEAD, fp = FP): string {
+  return (
+    reviewStatePath(ws, repository, pr, head, fp).replace(/\.json$/, ".claim") +
+    ".lock"
+  );
+}
 
-    const second = claimRevision(claimOpts({ runId: "run-other" }));
-    expect(second.acquired).toBe(false);
-    if (!second.acquired) {
-      expect(second.reason).toBe("busy");
-      expect(second.claim.runId).toBe(RUN);
+/** Resolve once the signal aborts, or reject if it does not within `ms`. */
+function awaitAbort(signal: AbortSignal, ms: number): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("signal did not abort in time")),
+      ms
+    );
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true }
+    );
+  });
+}
+
+// Track leases acquired in a test so update timers are always torn down.
+let held: ReviewLease[] = [];
+afterEach(async () => {
+  for (const lease of held) await lease.release();
+  held = [];
+});
+async function acquire(over: Record<string, unknown> = {}) {
+  const res = await acquireReviewLease(leaseOpts(over));
+  if (res.acquired) held.push(res.lease);
+  return res;
+}
+
+describe("acquireReviewLease", () => {
+  it("acquires a free identity and creates its lock directory", async () => {
+    const res = await acquire();
+    expect(res.acquired).toBe(true);
+    if (res.acquired) {
+      expect(typeof res.lease.release).toBe("function");
+      expect(res.lease.compromised).toBeInstanceOf(AbortSignal);
+      expect(res.lease.compromised.aborted).toBe(false);
     }
+    expect(readdirSync(join(lockDir(), ".."))).toContain(`${FP}.claim.lock`);
   });
 
-  it("acquires independently for two fingerprints on the same head SHA", () => {
-    const a = claimRevision(claimOpts());
-    const b = claimRevision(
-      claimOpts({ inputFingerprint: "f".repeat(64), runId: "run-2" })
-    );
+  it("a second concurrent acquire on a LIVE lock is rejected as busy", async () => {
+    const first = await acquire();
+    expect(first.acquired).toBe(true);
+
+    const second = await acquireReviewLease(leaseOpts({ runId: "run-other" }));
+    expect(second.acquired).toBe(false);
+    if (!second.acquired) expect(second.reason).toBe("busy");
+  });
+
+  it("acquires independently for two fingerprints on the same head SHA", async () => {
+    const a = await acquire();
+    const b = await acquire({
+      inputFingerprint: "f".repeat(64),
+      runId: "run-2",
+    });
     expect(a.acquired).toBe(true);
     expect(b.acquired).toBe(true);
   });
 
-  it("keeps a fresh (<15 min) claim busy — it cannot be stolen", () => {
-    claimRevision(claimOpts());
-    const steal = claimRevision(claimOpts({ runId: "thief", now: at(14) }));
-    expect(steal.acquired).toBe(false);
-  });
+  it("recovers a STALE lock (crashed holder, no active refresh)", async () => {
+    // Simulate a crashed holder: a lock directory whose mtime is far in the
+    // past with nothing refreshing it (no in-memory updater).
+    mkdirSync(join(lockDir(), ".."), { recursive: true });
+    mkdirSync(lockDir());
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lockDir(), old, old);
 
-  it("recovers a >15-minute stale claim atomically", () => {
-    claimRevision(claimOpts());
-    const recovered = claimRevision(
-      claimOpts({ runId: "recoverer", now: at(16) })
-    );
+    const recovered = await acquire({ runId: "recoverer", staleMs: 2000 });
     expect(recovered.acquired).toBe(true);
-    if (recovered.acquired) {
-      expect(recovered.claim.runId).toBe("recoverer");
-      expect(recovered.claim.heartbeatAt).toBe(at(16).toISOString());
-    }
-    // No tombstone left behind.
-    const dir = join(reviewStatePath(ws, REPO, PR, HEAD, FP), "..");
-    expect(readdirSync(dir).some((e) => e.includes(".stale-"))).toBe(false);
   });
 
-  it("lets only one of two stale-recovery attempts acquire", () => {
-    claimRevision(claimOpts());
-    const first = claimRevision(claimOpts({ runId: "r1", now: at(16) }));
-    const second = claimRevision(claimOpts({ runId: "r2", now: at(16) }));
+  it("releasing frees the identity for the next acquirer", async () => {
+    const first = await acquireReviewLease(leaseOpts());
     expect(first.acquired).toBe(true);
-    // The first recovery installed a fresh claim, so the second sees it live.
-    expect(second.acquired).toBe(false);
-  });
+    if (!first.acquired) throw new Error("expected acquire");
 
-  it("rejects a bad runId before disk I/O", () => {
-    expect(() => claimRevision(claimOpts({ runId: "bad id!" }))).toThrow();
-  });
-});
-
-describe("heartbeatClaim", () => {
-  it("refreshes heartbeatAt only for a matching run ID", () => {
-    const acq = claimRevision(claimOpts());
-    if (!acq.acquired) throw new Error("expected acquire");
-
-    expect(
-      heartbeatClaim({ workspaceDir: ws, claim: acq.claim, now: at(14) })
-    ).toBe(true);
-
-    // A mismatched run ID is refused.
-    expect(
-      heartbeatClaim({
-        workspaceDir: ws,
-        claim: { ...acq.claim, runId: "nope" },
-        now: at(14),
-      })
-    ).toBe(false);
-
-    // The refresh kept the claim alive past what would otherwise be stale.
-    const busy = claimRevision(claimOpts({ runId: "thief", now: at(20) }));
+    // While held it is busy.
+    const busy = await acquireReviewLease(leaseOpts({ runId: "x" }));
     expect(busy.acquired).toBe(false);
-    if (!busy.acquired) {
-      expect(busy.claim.heartbeatAt).toBe(at(14).toISOString());
-    }
+
+    await first.lease.release();
+    // release is idempotent (safe to call again in a finally).
+    await first.lease.release();
+
+    const again = await acquire({ runId: "x" });
+    expect(again.acquired).toBe(true);
   });
 
-  it("returns false when there is no claim", () => {
-    const acq = claimRevision(claimOpts());
-    if (!acq.acquired) throw new Error("expected acquire");
-    releaseClaim({ workspaceDir: ws, claim: acq.claim });
-    expect(
-      heartbeatClaim({ workspaceDir: ws, claim: acq.claim, now: at(1) })
-    ).toBe(false);
+  it("rejects a bad runId before touching disk", async () => {
+    await expect(
+      acquireReviewLease(leaseOpts({ runId: "bad id!" }))
+    ).rejects.toThrow();
   });
-});
 
-describe("releaseClaim", () => {
-  it("removes only a matching claim", () => {
-    const acq = claimRevision(claimOpts());
-    if (!acq.acquired) throw new Error("expected acquire");
+  it("signals `compromised` when the lock is stolen out from under a holder", async () => {
+    // Hold the lock with a fast refresh so the theft is detected quickly.
+    const res = await acquire({ staleMs: 2000, updateMs: 1000 });
+    expect(res.acquired).toBe(true);
+    if (!res.acquired) throw new Error("expected acquire");
+    expect(res.lease.compromised.aborted).toBe(false);
 
-    expect(
-      releaseClaim({
-        workspaceDir: ws,
-        claim: { ...acq.claim, runId: "nope" },
-      })
-    ).toBe(false);
-    // Still held.
-    expect(claimRevision(claimOpts({ runId: "x" })).acquired).toBe(false);
+    // Another process stale-recovers us: the lock directory disappears.
+    rmSync(lockDir(), { recursive: true, force: true });
 
-    expect(releaseClaim({ workspaceDir: ws, claim: acq.claim })).toBe(true);
-    // Now free.
-    expect(claimRevision(claimOpts({ runId: "x" })).acquired).toBe(true);
+    // The auto-refresh notices (ENOENT) and fires the compromise signal — this
+    // is how a slow holder learns it must ABORT instead of clobbering.
+    await awaitAbort(res.lease.compromised, 4000);
+    expect(res.lease.compromised.aborted).toBe(true);
   });
 });
 

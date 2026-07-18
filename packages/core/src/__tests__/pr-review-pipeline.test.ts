@@ -29,7 +29,7 @@ import {
 } from "../pr-review-input.js";
 import type { PullRequestRevision } from "../pr-review.js";
 import { runPullRequestReview } from "../pr-review.js";
-import { claimRevision, readReviewState } from "../pr-review-state.js";
+import { acquireReviewLease, readReviewState } from "../pr-review-state.js";
 import {
   headMarker,
   inputMarker,
@@ -835,28 +835,70 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
   });
 
   it("(S3) a busy composite claim returns skipped without analysis", async () => {
-    // Another daemon already holds the lease for this identity.
-    const acq = claimRevision({
+    // Another daemon already holds the LIVE lease for this identity.
+    const acq = await acquireReviewLease({
       workspaceDir: fx.workspaceDir,
       repository: "acme/widget",
       pullRequest: 7,
       headSha: fx.headSha,
       inputFingerprint: fp(),
       runId: "other-daemon",
-      now: now(),
     });
     expect(acq.acquired).toBe(true);
-    const fake = makeFakeAnalyze({});
+    if (!acq.acquired) throw new Error("expected acquire");
+    try {
+      const fake = makeFakeAnalyze({});
+      const gh = makeCommentGithub({ current: () => fx.revision });
+      const res = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "comment" }),
+        deps: { analyze: fake.fn, github: gh.github, stdout, now },
+      });
+      expect(res.status).toBe("skipped");
+      expect(fake.invocationCount()).toBe(0);
+      expect(gh.calls.create).toBe(0);
+    } finally {
+      await acq.lease.release();
+    }
+  });
+
+  it("(S3b) a run whose lease is compromised mid-review publishes nothing (skipped)", async () => {
+    // Model proper-lockfile's onCompromised firing while the review is in
+    // flight: the run-scoped abort trips, so publication MUST be withheld — the
+    // recoverer that stole the lease is the one allowed to review this identity.
+    const controller = new AbortController();
+    const base = makeFakeAnalyze({
+      confirmed: [finding()],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+    });
+    let analyzed = 0;
+    const analyze: typeof base.fn = async (opts) => {
+      const out = await base.fn(opts);
+      analyzed++;
+      controller.abort(); // lease stolen: the shared signal aborts.
+      return out;
+    };
     const gh = makeCommentGithub({ current: () => fx.revision });
     const res = await runPullRequestReview({
       ...baseArgs(fx),
       reviewInput: resolvedInput(fx),
       config: makeConfig({ output: "comment" }),
-      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+      signal: controller.signal,
+      deps: { analyze, github: gh.github, stdout, now },
     });
+    expect(analyzed).toBe(1);
     expect(res.status).toBe("skipped");
-    expect(fake.invocationCount()).toBe(0);
+    // The decisive guarantee: NO remote review was published (no double-review).
     expect(gh.calls.create).toBe(0);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).not.toBe("succeeded");
   });
 
   it("(S4) a transient comment error is publish-failed with retryable + nextRetryAt", async () => {

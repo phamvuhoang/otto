@@ -13,19 +13,24 @@
  *    A new head SHA or a changed input fingerprint is a SEPARATE file, so
  *    force-push and changed review intent never overwrite prior history.
  *
- *  - {@link claimRevision}/{@link heartbeatClaim}/{@link releaseClaim}: an
- *    atomic advisory lease at the same composite path. Acquisition is a real
- *    exclusive create (`openSync(path, "wx")`), never a read-then-write race,
- *    so two daemons on the SAME workspace cannot both review one identity. A
- *    claim is refreshed every {@link REVIEW_LEASE_HEARTBEAT_MS} and considered
- *    STALE after {@link REVIEW_LEASE_STALE_MS} without a heartbeat; a stale
- *    lease is recovered by atomically renaming it to a unique tombstone (only
- *    the racer whose rename succeeds may then exclusively create the fresh
- *    lease) — again with no read-then-write window.
+ *  - {@link acquireReviewLease}: an OWNERSHIP-ATOMIC advisory lease at the same
+ *    composite path, backed by `proper-lockfile` (an mkdir-based advisory lock).
+ *    Acquisition is a real atomic `mkdir` of `<claim-path>.lock`, never a
+ *    read-then-write race, so two daemons on the SAME workspace cannot both
+ *    review one identity. The lock is auto-refreshed (mtime touch) roughly every
+ *    {@link REVIEW_LEASE_HEARTBEAT_MS} and considered STALE after
+ *    {@link REVIEW_LEASE_STALE_MS} without a refresh; a stale lock is recovered
+ *    by another acquirer with no read-then-write window. Crucially, when a slow
+ *    holder's lock is stolen by a stale-recovery, its refresh notices and the
+ *    lease's {@link ReviewLease.compromised} `AbortSignal` fires — that is how a
+ *    caller learns it MUST stop instead of clobbering the recoverer's fresh lock
+ *    (a plain `rename`/`unlink`-by-path cannot condition on the holder's token,
+ *    so it could not offer this guarantee).
  *
- * All timing is driven by an injected `now: Date`, so staleness and recovery
- * are deterministic in tests with no real clock or sleep. This module performs
- * NO GitHub, model, or pipeline I/O.
+ * The lease API is async because `proper-lockfile` is promise-based. Staleness
+ * timing is configurable per-call (used to keep tests fast and deterministic
+ * without real long sleeps). This module performs NO GitHub, model, or pipeline
+ * I/O.
  */
 
 import {
@@ -36,11 +41,11 @@ import {
   openSync,
   readFileSync,
   renameSync,
-  unlinkSync,
   writeSync,
   type Stats,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import lockfile from "proper-lockfile";
 import { parseReviewInputFingerprint } from "./pr-review-input.js";
 
 // ---------------------------------------------------------------------------
@@ -78,25 +83,27 @@ export type PullRequestReviewState = {
   updatedAt: string;
 };
 
-/** An acquired advisory lease over one composite identity. */
-export type PullRequestReviewClaim = {
-  repository: string;
-  pullRequest: number;
-  headSha: string;
-  inputFingerprint: string;
-  runId: string;
-  pid: number;
-  acquiredAt: string;
-  heartbeatAt: string;
+/**
+ * A held, ownership-atomic advisory lease over one composite identity.
+ *
+ * `compromised` fires exactly once if the underlying lock is stolen out from
+ * under this holder (a stale-recovery by another process, or the lock dir
+ * vanishing). The caller MUST treat that as "another process took over": abort
+ * the in-flight run and publish nothing rather than double-review. `release`
+ * frees the lock and is safe to call multiple times (e.g. in a `finally`).
+ */
+export type ReviewLease = {
+  release: () => Promise<void>;
+  readonly compromised: AbortSignal;
 };
 
-export type ClaimResult =
-  | { acquired: true; claim: PullRequestReviewClaim }
-  | { acquired: false; reason: "busy"; claim: PullRequestReviewClaim };
+export type ReviewLeaseResult =
+  | { acquired: true; lease: ReviewLease }
+  | { acquired: false; reason: "busy" };
 
 /** Refresh the lease at least this often while a review is in flight. */
 export const REVIEW_LEASE_HEARTBEAT_MS = 60_000;
-/** A lease with no heartbeat for this long is stale and may be recovered. */
+/** A lease with no refresh for this long is stale and may be recovered. */
 export const REVIEW_LEASE_STALE_MS = 15 * 60_000;
 
 // ---------------------------------------------------------------------------
@@ -226,25 +233,6 @@ function atomicWriteFile(path: string, body: string, suffix: string): void {
   renameSync(tmpPath, path);
 }
 
-/** Exclusive create (`wx`): fails with EEXIST if the file already exists. */
-function exclusiveWriteFile(path: string, body: string): boolean {
-  mkdirSync(dirname(path), { recursive: true });
-  let fd: number;
-  try {
-    fd = openSync(path, "wx");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
-    throw err;
-  }
-  try {
-    writeSync(fd, body);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  return true;
-}
-
 function statFile(path: string): Stats | null {
   try {
     const st = lstatSync(path);
@@ -370,194 +358,89 @@ export function readReviewState(
 // Atomic claim / lease
 // ---------------------------------------------------------------------------
 
-function parseClaim(path: string): PullRequestReviewClaim | null {
-  if (!statFile(path)) return null;
-  let raw: unknown;
-  try {
-    raw = JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return null;
-  }
-  if (typeof raw !== "object" || raw === null) return null;
-  const c = raw as PullRequestReviewClaim;
-  if (
-    typeof c.runId !== "string" ||
-    typeof c.heartbeatAt !== "string" ||
-    typeof c.acquiredAt !== "string" ||
-    Number.isNaN(Date.parse(c.heartbeatAt))
-  ) {
-    return null;
-  }
-  return c;
-}
-
-function isStale(claim: PullRequestReviewClaim, now: Date): boolean {
-  return now.getTime() - Date.parse(claim.heartbeatAt) >= REVIEW_LEASE_STALE_MS;
-}
-
 /**
- * Atomically acquire the advisory lease for a composite identity.
+ * Acquire the ownership-atomic advisory lease for a composite identity.
  *
- * A first-time acquire is a real exclusive create (`openSync(path, "wx")`). If
- * a live lease exists, returns `{ acquired: false, reason: "busy", claim }`. If
- * the existing lease is STALE (no heartbeat for {@link REVIEW_LEASE_STALE_MS}),
- * recovery is arbitrated by an atomic rename: the old lease is moved to a
- * tombstone UNIQUE to this caller's runId, so of two racing recoverers only the
- * one whose `renameSync` wins (the other gets ENOENT — the source is already
- * gone) may then exclusively create the fresh lease. There is never a
- * read-then-write window in which two callers both hold the lease.
+ * Backed by `proper-lockfile`: the lock resource is `<claim-path>.lock` (a
+ * directory whose atomic `mkdir` IS the acquire; there is no read-then-write
+ * window). Returns:
+ *
+ *  - `{ acquired: true, lease }` — we hold the lock. `proper-lockfile`
+ *    auto-refreshes the lock's mtime (~every {@link REVIEW_LEASE_HEARTBEAT_MS}),
+ *    replacing any manual heartbeat. `lease.compromised` is an `AbortSignal`
+ *    that fires if the lock is stolen from us (a stale-recovery by another
+ *    process, or the lock dir vanishing); the caller MUST abort on it.
+ *  - `{ acquired: false, reason: "busy" }` — a LIVE lock is already held
+ *    (ELOCKED). The caller treats this as `skipped` with no analysis.
+ *
+ * A STALE lock (no refresh for {@link REVIEW_LEASE_STALE_MS}, e.g. a crashed
+ * holder) is transparently recovered by `proper-lockfile` and acquired here.
+ *
+ * `staleMs`/`updateMs` override the staleness/refresh windows (used by tests to
+ * stay fast and deterministic without real long sleeps). `proper-lockfile`
+ * clamps `stale` to a 2s minimum and `update` to `[1s, stale/2]`.
  */
-export function claimRevision(opts: {
+export async function acquireReviewLease(opts: {
   workspaceDir: string;
   repository: string;
   pullRequest: number;
   headSha: string;
   inputFingerprint: string;
   runId: string;
-  pid?: number;
-  now?: Date;
-}): ClaimResult {
-  const {
-    workspaceDir,
-    repository,
-    pullRequest,
-    headSha,
-    inputFingerprint,
-    runId,
-  } = opts;
-  assertRunId(runId);
-  const path = reviewClaimPath(
-    workspaceDir,
-    repository,
-    pullRequest,
-    headSha,
-    inputFingerprint
+  staleMs?: number;
+  updateMs?: number;
+}): Promise<ReviewLeaseResult> {
+  assertRunId(opts.runId);
+  const claimPath = reviewClaimPath(
+    opts.workspaceDir,
+    opts.repository,
+    opts.pullRequest,
+    opts.headSha,
+    opts.inputFingerprint
   );
-  const now = opts.now ?? new Date();
-  const pid = opts.pid ?? process.pid;
+  // proper-lockfile mkdirs `<claimPath>.lock` but does NOT create parents, and
+  // the claim path itself may not pre-exist — ensure the composite directory is
+  // present so the atomic mkdir acquire can succeed.
+  mkdirSync(dirname(claimPath), { recursive: true });
 
-  const mkClaim = (): PullRequestReviewClaim => ({
-    repository,
-    pullRequest,
-    headSha,
-    inputFingerprint,
-    runId,
-    pid,
-    acquiredAt: now.toISOString(),
-    heartbeatAt: now.toISOString(),
-  });
-
-  // Fast path: exclusive create wins outright.
-  const fresh = mkClaim();
-  if (exclusiveWriteFile(path, JSON.stringify(fresh, null, 2))) {
-    return { acquired: true, claim: fresh };
-  }
-
-  // Someone holds it. Inspect liveness.
-  const existing = parseClaim(path);
-  if (existing && !isStale(existing, now)) {
-    return { acquired: false, reason: "busy", claim: existing };
-  }
-
-  // Stale (or unparseable) lease: arbitrate recovery via a unique tombstone.
-  const tombstone = `${path}.stale-${runId}`;
+  const controller = new AbortController();
+  let release: () => Promise<void>;
   try {
-    renameSync(path, tombstone);
-  } catch {
-    // Lost the race (another recoverer already moved it) OR it vanished. Re-read
-    // whatever is there now; treat a live claim as busy, absence as busy-ish.
-    const after = parseClaim(path);
-    if (after) return { acquired: false, reason: "busy", claim: after };
-    // The lease is momentarily gone but not ours to create safely; report busy
-    // using the last-known holder rather than risk a double acquire.
-    return {
-      acquired: false,
-      reason: "busy",
-      claim: existing ?? fresh,
-    };
+    release = await lockfile.lock(claimPath, {
+      realpath: false,
+      stale: opts.staleMs ?? REVIEW_LEASE_STALE_MS,
+      update: opts.updateMs ?? REVIEW_LEASE_HEARTBEAT_MS,
+      onCompromised: (err: Error) => {
+        // The lock was stolen (stale-recovered) or removed under us. Signal the
+        // holder to STOP — it must not clobber the recoverer's fresh lock.
+        if (!controller.signal.aborted) controller.abort(err);
+      },
+    });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ELOCKED") {
+      return { acquired: false, reason: "busy" };
+    }
+    throw err;
   }
 
-  // We own the rename; only we may now create the fresh lease.
-  try {
-    if (exclusiveWriteFile(path, JSON.stringify(fresh, null, 2))) {
-      return { acquired: true, claim: fresh };
-    }
-    // A third party created a lease in the tiny gap — respect it.
-    const after = parseClaim(path);
-    return {
-      acquired: false,
-      reason: "busy",
-      claim: after ?? fresh,
-    };
-  } finally {
-    // Always clean up our own tombstone.
-    try {
-      unlinkSync(tombstone);
-    } catch {
-      /* best-effort */
-    }
-  }
-}
-
-/**
- * Refresh a held lease's `heartbeatAt`. Succeeds only when the on-disk lease
- * still belongs to this claim's `runId` (a lease another process recovered is
- * never revived). Returns `false` if the lease is absent or owned by someone
- * else.
- */
-export function heartbeatClaim(opts: {
-  workspaceDir: string;
-  claim: PullRequestReviewClaim;
-  now?: Date;
-}): boolean {
-  const { workspaceDir, claim } = opts;
-  const now = opts.now ?? new Date();
-  const path = reviewClaimPath(
-    workspaceDir,
-    claim.repository,
-    claim.pullRequest,
-    claim.headSha,
-    claim.inputFingerprint
-  );
-  const existing = parseClaim(path);
-  if (!existing || existing.runId !== claim.runId) return false;
-  const updated: PullRequestReviewClaim = {
-    ...existing,
-    heartbeatAt: now.toISOString(),
+  let released = false;
+  const acquiredRelease = release;
+  return {
+    acquired: true,
+    lease: {
+      compromised: controller.signal,
+      release: async () => {
+        if (released) return;
+        released = true;
+        try {
+          await acquiredRelease();
+        } catch {
+          // Already released, or compromised (another process recovered a stale
+          // lock and now owns it). Nothing to free — never touch its lock.
+        }
+      },
+    },
   };
-  atomicWriteFile(
-    path,
-    JSON.stringify(updated, null, 2),
-    `${process.pid}-${claim.runId}`
-  );
-  return true;
-}
-
-/**
- * Release a held lease. Removes the on-disk lease only when it still belongs to
- * this claim's `runId`; returns `false` otherwise (never deletes a lease a
- * different process now holds).
- */
-export function releaseClaim(opts: {
-  workspaceDir: string;
-  claim: PullRequestReviewClaim;
-}): boolean {
-  const { workspaceDir, claim } = opts;
-  const path = reviewClaimPath(
-    workspaceDir,
-    claim.repository,
-    claim.pullRequest,
-    claim.headSha,
-    claim.inputFingerprint
-  );
-  const existing = parseClaim(path);
-  if (!existing || existing.runId !== claim.runId) return false;
-  try {
-    unlinkSync(path);
-  } catch {
-    return false;
-  }
-  return true;
 }
 
 // ---------------------------------------------------------------------------

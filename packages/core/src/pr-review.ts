@@ -78,6 +78,7 @@ import {
   inputMarker,
   renderCanonicalReview,
   renderReviewText,
+  reviewMarker,
   summaryMarker,
   writeCanonicalReview,
   type CanonicalReview,
@@ -832,69 +833,103 @@ export async function runPullRequestReview(opts: {
       config.githubReview &&
       !outputs.githubReview
     ) {
-      const github = reviewClient();
-      try {
-        if (!github) {
-          throw new GitHubPrError(
-            "github review output requires a GitHub client with viewer/listReviews/createReview capability",
-            "permission",
-            false
-          );
-        }
-        const receipt = publishFormalReview({ github, review: canonical });
-        outputs.githubReview = {
-          status: "succeeded",
-          reviewId: receipt.reviewId,
-        };
-        reviewId = receipt.reviewId;
-      } catch (err) {
-        const gerr =
-          err instanceof GitHubPrError
-            ? err
-            : new GitHubPrError(
-                `formal review publication failed: ${(err as Error).message}`,
-                "unknown",
-                false
-              );
-        const retryable = gerr.retryable;
-        const nextRetryAt = retryable
-          ? nextPublicationRetryAt(attempts, deps.now())
-          : undefined;
-        persistState({
-          status: "publish-failed",
-          analysisArtifact: analysisArtifactRel,
-          outputs,
-          attempts,
-          retryable,
-          ...(nextRetryAt ? { nextRetryAt } : {}),
-          error: gerr.message,
+      // Re-query the PR AGAIN immediately before this INDEPENDENT remote write.
+      // The summary comment above was gated by its own fresh reconcile and, on a
+      // publishable PR, has already been written; the formal review is a SEPARATE
+      // remote write and needs its OWN fresh gate. A head that advanced (or an
+      // eligibility loss) AFTER the comment but BEFORE the review must withhold
+      // the review as superseded/cancelled while preserving the comment receipt.
+      const preReview = deps.github.getPullRequest(repository, pullRequest);
+      const rec2 = reconcilePublication({
+        expected: revision,
+        current: preReview,
+        label: config.label,
+      });
+      if (!rec2.publishable) {
+        status = rec2.status;
+        staleReason = `${rec2.status}: ${rec2.reason}`;
+        supersededBy =
+          rec2.status === "superseded" ? preReview.headSha : undefined;
+        // Re-render the LOCAL canonical copy to record that the formal review was
+        // withheld due to the head/eligibility change (the already-published
+        // summary comment, valid under its own gate, is left untouched remotely).
+        const staleMarkdown = renderCanonicalReview({
+          ...canonical,
+          staleReason,
         });
-        finalizeManifest(
-          "publish-failed",
-          buildEvidence({
-            outcome,
-            confirmed: published.length,
-            rejected: art.rejected.length,
-            githubReview: false,
-            ...(commentId !== undefined ? { commentId } : {}),
-          }),
-          finalArtifacts
-        );
-        return {
-          status: "publish-failed",
+        writeCanonicalReview({
+          workspaceDir,
           runId,
-          repository,
-          pullRequest,
-          headSha,
-          inputFingerprint,
-          costUsd: manifestCost,
-          outcome,
-          reviewArtifact: written.artifactPath,
-          ...(commentId !== undefined ? { commentId } : {}),
-          retryable,
-          ...(nextRetryAt ? { nextRetryAt } : {}),
-          error: gerr.message,
-        };
+          markdown: staleMarkdown,
+          outputFile:
+            requestedOutput === "markdown" ? config.outputFile : undefined,
+        });
+        writeRunReport(workspaceDir, runId, staleMarkdown);
+      } else {
+        const github = reviewClient();
+        try {
+          if (!github) {
+            throw new GitHubPrError(
+              "github review output requires a GitHub client with viewer/listReviews/createReview capability",
+              "permission",
+              false
+            );
+          }
+          const receipt = publishFormalReview({ github, review: canonical });
+          outputs.githubReview = {
+            status: "succeeded",
+            reviewId: receipt.reviewId,
+          };
+          reviewId = receipt.reviewId;
+        } catch (err) {
+          const gerr =
+            err instanceof GitHubPrError
+              ? err
+              : new GitHubPrError(
+                  `formal review publication failed: ${(err as Error).message}`,
+                  "unknown",
+                  false
+                );
+          const retryable = gerr.retryable;
+          const nextRetryAt = retryable
+            ? nextPublicationRetryAt(attempts, deps.now())
+            : undefined;
+          persistState({
+            status: "publish-failed",
+            analysisArtifact: analysisArtifactRel,
+            outputs,
+            attempts,
+            retryable,
+            ...(nextRetryAt ? { nextRetryAt } : {}),
+            error: gerr.message,
+          });
+          finalizeManifest(
+            "publish-failed",
+            buildEvidence({
+              outcome,
+              confirmed: published.length,
+              rejected: art.rejected.length,
+              githubReview: false,
+              ...(commentId !== undefined ? { commentId } : {}),
+            }),
+            finalArtifacts
+          );
+          return {
+            status: "publish-failed",
+            runId,
+            repository,
+            pullRequest,
+            headSha,
+            inputFingerprint,
+            costUsd: manifestCost,
+            outcome,
+            reviewArtifact: written.artifactPath,
+            ...(commentId !== undefined ? { commentId } : {}),
+            retryable,
+            ...(nextRetryAt ? { nextRetryAt } : {}),
+            error: gerr.message,
+          };
+        }
       }
     }
 
@@ -963,6 +998,37 @@ export async function runPullRequestReview(opts: {
     }
     if (!owned) return null;
 
+    // Recovery may declare full success ONLY when every configured remote output
+    // is provably complete. With --github-review, a crash after the comment but
+    // before the formal review would otherwise let a later run find the comment,
+    // declare success, and PERMANENTLY skip the review. So when a formal review
+    // was requested, also require an owned review carrying THIS composite marker
+    // (same ownership predicate publishFormalReview uses: author === viewer).
+    let recoveredReviewId: number | undefined;
+    if (config.githubReview) {
+      const reviews = reviewClient();
+      if (!reviews) return null;
+      let ownedReview;
+      try {
+        const viewer = reviews.viewer();
+        const marker = reviewMarker(
+          repository,
+          pullRequest,
+          headSha,
+          inputFingerprint
+        );
+        ownedReview = reviews
+          .listReviews(repository, pullRequest)
+          .find((r) => r.author === viewer.login && r.body.includes(marker));
+      } catch {
+        return null;
+      }
+      // Comment present but the owned formal review is absent: do NOT declare
+      // success. Fall through so the normal analysis path completes the review.
+      if (!ownedReview) return null;
+      recoveredReviewId = ownedReview.id;
+    }
+
     // Persist the already-resolved exact input + the remote body as the
     // recovered run's local artifacts, then reconstruct succeeded state.
     try {
@@ -978,6 +1044,14 @@ export async function runPullRequestReview(opts: {
     writeRunReport(workspaceDir, runId, owned.body);
     const outputs: PullRequestReviewOutputState = {
       comment: { status: "succeeded", commentId: owned.id },
+      ...(recoveredReviewId !== undefined
+        ? {
+            githubReview: {
+              status: "succeeded" as const,
+              reviewId: recoveredReviewId,
+            },
+          }
+        : {}),
     };
     persistState({
       status: "succeeded",
@@ -986,7 +1060,13 @@ export async function runPullRequestReview(opts: {
     });
     finalizeManifest(
       "succeeded",
-      buildEvidence(),
+      recoveredReviewId !== undefined
+        ? buildEvidence({
+            githubReview: true,
+            commentId: owned.id,
+            reviewId: recoveredReviewId,
+          })
+        : buildEvidence(),
       artifactList([{ kind: "review", path: written.artifactPath }])
     );
     return {
@@ -999,6 +1079,9 @@ export async function runPullRequestReview(opts: {
       costUsd: 0,
       reviewArtifact: written.artifactPath,
       commentId: owned.id,
+      ...(recoveredReviewId !== undefined
+        ? { reviewId: recoveredReviewId }
+        : {}),
     };
   };
 

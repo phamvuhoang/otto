@@ -1356,6 +1356,171 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
     expect(gh.calls.createReview).toHaveLength(1);
     expect(gh.reviewStore).toHaveLength(1);
   });
+
+  it("(G7) a head that moves AFTER the comment write but BEFORE the formal review preserves the comment and withholds the review as superseded", async () => {
+    // The comment publishes under a fresh (original-head) gate; the head then
+    // advances before the formal review, whose OWN fresh gate must withhold it.
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const moved = "f".repeat(40);
+    let queries = 0;
+    const gh = makeReviewGithub({
+      current: () =>
+        ++queries === 1 ? fx.revision : { ...fx.revision, headSha: moved },
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    // The summary comment WAS validly published under the first fresh gate.
+    expect(gh.calls.createComment).toBe(1);
+    // The formal review is withheld — its own fresh gate saw the moved head.
+    expect(gh.calls.createReview).toHaveLength(0);
+    expect(res.status).toBe("superseded");
+    // The comment receipt is preserved in the returned result AND persisted state.
+    expect(res.commentId).toBeDefined();
+    expect(res.reviewId).toBeUndefined();
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("superseded");
+    expect(st?.outputs.comment?.status).toBe("succeeded");
+    expect(st?.outputs.comment?.commentId).toBe(res.commentId);
+    expect(st?.outputs.githubReview).toBeUndefined();
+    // Evidence records the supersession against the new head.
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(
+      (m.pullRequestReview as { supersededBy?: string }).supersededBy
+    ).toBe(moved);
+    expect((m.pullRequestReview as { commentId?: number }).commentId).toBe(
+      res.commentId
+    );
+  });
+
+  it("(G8) recovery does NOT declare success when --github-review is on but the owned formal review is absent (comment only)", async () => {
+    // Lost local state: an owned summary comment exists for this exact identity,
+    // but NO owned formal review. Recovery must fall through so the normal path
+    // runs analysis and completes the missing formal review.
+    const existingComment: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [existingComment],
+      reviews: [],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    // Recovery fell through: analysis ran and the missing review was completed.
+    expect(fake.invocationCount()).toBe(1);
+    expect(res.costUsd).toBeGreaterThan(0);
+    expect(gh.calls.createReview).toHaveLength(1);
+  });
+
+  it("(G9) recovery declares success with BOTH receipts when the owned comment AND owned formal review are present (cost 0, no analysis)", async () => {
+    const existingComment: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const existingReview: GitHubReview = {
+      id: 6161,
+      body: [
+        reviewMarker("acme/widget", 7, fx.headSha, fp()),
+        "",
+        "formal review body",
+      ].join("\n"),
+      author: "otto-bot",
+      commitId: fx.headSha,
+      state: "CHANGES_REQUESTED",
+    };
+    const fake = {
+      fn: async () => {
+        throw new Error("analysis must not run when both remote outputs exist");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [existingComment],
+      reviews: [existingReview],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.costUsd).toBe(0);
+    expect(res.commentId).toBe(4242);
+    expect(res.reviewId).toBe(6161);
+    // No new remote writes: both outputs were already complete.
+    expect(gh.calls.createReview).toHaveLength(0);
+    expect(gh.calls.createComment).toBe(0);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("succeeded");
+    expect(st?.outputs.comment?.commentId).toBe(4242);
+    expect(st?.outputs.githubReview?.reviewId).toBe(6161);
+  });
+
+  it("(G10) recovery still declares success from a comment alone when --github-review is OFF", async () => {
+    const existingComment: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when the comment already exists"
+        );
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [existingComment],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: false }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.costUsd).toBe(0);
+    expect(res.commentId).toBe(4242);
+    expect(gh.calls.createReview).toHaveLength(0);
+  });
 });
 
 // The critical Task-3 deferral closure: the REAL analyzeReview must supply LENS

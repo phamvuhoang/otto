@@ -205,15 +205,39 @@ describe("stage record I/O", () => {
   });
   it("round-trips skills used recorded on a stage record", () => {
     const d = tmp();
-    const skillsUsed = [{ name: "release-flow", version: "1.0.0", reasons: ["scope match"] }];
+    const skillsUsed = [
+      { name: "release-flow", version: "1.0.0", reasons: ["scope match"] },
+    ];
+    writeStageRecord(d, "rid", 0, { ...stageRecord, skillsUsed });
+    expect(readStageRecords(d, "rid")[0].skillsUsed).toEqual(skillsUsed);
+  });
+  it("round-trips an optional checksum on a skill usage record (P32 Task 6)", () => {
+    const d = tmp();
+    const skillsUsed = [
+      {
+        name: "builtin:otto-code-review",
+        version: "1",
+        source: "builtin",
+        stage: "pr-review",
+        checksum: "a".repeat(64),
+      },
+    ];
     writeStageRecord(d, "rid", 0, { ...stageRecord, skillsUsed });
     expect(readStageRecords(d, "rid")[0].skillsUsed).toEqual(skillsUsed);
   });
   it("round-trips reviewSeverity counts recorded on a stage record", () => {
     const d = tmp();
-    const reviewSeverity = { blocker: 1, major: 0, minor: 0, nit: 2, suppressed: 2 };
+    const reviewSeverity = {
+      blocker: 1,
+      major: 0,
+      minor: 0,
+      nit: 2,
+      suppressed: 2,
+    };
     writeStageRecord(d, "rid", 0, { ...stageRecord, reviewSeverity });
-    expect(readStageRecords(d, "rid")[0].reviewSeverity).toEqual(reviewSeverity);
+    expect(readStageRecords(d, "rid")[0].reviewSeverity).toEqual(
+      reviewSeverity
+    );
   });
   it("returns [] when the run has no stage records", () => {
     expect(readStageRecords(tmp(), "nope")).toEqual([]);

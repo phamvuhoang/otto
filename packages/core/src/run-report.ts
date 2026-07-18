@@ -78,6 +78,13 @@ export type SkillUsage = {
   stage?: string;
   /** Why retrieval selected it (so a run report can explain the choice). */
   reasons?: string[];
+  /**
+   * sha256 of the instruction body applied (issue #P32 Task 6). Optional so
+   * existing callers that never set it remain source-compatible; the P32
+   * PR-review skill selector always populates it for both the built-in and
+   * repo-skill sources so evidence is reproducible.
+   */
+  checksum?: string;
 };
 
 /**

@@ -717,6 +717,13 @@ export {
   type ReviewInputFs,
 } from "./pr-review-input.js";
 export {
+  BUILTIN_REVIEW_SKILL_NAME,
+  BUILTIN_REVIEW_SKILL_VERSION,
+  resolveReviewSkill,
+  ReviewSkillError,
+  type ReviewSkillSelection,
+} from "./pr-review-skill.js";
+export {
   findingToWire,
   parseReviewVerdicts,
   type Finding,

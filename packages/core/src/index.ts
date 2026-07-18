@@ -757,6 +757,21 @@ export {
   type PublishedReviewFinding,
 } from "./pr-review-output.js";
 export {
+  reviewStatePath,
+  readReviewState,
+  writeReviewState,
+  claimRevision,
+  heartbeatClaim,
+  releaseClaim,
+  isStateRunnable,
+  REVIEW_LEASE_HEARTBEAT_MS,
+  REVIEW_LEASE_STALE_MS,
+  type PullRequestReviewState,
+  type PullRequestReviewOutputState,
+  type PullRequestReviewClaim,
+  type ClaimResult,
+} from "./pr-review-state.js";
+export {
   findingToWire,
   parseReviewVerdicts,
   type Finding,

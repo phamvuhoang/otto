@@ -20,3 +20,5 @@ docs/ROADMAP.md
 # macOS Finder metadata
 .DS_Store
 .otto/runs/
+# Per-composite-identity PR review state + advisory leases (local runtime only)
+.otto/review-state/

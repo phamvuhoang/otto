@@ -285,6 +285,51 @@ export function renderCanonicalReview(review: CanonicalReview): string {
 }
 
 /**
+ * Render the body of a formal (native) GitHub review from the SAME
+ * {@link CanonicalReview} structure. The immutable composite formal marker
+ * `<!-- otto-review:owner/repo#pr@head:input -->` leads the body (it is the
+ * idempotency key the publisher reconciles on), and the three stable
+ * summary/head/input markers are dropped so only the composite one identifies
+ * the review. Every confirmed finding — mappable OR unmappable — remains in the
+ * body text, so a finding that could not be attached to an exact diff line is
+ * still surfaced; the publisher additionally attaches the mappable ones as
+ * inline comments. A formal review is only published for a non-stale revision,
+ * so no stale warning is ever part of this body.
+ */
+export function renderFormalReviewBody(review: CanonicalReview): string {
+  const composite = reviewMarker(
+    review.repository,
+    review.pullRequest,
+    review.headSha,
+    review.reviewInput.fingerprint
+  );
+  const drop = new Set([
+    summaryMarker(review.repository, review.pullRequest),
+    headMarker(review.headSha),
+    inputMarker(review.reviewInput.fingerprint),
+  ]);
+  const stripped = renderCanonicalReview(review)
+    .split("\n")
+    .filter((line) => !drop.has(line))
+    .join("\n");
+  return `${composite}\n${stripped}`;
+}
+
+/**
+ * Render one inline PR-review comment body for a mapped finding, in the fixed
+ * `**<severity>: <claim>**` / `<why>` / `Lens: <lens-or-unknown>` format.
+ */
+export function renderInlineComment(finding: PublishedReviewFinding): string {
+  return [
+    `**${finding.severity}: ${finding.claim}**`,
+    "",
+    finding.why,
+    "",
+    `Lens: ${finding.lens ?? "unknown"}`,
+  ].join("\n");
+}
+
+/**
  * Derive a concise terminal (text) form from the SAME {@link CanonicalReview}
  * structure — never a separately maintained rendering. Shows outcome, the
  * confirmed/rejected/suppressed counts, the run ID, and review-input

@@ -26,11 +26,25 @@
 
 import {
   GitHubPrError,
+  type CreateGitHubReviewInput,
   type GitHubComment,
   type GitHubPrClient,
+  type GitHubReview,
 } from "./github-pr.js";
-import { headMarker, inputMarker, summaryMarker } from "./pr-review-output.js";
-import { ineligibleReason, type PullRequestRevision } from "./pr-review.js";
+import {
+  headMarker,
+  inputMarker,
+  renderFormalReviewBody,
+  renderInlineComment,
+  reviewMarker,
+  summaryMarker,
+  type CanonicalReview,
+} from "./pr-review-output.js";
+import {
+  ineligibleReason,
+  type PullRequestReviewOutcome,
+  type PullRequestRevision,
+} from "./pr-review.js";
 
 // ---------------------------------------------------------------------------
 // Reconciliation
@@ -176,6 +190,124 @@ export function upsertSummaryComment(opts: {
 
   const updated = github.updateIssueComment(repository, existing.id, body);
   return { commentId: updated.id, action: "updated", body };
+}
+
+// ---------------------------------------------------------------------------
+// Formal (native) GitHub review
+// ---------------------------------------------------------------------------
+
+/** The outcome of a {@link publishFormalReview} call. */
+export type FormalReviewReceipt = {
+  reviewId: number;
+  action: "created" | "reused";
+  body: string;
+};
+
+/**
+ * The deterministic native-review event for a review outcome: any blocker/major
+ * requests changes, a minor/nit-only review comments, and a clean review
+ * approves — mirroring {@link outcomeForFindings}.
+ */
+export function githubReviewEvent(
+  outcome: PullRequestReviewOutcome
+): CreateGitHubReviewInput["event"] {
+  switch (outcome) {
+    case "changes-requested":
+      return "REQUEST_CHANGES";
+    case "comment":
+      return "COMMENT";
+    case "approved":
+      return "APPROVE";
+  }
+}
+
+/**
+ * Submit EXACTLY ONE formal GitHub review per `(repo, PR, headSha, input)`
+ * composite identity, idempotently by MARKER (never by locally remembered id):
+ *
+ *  - an owned review is one authored by `github.viewer().login` whose body
+ *    carries THIS composite {@link reviewMarker};
+ *  - zero owned reviews → CREATE one review (deterministic event, the composite
+ *    marker + provenance + every unmappable finding in the body, and one inline
+ *    comment per mappable finding at its exact path/line/side);
+ *  - exactly one owned review → REUSE it (no write) — this is what makes a
+ *    restart/retry never post a duplicate for the same composite identity;
+ *  - more than one owned review → a permanent {@link GitHubPrError} (a
+ *    reconciliation error, never an arbitrary reuse);
+ *  - a foreign copy of the composite marker (any other author) is ignored, and
+ *    an older head or a different input fingerprint is a DIFFERENT composite
+ *    marker string, so it never matches (a changed input intentionally permits
+ *    a new review on the same head).
+ *
+ * A create failure (e.g. GitHub refusing self-approval, HTTP 422) propagates as
+ * the underlying permanent {@link GitHubPrError}; the caller records it as a
+ * visible `publish-failed` without discarding any already-succeeded receipt.
+ */
+export function publishFormalReview(opts: {
+  github: Pick<GitHubPrClient, "viewer" | "listReviews" | "createReview">;
+  review: CanonicalReview;
+}): FormalReviewReceipt {
+  const { github, review } = opts;
+  const { repository, pullRequest, headSha } = review;
+  const marker = reviewMarker(
+    repository,
+    pullRequest,
+    headSha,
+    review.reviewInput.fingerprint
+  );
+  const viewer = github.viewer();
+  const reviews = github.listReviews(repository, pullRequest);
+
+  const owned: GitHubReview[] = reviews.filter(
+    (r) => r.author === viewer.login && r.body.includes(marker)
+  );
+
+  if (owned.length > 1) {
+    throw new GitHubPrError(
+      `found ${owned.length} Otto formal reviews carrying ${marker} on ` +
+        `${repository}#${pullRequest}; refusing to guess which represents this ` +
+        `review — remove the duplicates so a single owned review remains`,
+      "validation",
+      false
+    );
+  }
+
+  if (owned.length === 1) {
+    return { reviewId: owned[0].id, action: "reused", body: owned[0].body };
+  }
+
+  const body = renderFormalReviewBody(review);
+  const comments = review.confirmed
+    .filter(
+      (f) =>
+        f.inlineEligible &&
+        f.side !== undefined &&
+        typeof f.mappedLine === "number"
+    )
+    .map((f) => ({
+      path: normalizeCommentPath(f.file),
+      line: f.mappedLine as number,
+      side: f.side as "LEFT" | "RIGHT",
+      body: renderInlineComment(f),
+    }));
+
+  const created = github.createReview({
+    repository,
+    pullRequest,
+    commitId: headSha,
+    event: githubReviewEvent(review.outcome),
+    body,
+    comments,
+  });
+  return { reviewId: created.id, action: "created", body };
+}
+
+/** Strip a leading `./` (repeated) and a single `a/`/`b/` from a comment path. */
+function normalizeCommentPath(path: string): string {
+  let s = path;
+  while (s.startsWith("./")) s = s.slice(2);
+  if (s.startsWith("a/") || s.startsWith("b/")) s = s.slice(2);
+  return s;
 }
 
 // ---------------------------------------------------------------------------

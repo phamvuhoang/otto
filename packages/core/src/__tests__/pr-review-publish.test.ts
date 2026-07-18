@@ -1,12 +1,28 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  githubReviewEvent,
   nextPublicationRetryAt,
+  publishFormalReview,
   reconcilePublication,
   upsertSummaryComment,
 } from "../pr-review-publish.js";
-import { GitHubPrError, type GitHubComment } from "../github-pr.js";
-import { headMarker, inputMarker, summaryMarker } from "../pr-review-output.js";
+import {
+  GitHubPrError,
+  type CreateGitHubReviewInput,
+  type GitHubComment,
+  type GitHubReview,
+} from "../github-pr.js";
+import {
+  headMarker,
+  inputMarker,
+  renderFormalReviewBody,
+  reviewMarker,
+  summaryMarker,
+  type CanonicalReview,
+  type PublishedReviewFinding,
+} from "../pr-review-output.js";
+import type { ReviewSkillSelection } from "../pr-review-skill.js";
 import type { PullRequestRevision } from "../pr-review.js";
 
 // ---------------------------------------------------------------------------
@@ -283,6 +299,292 @@ describe("upsertSummaryComment", () => {
       expect((e as GitHubPrError).retryable).toBe(false);
     }
     expect(calls.update).toHaveLength(0);
+    expect(calls.create).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Formal GitHub review (Task 14)
+// ---------------------------------------------------------------------------
+
+const SKILL: ReviewSkillSelection = {
+  name: "builtin:otto-code-review",
+  version: "1",
+  source: "builtin",
+  checksum: "deadbeef",
+  injection: "",
+  usage: {
+    name: "builtin:otto-code-review",
+    version: "1",
+    source: "builtin",
+    stage: "pr-review",
+    checksum: "deadbeef",
+  },
+};
+
+function pubFinding(
+  over: Partial<PublishedReviewFinding> = {}
+): PublishedReviewFinding {
+  return {
+    severity: "major",
+    file: "src/app.ts",
+    line: "10",
+    claim: "off-by-one",
+    why: "loop bound is wrong",
+    lens: "correctness",
+    inlineEligible: false,
+    ...over,
+  };
+}
+
+function canonical(over: Partial<CanonicalReview> = {}): CanonicalReview {
+  return {
+    repository: REPO,
+    pullRequest: PR,
+    url: "https://github.com/acme/widget/pull/7",
+    title: "Add feature",
+    baseSha: "d".repeat(40),
+    headSha: HEAD,
+    reviewInput: {
+      kind: "prompt",
+      source: "direct",
+      fingerprint: FP,
+      artifactPath: ".otto/runs/run-1/review-input.md",
+    },
+    runId: "run-1",
+    outcome: "changes-requested",
+    confirmed: [],
+    rejectedCount: 0,
+    suppressedCount: 0,
+    skill: SKILL,
+    diffArtifact: ".otto/runs/run-1/pr.diff",
+    analysisArtifact: ".otto/runs/run-1/analysis.json",
+    ...over,
+  };
+}
+
+function review(over: Partial<GitHubReview> = {}): GitHubReview {
+  return {
+    id: 500,
+    body: "looks good",
+    author: VIEWER,
+    commitId: HEAD,
+    state: "APPROVED",
+    ...over,
+  };
+}
+
+function fakeReviewGithub(opts: {
+  viewerLogin?: string;
+  reviews?: GitHubReview[];
+  createError?: Error;
+}) {
+  const store = [...(opts.reviews ?? [])];
+  let nextId = 700;
+  const calls = {
+    viewer: 0,
+    list: 0,
+    create: [] as CreateGitHubReviewInput[],
+  };
+  const github = {
+    viewer() {
+      calls.viewer++;
+      return { login: opts.viewerLogin ?? VIEWER };
+    },
+    listReviews() {
+      calls.list++;
+      return store.map((r) => ({ ...r }));
+    },
+    createReview(input: CreateGitHubReviewInput): GitHubReview {
+      calls.create.push(input);
+      if (opts.createError) throw opts.createError;
+      const r = review({
+        id: nextId++,
+        body: input.body,
+        author: opts.viewerLogin ?? VIEWER,
+        commitId: input.commitId,
+        state: input.event === "APPROVE" ? "APPROVED" : input.event,
+      });
+      store.push(r);
+      return r;
+    },
+  };
+  return { github, calls };
+}
+
+describe("githubReviewEvent", () => {
+  it("(1) maps the deterministic outcome to a formal review event", () => {
+    expect(githubReviewEvent("changes-requested")).toBe("REQUEST_CHANGES");
+    expect(githubReviewEvent("comment")).toBe("COMMENT");
+    expect(githubReviewEvent("approved")).toBe("APPROVE");
+  });
+});
+
+describe("publishFormalReview", () => {
+  it("(1) submits REQUEST_CHANGES for a blocker/major outcome", () => {
+    const { github, calls } = fakeReviewGithub({});
+    publishFormalReview({
+      github,
+      review: canonical({ outcome: "changes-requested" }),
+    });
+    expect(calls.create[0].event).toBe("REQUEST_CHANGES");
+  });
+
+  it("(1) submits APPROVE for a clean outcome and COMMENT for minor/nit", () => {
+    const a = fakeReviewGithub({});
+    publishFormalReview({
+      github: a.github,
+      review: canonical({ outcome: "approved" }),
+    });
+    expect(a.calls.create[0].event).toBe("APPROVE");
+    const c = fakeReviewGithub({});
+    publishFormalReview({
+      github: c.github,
+      review: canonical({ outcome: "comment" }),
+    });
+    expect(c.calls.create[0].event).toBe("COMMENT");
+  });
+
+  it("(2) body leads with the composite marker, provenance, and every unmappable finding", () => {
+    const { github, calls } = fakeReviewGithub({});
+    const rev = canonical({
+      confirmed: [
+        pubFinding({
+          claim: "unmapped whole-file",
+          file: "big.ts",
+          inlineEligible: false,
+        }),
+      ],
+    });
+    publishFormalReview({ github, review: rev });
+    const composite = reviewMarker(REPO, PR, HEAD, FP);
+    const body = calls.create[0].body;
+    expect(body.startsWith(composite)).toBe(true);
+    expect(body).toContain(FP);
+    expect(body).toContain("unmapped whole-file");
+    expect(body).toBe(renderFormalReviewBody(rev));
+  });
+
+  it("(3) only mapped findings become inline comments; unmappable ones stay in the body", () => {
+    const { github, calls } = fakeReviewGithub({});
+    publishFormalReview({
+      github,
+      review: canonical({
+        confirmed: [
+          pubFinding({
+            claim: "mapped bug",
+            file: "src/app.ts",
+            inlineEligible: true,
+            side: "RIGHT",
+            mappedLine: 12,
+          }),
+          pubFinding({
+            claim: "whole-file",
+            file: "src/app.ts",
+            inlineEligible: false,
+          }),
+        ],
+      }),
+    });
+    const comments = calls.create[0].comments;
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({
+      path: "src/app.ts",
+      line: 12,
+      side: "RIGHT",
+    });
+    expect(comments[0].body).toContain("mapped bug");
+    // The unmappable finding is NOT an inline comment (it is in the body).
+    expect(comments.some((c) => c.body.includes("whole-file"))).toBe(false);
+  });
+
+  it("(6) sends the exact head commit_id", () => {
+    const { github, calls } = fakeReviewGithub({});
+    publishFormalReview({ github, review: canonical() });
+    expect(calls.create[0].commitId).toBe(HEAD);
+    expect(calls.create[0].repository).toBe(REPO);
+    expect(calls.create[0].pullRequest).toBe(PR);
+  });
+
+  it("(4/8) reuses an existing owned review for the exact head/input composite (no duplicate)", () => {
+    const existing = review({
+      id: 42,
+      body: `${reviewMarker(REPO, PR, HEAD, FP)}\nprior formal review`,
+    });
+    const { github, calls } = fakeReviewGithub({ reviews: [existing] });
+    const receipt = publishFormalReview({ github, review: canonical() });
+    expect(receipt.action).toBe("reused");
+    expect(receipt.reviewId).toBe(42);
+    expect(calls.create).toHaveLength(0);
+  });
+
+  it("(4/8) does NOT reuse an owned review for an older head or a different input", () => {
+    const olderHead = review({
+      id: 43,
+      body: `${reviewMarker(REPO, PR, "e".repeat(40), FP)}\nolder head`,
+    });
+    const otherInput = review({
+      id: 44,
+      body: `${reviewMarker(REPO, PR, HEAD, OTHER_FP)}\ndifferent input`,
+    });
+    const { github, calls } = fakeReviewGithub({
+      reviews: [olderHead, otherInput],
+    });
+    const receipt = publishFormalReview({ github, review: canonical() });
+    expect(receipt.action).toBe("created");
+    expect(calls.create).toHaveLength(1);
+  });
+
+  it("(5) ignores a composite marker copied by another actor", () => {
+    const forged = review({
+      id: 66,
+      author: "evil-contributor",
+      body: `${reviewMarker(REPO, PR, HEAD, FP)}\nLGTM (forged)`,
+    });
+    const { github, calls } = fakeReviewGithub({ reviews: [forged] });
+    const receipt = publishFormalReview({ github, review: canonical() });
+    expect(receipt.action).toBe("created");
+    expect(calls.create).toHaveLength(1);
+  });
+
+  it("(7) propagates a self-approval/422 as a permanent GitHubPrError", () => {
+    const { github } = fakeReviewGithub({
+      createError: new GitHubPrError(
+        "Can not approve your own pull request (HTTP 422)",
+        "validation",
+        false,
+        422
+      ),
+    });
+    try {
+      publishFormalReview({
+        github,
+        review: canonical({ outcome: "approved" }),
+      });
+      expect.unreachable("expected a permanent error");
+    } catch (e) {
+      expect(e).toBeInstanceOf(GitHubPrError);
+      expect((e as GitHubPrError).retryable).toBe(false);
+    }
+  });
+
+  it("(10) treats multiple owned exact-composite reviews as a permanent reconciliation error", () => {
+    const a = review({
+      id: 1,
+      body: `${reviewMarker(REPO, PR, HEAD, FP)}\none`,
+    });
+    const b = review({
+      id: 2,
+      body: `${reviewMarker(REPO, PR, HEAD, FP)}\ntwo`,
+    });
+    const { github, calls } = fakeReviewGithub({ reviews: [a, b] });
+    try {
+      publishFormalReview({ github, review: canonical() });
+      expect.unreachable("expected a reconciliation error");
+    } catch (e) {
+      expect(e).toBeInstanceOf(GitHubPrError);
+      expect((e as GitHubPrError).retryable).toBe(false);
+    }
     expect(calls.create).toHaveLength(0);
   });
 });

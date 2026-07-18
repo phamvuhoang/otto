@@ -30,8 +30,18 @@ import {
 import type { PullRequestRevision } from "../pr-review.js";
 import { runPullRequestReview } from "../pr-review.js";
 import { claimRevision, readReviewState } from "../pr-review-state.js";
-import { headMarker, inputMarker, summaryMarker } from "../pr-review-output.js";
-import { GitHubPrError, type GitHubComment } from "../github-pr.js";
+import {
+  headMarker,
+  inputMarker,
+  reviewMarker,
+  summaryMarker,
+} from "../pr-review-output.js";
+import {
+  GitHubPrError,
+  type CreateGitHubReviewInput,
+  type GitHubComment,
+  type GitHubReview,
+} from "../github-pr.js";
 import type { PullRequestReviewConfig } from "../review-cli.js";
 import type { ReviewAnalysisResult, ReviewSeverityCounts } from "../panel.js";
 import type { Finding } from "../review-severity.js";
@@ -1043,6 +1053,308 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
     // No second create/update — the successful output is never repeated.
     expect(gh.calls.create).toBe(1);
     expect(gh.calls.update).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice 3 (Task 14): exact diff mapping + formal GitHub reviews.
+// ---------------------------------------------------------------------------
+
+type ReviewGithub = {
+  github: {
+    getPullRequest: () => PullRequestRevision;
+    viewer: () => { login: string };
+    listReviews: () => GitHubReview[];
+    createReview: (input: CreateGitHubReviewInput) => GitHubReview;
+    listIssueComments: () => GitHubComment[];
+    createIssueComment: (r: string, n: number, b: string) => GitHubComment;
+    updateIssueComment: (r: string, id: number, b: string) => GitHubComment;
+  };
+  calls: {
+    getPr: number;
+    listReviews: number;
+    createReview: CreateGitHubReviewInput[];
+    createComment: number;
+  };
+  reviewStore: GitHubReview[];
+};
+
+function makeReviewGithub(opts: {
+  current: () => PullRequestRevision;
+  viewerLogin?: string;
+  reviews?: GitHubReview[];
+  comments?: GitHubComment[];
+  createReviewError?: Error;
+}): ReviewGithub {
+  const login = opts.viewerLogin ?? "otto-bot";
+  const reviewStore: GitHubReview[] = [...(opts.reviews ?? [])];
+  const commentStore: GitHubComment[] = [...(opts.comments ?? [])];
+  let nextReviewId = 6000;
+  let nextCommentId = 7000;
+  const calls = {
+    getPr: 0,
+    listReviews: 0,
+    createReview: [] as CreateGitHubReviewInput[],
+    createComment: 0,
+  };
+  const github = {
+    getPullRequest: () => {
+      calls.getPr++;
+      return opts.current();
+    },
+    viewer: () => ({ login }),
+    listReviews: () => {
+      calls.listReviews++;
+      return reviewStore.map((r) => ({ ...r }));
+    },
+    createReview: (input: CreateGitHubReviewInput): GitHubReview => {
+      calls.createReview.push(input);
+      if (opts.createReviewError) throw opts.createReviewError;
+      const r: GitHubReview = {
+        id: nextReviewId++,
+        body: input.body,
+        author: login,
+        commitId: input.commitId,
+        state: input.event === "APPROVE" ? "APPROVED" : input.event,
+      };
+      reviewStore.push(r);
+      return r;
+    },
+    listIssueComments: () => commentStore.map((c) => ({ ...c })),
+    createIssueComment: (_r: string, _n: number, body: string) => {
+      calls.createComment++;
+      const c: GitHubComment = {
+        id: nextCommentId++,
+        body,
+        author: login,
+        url: `https://github.com/acme/widget/issues/7#comment-${nextCommentId}`,
+      };
+      commentStore.push(c);
+      return c;
+    },
+    updateIssueComment: (_r: string, id: number, body: string) => {
+      const found = commentStore.find((c) => c.id === id);
+      if (!found) throw new Error(`no comment ${id}`);
+      found.body = body;
+      return { ...found };
+    },
+  };
+  return { github, calls, reviewStore };
+}
+
+describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
+  let fx: Fixture;
+  const out: string[] = [];
+  const stdout = (t: string): void => void out.push(t);
+  const now = () => new Date("2026-07-18T12:00:00.000Z");
+
+  beforeEach(() => {
+    fx = setupFixture();
+    out.length = 0;
+    mocks.executeStage.mockReset();
+    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const d of fx.cleanupDirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  const fp = () => resolvedInput(fx).fingerprint;
+
+  it("(G1) --github-review posts ONE formal review independently of text output (no summary comment)", async () => {
+    // The seed diff changes src/app.ts line 1, so a src/app.ts:1 finding maps
+    // to an exact RIGHT line → an inline comment.
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+    });
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    // Exactly one formal review, no summary comment (text is the primary output).
+    expect(gh.calls.createReview).toHaveLength(1);
+    expect(gh.calls.createComment).toBe(0);
+    const input = gh.calls.createReview[0];
+    expect(input.event).toBe("REQUEST_CHANGES");
+    expect(input.commitId).toBe(fx.headSha);
+    expect(
+      input.body.startsWith(reviewMarker("acme/widget", 7, fx.headSha, fp()))
+    ).toBe(true);
+    // The mapped finding is an inline comment at the exact head line.
+    expect(input.comments).toHaveLength(1);
+    expect(input.comments[0]).toMatchObject({
+      path: "src/app.ts",
+      line: 1,
+      side: "RIGHT",
+    });
+    // Receipt persisted; manifest evidence flags the formal review.
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.githubReview?.reviewId).toBe(gh.reviewStore[0].id);
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(
+      (m.pullRequestReview as { githubReview: boolean }).githubReview
+    ).toBe(true);
+    expect((m.pullRequestReview as { reviewId?: number }).reviewId).toBe(
+      gh.reviewStore[0].id
+    );
+  });
+
+  it("(G2) an unmappable finding stays in the review body, not an inline comment", async () => {
+    const fake = makeFakeAnalyze({
+      confirmed: [
+        finding({ file: "src/app.ts", line: "1", claim: "mapped bug" }),
+        finding({
+          file: "src/app.ts",
+          line: undefined,
+          claim: "whole file smell",
+        }),
+      ],
+      severity: { ...EMPTY_SEVERITY, major: 2 },
+    });
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    const input = gh.calls.createReview[0];
+    // Only the mapped finding is inline; the whole-file finding is in the body.
+    expect(input.comments).toHaveLength(1);
+    expect(input.comments[0].body).toContain("mapped bug");
+    expect(input.body).toContain("whole file smell");
+  });
+
+  it("(G3) a moved head at re-query is superseded and posts NO formal review", async () => {
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const gh = makeReviewGithub({
+      current: () => ({ ...fx.revision, headSha: "f".repeat(40) }),
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("superseded");
+    expect(gh.calls.createReview).toHaveLength(0);
+  });
+
+  it("(G4) GitHub refusing self-approval is a permanent publish-failed", async () => {
+    const fake = makeFakeAnalyze({ confirmed: [] }); // clean → APPROVE
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      createReviewError: new GitHubPrError(
+        "Can not approve your own pull request (HTTP 422)",
+        "validation",
+        false,
+        422
+      ),
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(false);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    expect(st?.outputs.githubReview).toBeUndefined();
+  });
+
+  it("(G5) a formal-review failure keeps an already-succeeded summary comment receipt intact", async () => {
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      createReviewError: new GitHubPrError(
+        "validation (HTTP 422)",
+        "validation",
+        false,
+        422
+      ),
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    // The summary comment succeeded and its receipt survives the review failure.
+    expect(gh.calls.createComment).toBe(1);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.comment?.status).toBe("succeeded");
+    expect(st?.outputs.githubReview).toBeUndefined();
+  });
+
+  it("(G6) restart with lost local state never posts a duplicate formal review", async () => {
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const fake1 = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const first = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: fake1.fn, github: gh.github, stdout, now },
+    });
+    expect(first.status).toBe("succeeded");
+    expect(gh.calls.createReview).toHaveLength(1);
+
+    // Simulate a crash that lost ALL local state (state + run bundle).
+    rmSync(join(fx.workspaceDir, ".otto", "review-state"), {
+      recursive: true,
+      force: true,
+    });
+    rmSync(join(fx.workspaceDir, ".otto", "runs"), {
+      recursive: true,
+      force: true,
+    });
+
+    // A second run re-analyzes (local proof gone) but the composite marker on the
+    // existing remote review means publishFormalReview REUSES it — no duplicate.
+    const fake2 = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const second = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: fake2.fn, github: gh.github, stdout, now },
+    });
+    expect(second.status).toBe("succeeded");
+    // Still exactly one formal review across BOTH runs.
+    expect(gh.calls.createReview).toHaveLength(1);
+    expect(gh.reviewStore).toHaveLength(1);
   });
 });
 

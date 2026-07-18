@@ -15,6 +15,8 @@ import {
   headMarker,
   inputMarker,
   renderCanonicalReview,
+  renderFormalReviewBody,
+  renderInlineComment,
   renderReviewText,
   reviewMarker,
   summaryMarker,
@@ -307,6 +309,95 @@ describe("renderReviewText", () => {
   it("also leads with the stale warning when staleReason is set", () => {
     const text = renderReviewText(baseReview({ staleReason: "stale" }));
     expect(text.startsWith("STALE")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderFormalReviewBody (Task 14)
+// ---------------------------------------------------------------------------
+
+describe("renderFormalReviewBody", () => {
+  const composite = reviewMarker("acme/widget", 123, HEAD_SHA, FINGERPRINT);
+
+  it("leads with the immutable composite formal marker", () => {
+    const body = renderFormalReviewBody(baseReview());
+    expect(body.startsWith(composite)).toBe(true);
+  });
+
+  it("drops the three stable summary/head/input markers in favour of the composite", () => {
+    const review = baseReview();
+    const body = renderFormalReviewBody(review);
+    expect(body).not.toContain(
+      summaryMarker(review.repository, review.pullRequest)
+    );
+    expect(body).not.toContain(headMarker(review.headSha));
+    expect(body).not.toContain(inputMarker(review.reviewInput.fingerprint));
+    // Exactly one composite marker.
+    expect(body.split(composite).length - 1).toBe(1);
+  });
+
+  it("renders review-input provenance/fingerprint", () => {
+    const body = renderFormalReviewBody(baseReview());
+    expect(body).toContain("prompt");
+    expect(body).toContain("direct");
+    expect(body).toContain(FINGERPRINT);
+  });
+
+  it("includes every confirmed finding — mappable and unmappable — in the body text", () => {
+    const review = baseReview({
+      confirmed: [
+        finding({
+          claim: "mapped-claim",
+          inlineEligible: true,
+          side: "RIGHT",
+          mappedLine: 10,
+        }),
+        finding({
+          claim: "unmapped-claim",
+          file: "bin.dat",
+          inlineEligible: false,
+        }),
+      ],
+    });
+    const body = renderFormalReviewBody(review);
+    expect(body).toContain("mapped-claim");
+    expect(body).toContain("unmapped-claim");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderInlineComment (Task 14)
+// ---------------------------------------------------------------------------
+
+describe("renderInlineComment", () => {
+  it("uses the fixed severity/claim/why/lens inline body format", () => {
+    const body = renderInlineComment(
+      finding({
+        severity: "blocker",
+        claim: "null deref",
+        why: "x may be undefined",
+        lens: "correctness",
+        inlineEligible: true,
+        side: "RIGHT",
+        mappedLine: 12,
+      })
+    );
+    expect(body).toBe(
+      [
+        "**blocker: null deref**",
+        "",
+        "x may be undefined",
+        "",
+        "Lens: correctness",
+      ].join("\n")
+    );
+  });
+
+  it("falls back to 'unknown' when the finding has no lens", () => {
+    const body = renderInlineComment(
+      finding({ lens: undefined, inlineEligible: true })
+    );
+    expect(body).toContain("Lens: unknown");
   });
 });
 

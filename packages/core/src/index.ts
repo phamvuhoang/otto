@@ -753,6 +753,8 @@ export {
   headMarker,
   inputMarker,
   renderCanonicalReview,
+  renderFormalReviewBody,
+  renderInlineComment,
   renderReviewText,
   reviewMarker,
   summaryMarker,
@@ -761,11 +763,22 @@ export {
   type PublishedReviewFinding,
 } from "./pr-review-output.js";
 export {
+  mapFindingToDiff,
+  mapFindingsToDiff,
+  normalizeFindingPath,
+  parseZeroContextDiff,
+  type DiffLine,
+  type DiffLineMap,
+} from "./pr-review-diff.js";
+export {
   reconcilePublication,
   upsertSummaryComment,
+  githubReviewEvent,
+  publishFormalReview,
   nextPublicationRetryAt,
   type PublicationReconciliation,
   type SummaryCommentReceipt,
+  type FormalReviewReceipt,
 } from "./pr-review-publish.js";
 export {
   reviewStatePath,

@@ -42,8 +42,10 @@ import { GitHubPrError, type GitHubPrClient } from "./github-pr.js";
 import {
   reconcilePublication,
   upsertSummaryComment,
+  publishFormalReview,
   nextPublicationRetryAt,
 } from "./pr-review-publish.js";
+import { mapFindingsToDiff } from "./pr-review-diff.js";
 import {
   readReviewState,
   writeReviewState,
@@ -205,6 +207,8 @@ export type PullRequestReviewRunResult = {
   reviewArtifact?: string;
   /** The published summary comment id (comment output mode only). */
   commentId?: number;
+  /** The published formal GitHub review id (--github-review only). */
+  reviewId?: number;
   /** For a `publish-failed` result: whether a bounded retry may recover. */
   retryable?: boolean;
   /** For a retryable `publish-failed` result: the next-eligible timestamp. */
@@ -295,6 +299,8 @@ export type PullRequestReviewDeps = {
         | "listIssueComments"
         | "createIssueComment"
         | "updateIssueComment"
+        | "listReviews"
+        | "createReview"
       >
     >;
   analyze: typeof analyzeReview;
@@ -422,6 +428,9 @@ export async function runPullRequestReview(opts: {
       reviewArtifact: `.otto/runs/${priorState.runId}/review.md`,
       ...(priorState.outputs.comment
         ? { commentId: priorState.outputs.comment.commentId }
+        : {}),
+      ...(priorState.outputs.githubReview
+        ? { reviewId: priorState.outputs.githubReview.reviewId }
         : {}),
       ...(priorState.retryable !== undefined
         ? { retryable: priorState.retryable }
@@ -630,6 +639,22 @@ export async function runPullRequestReview(opts: {
     return null;
   };
 
+  /** The formal-review methods, present only when --github-review is on. */
+  const reviewClient = (): Pick<
+    GitHubPrClient,
+    "viewer" | "listReviews" | "createReview"
+  > | null => {
+    const g = deps.github;
+    if (g.viewer && g.listReviews && g.createReview) {
+      return {
+        viewer: g.viewer.bind(g),
+        listReviews: g.listReviews.bind(g),
+        createReview: g.createReview.bind(g),
+      };
+    }
+    return null;
+  };
+
   /**
    * Turn a persisted analysis into published output(s). Re-queries the PR
    * IMMEDIATELY before any remote write (reconcilePublication): a moved head or
@@ -795,6 +820,84 @@ export async function runPullRequestReview(opts: {
       else deps.stdout(renderReviewText(canonical));
     }
 
+    // --github-review is an ADDITIONAL, INDEPENDENT receipt: a harness-owned
+    // formal GitHub review submitted once per composite identity, only after the
+    // same passing reconcile, and never re-submitted once succeeded. Its marker
+    // reconciliation (publishFormalReview) keeps a restart from ever posting a
+    // duplicate. A prior succeeded summary comment receipt is left intact when a
+    // formal-review write fails.
+    let reviewId: number | undefined = outputs.githubReview?.reviewId;
+    if (
+      status === "succeeded" &&
+      config.githubReview &&
+      !outputs.githubReview
+    ) {
+      const github = reviewClient();
+      try {
+        if (!github) {
+          throw new GitHubPrError(
+            "github review output requires a GitHub client with viewer/listReviews/createReview capability",
+            "permission",
+            false
+          );
+        }
+        const receipt = publishFormalReview({ github, review: canonical });
+        outputs.githubReview = {
+          status: "succeeded",
+          reviewId: receipt.reviewId,
+        };
+        reviewId = receipt.reviewId;
+      } catch (err) {
+        const gerr =
+          err instanceof GitHubPrError
+            ? err
+            : new GitHubPrError(
+                `formal review publication failed: ${(err as Error).message}`,
+                "unknown",
+                false
+              );
+        const retryable = gerr.retryable;
+        const nextRetryAt = retryable
+          ? nextPublicationRetryAt(attempts, deps.now())
+          : undefined;
+        persistState({
+          status: "publish-failed",
+          analysisArtifact: analysisArtifactRel,
+          outputs,
+          attempts,
+          retryable,
+          ...(nextRetryAt ? { nextRetryAt } : {}),
+          error: gerr.message,
+        });
+        finalizeManifest(
+          "publish-failed",
+          buildEvidence({
+            outcome,
+            confirmed: published.length,
+            rejected: art.rejected.length,
+            githubReview: false,
+            ...(commentId !== undefined ? { commentId } : {}),
+          }),
+          finalArtifacts
+        );
+        return {
+          status: "publish-failed",
+          runId,
+          repository,
+          pullRequest,
+          headSha,
+          inputFingerprint,
+          costUsd: manifestCost,
+          outcome,
+          reviewArtifact: written.artifactPath,
+          ...(commentId !== undefined ? { commentId } : {}),
+          retryable,
+          ...(nextRetryAt ? { nextRetryAt } : {}),
+          error: gerr.message,
+        };
+      }
+    }
+
     persistState({
       status: status === "succeeded" ? "succeeded" : status,
       analysisArtifact: analysisArtifactRel,
@@ -807,6 +910,9 @@ export async function runPullRequestReview(opts: {
         outcome,
         confirmed: published.length,
         rejected: art.rejected.length,
+        githubReview: outputs.githubReview !== undefined,
+        ...(commentId !== undefined ? { commentId } : {}),
+        ...(reviewId !== undefined ? { reviewId } : {}),
         ...(supersededBy ? { supersededBy } : {}),
       }),
       finalArtifacts
@@ -822,6 +928,7 @@ export async function runPullRequestReview(opts: {
       outcome,
       reviewArtifact: written.artifactPath,
       ...(commentId !== undefined ? { commentId } : {}),
+      ...(reviewId !== undefined ? { reviewId } : {}),
     };
   };
 
@@ -1204,12 +1311,13 @@ export async function runPullRequestReview(opts: {
       //    the analysisArtifact reference — persisted BEFORE any output so a crash
       //    between here and publication resumes from `analysis.json` (no re-pay).
       const outcome = outcomeForFindings(analysis.confirmed);
-      const published: PublishedReviewFinding[] = analysis.confirmed.map(
-        (f) => ({
-          ...f,
-          inlineEligible: false,
-        })
-      );
+      // Map + persist the exact diff placement of each confirmed finding when a
+      // formal review was requested, so publication (now or on a later restart)
+      // reads the mappings from analysis.json and never recomputes from a
+      // different diff. Non-review runs keep every finding body-only.
+      const published: PublishedReviewFinding[] = config.githubReview
+        ? mapFindingsToDiff(analysis.confirmed, wt.diffText)
+        : analysis.confirmed.map((f) => ({ ...f, inlineEligible: false }));
       const analysisArtifact: PullRequestReviewAnalysisArtifact = {
         schemaVersion: 1,
         repository,

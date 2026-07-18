@@ -321,6 +321,16 @@ describe("runReview", () => {
       expect(err.join("")).toMatch(/closed|draft|unlabell?ed/i);
       expect(err.join("")).toMatch(/no.*output.*published/i);
     });
+
+    it("skipped exits 0 and states another process is already reviewing", async () => {
+      const { deps } = makeDeps({
+        runOne: vi.fn(async () => okResult({ status: "skipped" })) as never,
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(exitCode).toBeNull();
+      expect(err.join("")).toMatch(/already.*reviewing/i);
+      expect(err.join("")).toMatch(/no work was done/i);
+    });
   });
 
   describe("one-shot PR eligibility gate", () => {

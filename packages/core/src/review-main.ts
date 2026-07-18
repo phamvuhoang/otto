@@ -340,6 +340,9 @@ export async function runReview(
   //                     against a stale head is correct, not a failure.
   //   cancelled      -> 0: the PR became closed/draft/unlabelled mid-run;
   //                     declining to publish is correct, not a failure.
+  //   skipped        -> 0: another process already holds the review lease for
+  //                     this revision; no analysis ran and no output was
+  //                     published.
   if (result.status === "publish-failed") {
     const retryNote = result.retryable
       ? ` (will be retried${result.nextRetryAt ? ` at ${result.nextRetryAt}` : ""})`
@@ -365,6 +368,13 @@ export async function runReview(
   if (result.status === "cancelled") {
     deps.stderr(
       `review declined: the PR was closed, drafted, or unlabelled during the run — no remote output was published\n`
+    );
+    return;
+  }
+
+  if (result.status === "skipped") {
+    deps.stderr(
+      `review skipped: another process is already reviewing this revision — no work was done\n`
     );
     return;
   }

@@ -20,12 +20,19 @@
  *    review one identity. The lock is auto-refreshed (mtime touch) roughly every
  *    {@link REVIEW_LEASE_HEARTBEAT_MS} and considered STALE after
  *    {@link REVIEW_LEASE_STALE_MS} without a refresh; a stale lock is recovered
- *    by another acquirer with no read-then-write window. Crucially, when a slow
- *    holder's lock is stolen by a stale-recovery, its refresh notices and the
- *    lease's {@link ReviewLease.compromised} `AbortSignal` fires — that is how a
- *    caller learns it MUST stop instead of clobbering the recoverer's fresh lock
- *    (a plain `rename`/`unlink`-by-path cannot condition on the holder's token,
- *    so it could not offer this guarantee).
+ *    by another acquirer with no read-then-write window. When a slow holder's
+ *    lock is stolen by a stale-recovery, the lease's
+ *    {@link ReviewLease.compromised} `AbortSignal` fires — but only on the
+ *    holder's NEXT auto-refresh tick (`proper-lockfile`'s update timer issues
+ *    an `fs.stat` roughly every {@link REVIEW_LEASE_HEARTBEAT_MS} to notice
+ *    the steal), not synchronously with the steal itself. That leaves a
+ *    residual sub-second window in which the old holder hasn't yet noticed.
+ *    This window is NOT closed by the lock; it is backstopped by the
+ *    pipeline: every remote write re-queries and reconciles state immediately
+ *    before writing, and publication is marker-idempotent (a marker-owned
+ *    comment upsert, plus `author === viewer` reconciliation before a formal
+ *    GitHub review is filed) — so even a stale holder that races past its own
+ *    abort cannot produce a duplicate remote artifact.
  *
  * The lease API is async because `proper-lockfile` is promise-based. Staleness
  * timing is configurable per-call (used to keep tests fast and deterministic
@@ -455,7 +462,7 @@ export async function acquireReviewLease(opts: {
  *  - `succeeded` → not runnable (done);
  *  - `analysis-failed`/`publish-failed` → runnable only if `retryable` and
  *    `now >= nextRetryAt`; a permanent (non-retryable) failure is terminal;
- *  - `running` → runnable (a possibly-crashed run; {@link claimRevision}
+ *  - `running` → runnable (a possibly-crashed run; {@link acquireReviewLease}
  *    decides whether it is actually free or still leased);
  *  - `superseded`/`cancelled` → runnable (the same composite identity may be
  *    reviewed again once eligible).

@@ -34,6 +34,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeSync,
 } from "node:fs";
@@ -102,12 +103,38 @@ function runGit(
   }
 }
 
+/**
+ * Capture git stdout WITHOUT trimming, for byte-exact artifacts (the diff). The
+ * default runner `.trim()`s — correct for SHA/refname/status outputs where
+ * trailing whitespace is noise, but it would silently drop significant tail
+ * bytes of a patch (a `--binary` hunk's terminating blank line, or a final
+ * added line ending in whitespace). This preserves the exact bytes git emits.
+ * Still literal argv (no shell), still fails closed on a non-zero exit.
+ */
+function runGitRaw(args: readonly string[], cwd: string, what: string): string {
+  try {
+    return execFileSync("git", [...args], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new PullRequestWorktreeError(`${what} failed: ${detail}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Validation (all BEFORE any mutation)
 // ---------------------------------------------------------------------------
 
 const RUN_ID_RE = /^[A-Za-z0-9._-]+$/;
 const SHA_RE = /^[0-9a-fA-F]{40,64}$/;
+// Permissive but safe branch-refname shape: real branch names use slashes,
+// dots, hyphens, and underscores (e.g. `feature/foo-bar`). Rejects whitespace,
+// shell metacharacters, and control bytes early — before the fetch mutation —
+// even though the object-ID gate would also catch a bogus ref later.
+const BASE_REF_NAME_RE = /^[A-Za-z0-9._/-]+$/;
 
 function validateRunId(runId: string): void {
   if (runId === "." || runId === ".." || !RUN_ID_RE.test(runId)) {
@@ -121,6 +148,20 @@ function validateSha(label: string, sha: string): void {
   if (!SHA_RE.test(sha)) {
     throw new PullRequestWorktreeError(
       `${label} must be 40-64 hex characters, got: ${JSON.stringify(sha)}`
+    );
+  }
+}
+
+function validateBaseRefName(name: string): void {
+  if (
+    name === "" ||
+    name === "." ||
+    name === ".." ||
+    name.includes("..") ||
+    !BASE_REF_NAME_RE.test(name)
+  ) {
+    throw new PullRequestWorktreeError(
+      `invalid base ref name: ${JSON.stringify(name)}`
     );
   }
 }
@@ -182,7 +223,7 @@ export function prepareReviewLocalExcludes(
     closeSync(fd);
   }
   // rename is atomic on the same filesystem.
-  execFileSync("mv", [tmp, excludePath]);
+  renameSync(tmp, excludePath);
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +368,7 @@ function atomicWrite(path: string, body: string): void {
   } finally {
     closeSync(fd);
   }
-  execFileSync("mv", [tmp, path]);
+  renameSync(tmp, path);
 }
 
 /**
@@ -350,6 +391,7 @@ export function createPullRequestWorktree(opts: {
   // --- Validate everything BEFORE any mutation. ---
   validateRunId(runId);
   validateNumber(revision.number);
+  validateBaseRefName(revision.baseRefName);
   validateSha("baseSha", revision.baseSha);
   validateSha("headSha", revision.headSha);
 
@@ -439,9 +481,10 @@ export function createPullRequestWorktree(opts: {
     const artifactDir = join(worktreeDir, ".otto-tmp", "pr-review");
     mkdirSync(artifactDir, { recursive: true });
 
-    // Exact unified diff (base...head three-dot).
-    const diffText = runGit(
-      run,
+    // Exact unified diff (base...head three-dot). Captured RAW (untrimmed) so
+    // every byte git emits — including the terminating newline and any
+    // trailing-whitespace content — is preserved verbatim in the artifact.
+    const diffText = runGitRaw(
       [
         "-c",
         "core.quotePath=false",

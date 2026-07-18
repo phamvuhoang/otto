@@ -703,6 +703,20 @@ export {
   type PullRequestReviewOutcome,
 } from "./pr-review.js";
 export {
+  parseSpecIssueRef,
+  parseReviewInputFingerprint,
+  reviewInputFingerprint,
+  resolveReviewInput,
+  renderReviewInputArtifact,
+  writeReviewInputArtifact,
+  readReviewInputArtifact,
+  ReviewInputError,
+  type ResolvedReviewInput,
+  type ReviewInputSnapshot,
+  type ReviewInputErrorKind,
+  type ReviewInputFs,
+} from "./pr-review-input.js";
+export {
   findingToWire,
   parseReviewVerdicts,
   type Finding,

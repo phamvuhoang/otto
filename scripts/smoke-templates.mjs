@@ -23,10 +23,26 @@ writeFileSync(join(gitFixture, "README.md"), "# smoke fixture\n");
 git(["add", "."]);
 git(["commit", "-q", "-m", "fixture commit"]);
 
+// Shared P32 pr-review vars (the common contract + lens/verify interpolations).
+const prReviewVars = {
+  REPO_INSTRUCTIONS_PATH: "/trusted/AGENTS.md",
+  BASE_SHA: "aaaaaaa",
+  HEAD_SHA: "bbbbbbb",
+  DIFF_PATH: "./.otto-tmp/head.diff",
+  REVIEW_INPUT_PATH: "./.otto-tmp/review-input.md",
+  LENS: "correctness",
+  REVIEW_CONTEXT: "PR #123: fix the widget",
+  CANDIDATE_FINDINGS:
+    "major | src/a.ts:12 | null deref | branch can return null",
+};
+
 const cases = [
   { name: "afk.md", inputs: "tracer bullet: hello world" },
   { name: "ghafk.md", inputs: "" },
   { name: "review.md", inputs: "" },
+  { name: "pr-review.md", inputs: "", vars: prReviewVars },
+  { name: "pr-review-lens.md", inputs: "", vars: prReviewVars },
+  { name: "pr-review-verify.md", inputs: "", vars: prReviewVars },
 ];
 
 let failures = 0;
@@ -38,7 +54,7 @@ const check = (name, cond, detail) => {
   }
 };
 
-for (const { name, inputs } of cases) {
+for (const { name, inputs, vars = {} } of cases) {
   const work = mkdtempSync(
     join(tmpdir(), `otto-smoke-${name.replace(".md", "")}-`)
   );
@@ -48,7 +64,7 @@ for (const { name, inputs } of cases) {
   try {
     const out = renderTemplate(
       join(tplDir, name),
-      { INPUTS: inputs },
+      { INPUTS: inputs, ...vars },
       { cwd: gitFixture, spillHostDir, spillRefPath }
     );
     const tokensApprox = Math.round(out.length / 4);
@@ -87,6 +103,41 @@ for (const { name, inputs } of cases) {
       check(
         `${name}: INPUTS substituted`,
         out.includes("tracer bullet: hello world")
+      );
+    }
+    if (name.startsWith("pr-review")) {
+      // The common contract is present (inline for pr-review.md; @include'd for
+      // the lens/verify templates), with its base-revision vars substituted.
+      check(
+        `${name}: contract priority line present`,
+        out.includes("Repository instructions, this contract")
+      );
+      check(
+        `${name}: REPO_INSTRUCTIONS_PATH substituted`,
+        out.includes("/trusted/AGENTS.md")
+      );
+      check(
+        `${name}: BASE...HEAD range substituted`,
+        out.includes("aaaaaaa...bbbbbbb")
+      );
+    }
+    if (name === "pr-review-lens.md") {
+      check(`${name}: LENS substituted`, out.includes("correctness lens"));
+      check(
+        `${name}: REVIEW_CONTEXT substituted`,
+        out.includes("PR #123: fix the widget")
+      );
+      check(`${name}: has SKIP sentinel`, out.includes("<lens>SKIP</lens>"));
+    }
+    if (name === "pr-review-verify.md") {
+      check(
+        `${name}: CANDIDATE_FINDINGS substituted`,
+        out.includes("null deref")
+      );
+      check(
+        `${name}: does not write verdicts.md`,
+        !out.includes("verdicts.md") ||
+          out.includes("Do **not** write `verdicts.md`")
       );
     }
   } catch (e) {

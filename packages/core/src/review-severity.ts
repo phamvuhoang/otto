@@ -17,7 +17,12 @@ export type Finding = {
 };
 
 const ORDER: Severity[] = ["blocker", "major", "minor", "nit"];
-const RANK: Record<Severity, number> = { blocker: 0, major: 1, minor: 2, nit: 3 };
+const RANK: Record<Severity, number> = {
+  blocker: 0,
+  major: 1,
+  minor: 2,
+  nit: 3,
+};
 
 function asSeverity(token: string): Severity | null {
   const t = token.trim().toLowerCase();
@@ -46,7 +51,15 @@ export function parseFindings(
     const m = fileRaw.match(/^(.*?):(\d+(?:-\d+)?)$/);
     const file = m ? m[1] : fileRaw;
     const line = m ? m[2] : undefined;
-    findings.push({ severity, file, line, claim, why, suggestedFix: fix, lens });
+    findings.push({
+      severity,
+      file,
+      line,
+      claim,
+      why,
+      suggestedFix: fix,
+      lens,
+    });
   }
   return { findings, dropped };
 }
@@ -100,6 +113,139 @@ export function severityCounts(
   for (const f of findings) counts[f.severity]++;
   counts.suppressed = suppressLowValue(findings).suppressed;
   return counts;
+}
+
+/** Serialize a finding to its wire line: `SEVERITY | file:line | claim | why | fix?`
+ *  (the trailing `| fix` is omitted when there is no suggested fix, and the
+ *  `:line` segment is omitted when the finding has no line). Inverse of
+ *  `parseFindings` for a single finding — used to write the merged findings file
+ *  the verifier reads and, in tests, to build verifier wire input. */
+export function findingToWire(f: Finding): string {
+  const loc = f.line ? `${f.file}:${f.line}` : f.file;
+  const head = `${f.severity} | ${loc} | ${f.claim} | ${f.why}`;
+  return f.suggestedFix ? `${head} | ${f.suggestedFix}` : head;
+}
+
+/** Parsed verifier verdicts, mapped back onto the candidate findings. `confirmed`
+ *  is ranked (blocker first, stable within a tier); `rejected` keeps candidate
+ *  order. `errors` is non-empty when ANY row is malformed, duplicated, unmatched,
+ *  severity-mismatched, or when a candidate never received a verdict. */
+export type ReviewVerdictParse = {
+  confirmed: Finding[];
+  rejected: Finding[];
+  errors: string[];
+};
+
+/** Split a `file` or `file:line`/`file:start-end` token into its parts. */
+function parseVerdictLoc(fileRaw: string): { file: string; line?: string } {
+  const m = fileRaw.match(/^(.*?):(\d+(?:-\d+)?)$/);
+  return m ? { file: m[1], line: m[2] } : { file: fileRaw };
+}
+
+/**
+ * Strictly parse the verifier's verdict wire format:
+ *
+ *   `CONFIRMED <severity> | file:line | claim | why`
+ *   `REJECTED | file:line | claim | why`
+ *
+ * Every row must map back to exactly one candidate by normalized `file`, `line`
+ * (range-overlap aware), and `claim`. A single `none` line is the empty-candidate
+ * signal. The parser is adversarial about the contract: it records an error for a
+ * bad status token, a row with fewer than four fields, a CONFIRMED severity that
+ * disagrees with the candidate, a row matching no candidate, a second row hitting
+ * an already-matched candidate, a `none` alongside real candidates, and any
+ * candidate left without a verdict. Non-row commentary (e.g. a trailing
+ * `<verify>…</verify>` tally) is ignored so the verifier's chat reply parses too.
+ */
+export function parseReviewVerdicts(
+  text: string,
+  candidates: readonly Finding[]
+): ReviewVerdictParse {
+  const errors: string[] = [];
+  const confirmed: Finding[] = [];
+  const rejected: Finding[] = [];
+  const matched = new Array(candidates.length).fill(false);
+  let sawNone = false;
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (!line.includes("|")) {
+      // A bare `none` is the empty signal; anything else (a tally, prose) is
+      // commentary the verifier is allowed to emit and we ignore.
+      if (line.toLowerCase() === "none") sawNone = true;
+      continue;
+    }
+    const parts = line.split("|").map((p) => p.trim());
+    const statusField = parts[0];
+    const words = statusField.split(/\s+/);
+    const status = words[0].toUpperCase();
+    if (status !== "CONFIRMED" && status !== "REJECTED") {
+      errors.push(`bad status token: ${statusField}`);
+      continue;
+    }
+    if (parts.length < 4) {
+      errors.push(`malformed verdict row: ${line}`);
+      continue;
+    }
+    const { file, line: vline } = parseVerdictLoc(parts[1]);
+    const claim = parts[2];
+    // Match to exactly one not-yet-matched candidate. `anyMatch` distinguishes a
+    // duplicate (a candidate matched twice) from an unmatched verdict.
+    let hitIndex = -1;
+    let anyMatch = false;
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i];
+      if (
+        norm(c.file) === norm(file) &&
+        norm(c.claim) === norm(claim) &&
+        overlaps(c.line, vline)
+      ) {
+        anyMatch = true;
+        if (!matched[i]) {
+          hitIndex = i;
+          break;
+        }
+      }
+    }
+    if (hitIndex === -1) {
+      errors.push(
+        `${anyMatch ? "duplicate" : "unmatched"} verdict for: ${parts[1]} | ${claim}`
+      );
+      continue;
+    }
+    matched[hitIndex] = true; // consume the candidate even on a severity error
+    const candidate = candidates[hitIndex];
+    if (status === "CONFIRMED") {
+      const sev = words[1] ? asSeverity(words[1]) : null;
+      if (!sev) {
+        errors.push(`missing/invalid confirmed severity: ${statusField}`);
+        continue;
+      }
+      if (sev !== candidate.severity) {
+        errors.push(
+          `severity mismatch for ${parts[1]}: verdict ${sev} vs candidate ${candidate.severity}`
+        );
+        continue;
+      }
+      confirmed.push({ ...candidate });
+    } else {
+      rejected.push({ ...candidate });
+    }
+  }
+
+  if (sawNone && candidates.length > 0) {
+    errors.push("verifier returned `none` but there were candidate findings");
+  }
+  for (let i = 0; i < candidates.length; i++) {
+    if (!matched[i]) {
+      const c = candidates[i];
+      const loc = c.line ? `${c.file}:${c.line}` : c.file;
+      errors.push(`missing verdict for candidate: ${loc} | ${c.claim}`);
+    }
+  }
+
+  return { confirmed: rankFindings(confirmed), rejected, errors };
 }
 
 /** Merge findings pointing at the same place: same file, overlapping line range,

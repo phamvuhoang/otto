@@ -686,3 +686,17 @@ export {
   type PullRequestRevision,
   type PullRequestReviewOutcome,
 } from "./pr-review.js";
+export {
+  findingToWire,
+  parseReviewVerdicts,
+  type Finding,
+  type ReviewVerdictParse,
+  type Severity,
+} from "./review-severity.js";
+export {
+  analyzeReview,
+  ReviewAnalysisContractError,
+  type ReviewAnalysisOptions,
+  type ReviewAnalysisResult,
+  type ReviewSeverityCounts,
+} from "./panel.js";

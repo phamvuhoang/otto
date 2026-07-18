@@ -1,0 +1,232 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { runReview, type ReviewMainDeps } from "../review-main.js";
+import { ReviewInputError } from "../pr-review-input.js";
+import type { PullRequestRevision } from "../pr-review.js";
+import type { PullRequestReviewRunResult } from "../pr-review.js";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = join(HERE, "..", "..", "..", "..");
+
+const revision: PullRequestRevision = {
+  repository: "acme/widget",
+  number: 7,
+  url: "https://github.com/acme/widget/pull/7",
+  title: "Add feature",
+  body: "body",
+  author: "octocat",
+  state: "OPEN",
+  isDraft: false,
+  labels: ["otto-review"],
+  baseRefName: "main",
+  baseSha: "a".repeat(40),
+  headSha: "b".repeat(40),
+  changedFiles: ["src/app.ts"],
+};
+
+function okResult(
+  over: Partial<PullRequestReviewRunResult> = {}
+): PullRequestReviewRunResult {
+  return {
+    status: "succeeded",
+    runId: "run-1",
+    repository: "acme/widget",
+    pullRequest: 7,
+    headSha: "b".repeat(40),
+    inputFingerprint: "c".repeat(64),
+    costUsd: 0.5,
+    outcome: "approved",
+    reviewArtifact: ".otto/runs/run-1/review.md",
+    ...over,
+  };
+}
+
+describe("runReview", () => {
+  let cwd: string;
+  const out: string[] = [];
+  const err: string[] = [];
+  let exitCode: number | null;
+
+  const makeGithub = () => ({
+    viewer: vi.fn(() => ({ login: "me" })),
+    getPullRequest: vi.fn(() => revision),
+    getIssue: vi.fn(() => ({
+      number: 42,
+      url: "https://github.com/acme/widget/issues/42",
+      title: "spec",
+      body: "acceptance criteria",
+      state: "OPEN" as const,
+      updatedAt: "2026-01-01T00:00:00Z",
+    })),
+    labelExists: vi.fn(() => true),
+  });
+
+  const makeDeps = (
+    over: Partial<ReviewMainDeps> = {}
+  ): {
+    deps: Partial<ReviewMainDeps>;
+    github: ReturnType<typeof makeGithub>;
+    runOne: ReturnType<typeof vi.fn>;
+  } => {
+    const github = makeGithub();
+    const runOne = vi.fn(async () => okResult());
+    const deps: Partial<ReviewMainDeps> = {
+      env: {},
+      cwd,
+      stdout: (t) => void out.push(t),
+      stderr: (t) => void err.push(t),
+      exit: (code: number) => {
+        exitCode = code;
+        return undefined as never;
+      },
+      createGithub: vi.fn(() => github) as never,
+      runOne: runOne as never,
+      originUrl: () => "https://github.com/acme/widget.git",
+      notifyComplete: vi.fn(),
+      notifyError: vi.fn(),
+      ...over,
+    };
+    return { deps, github, runOne };
+  };
+
+  beforeEach(() => {
+    cwd = mkdtempSync(join(tmpdir(), "otto-review-main-"));
+    out.length = 0;
+    err.length = 0;
+    exitCode = null;
+  });
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("--version exits before any GitHub call and forwards the package version", async () => {
+    const { deps, github, runOne } = makeDeps();
+    await runReview(["--version"], { cliVersion: "9.9.9", deps });
+    expect(out.join("")).toContain("9.9.9");
+    expect(out.join("")).toContain("core");
+    expect(
+      deps.createGithub as ReturnType<typeof vi.fn>
+    ).not.toHaveBeenCalled();
+    expect(runOne).not.toHaveBeenCalled();
+    expect(github.getPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("--help exits before preflight", async () => {
+    const { deps, runOne } = makeDeps();
+    await runReview(["--help"], { deps });
+    expect(out.join("")).toContain("otto-review — automated pull-request");
+    expect(runOne).not.toHaveBeenCalled();
+  });
+
+  it("--print-config shows resolved config + preflight with no model/GitHub fetch, redacting prompt content and writing no input artifact", async () => {
+    const { deps, github, runOne } = makeDeps();
+    await runReview(
+      [
+        "--repo",
+        "acme/widget",
+        "--pr",
+        "7",
+        "--prompt",
+        "SUPER_SECRET_PROMPT",
+        "--print-config",
+      ],
+      { deps }
+    );
+    const printed = out.join("");
+    expect(printed).toContain("pull-request review config");
+    expect(printed).toContain("preflight");
+    // redacts the direct prompt content (only the char count is shown).
+    expect(printed).not.toContain("SUPER_SECRET_PROMPT");
+    expect(printed).toContain("direct (");
+    // labels the deferred GitHub checks.
+    expect(printed).toContain("deferred");
+    // no model, no issue fetch, no PR fetch, no input artifact.
+    expect(runOne).not.toHaveBeenCalled();
+    expect(github.getIssue).not.toHaveBeenCalled();
+    expect(github.getPullRequest).not.toHaveBeenCalled();
+    expect(exitCode).toBeNull();
+  });
+
+  it("--watch reports that it is not available until Slice 2", async () => {
+    const { deps, runOne } = makeDeps();
+    await runReview(["--repo", "acme/widget", "--watch"], { deps });
+    expect(err.join("")).toContain("not available until Slice 2");
+    expect(exitCode).toBe(1);
+    expect(runOne).not.toHaveBeenCalled();
+  });
+
+  it("a failed remote preflight sets a clean one-line error and never runs the pipeline", async () => {
+    const { deps, runOne } = makeDeps({
+      originUrl: () => "https://github.com/someone/else.git",
+    });
+    await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+    expect(err.join("")).toMatch(/preflight failed/);
+    expect(err.join("").split("\n").filter(Boolean)).toHaveLength(1);
+    expect(exitCode).toBe(1);
+    expect(runOne).not.toHaveBeenCalled();
+  });
+
+  it("resolves the selected input before the pipeline; a same-repo issue uses the existing client", async () => {
+    const { deps, github, runOne } = makeDeps();
+    await runReview(
+      ["--repo", "acme/widget", "--pr", "7", "--spec-issue", "42"],
+      { deps }
+    );
+    expect(github.getIssue).toHaveBeenCalledWith("acme/widget", 42);
+    expect(runOne).toHaveBeenCalledTimes(1);
+    // input resolved BEFORE the pipeline; runOne receives the resolved snapshot.
+    const arg = runOne.mock.calls[0][0] as { reviewInput: { kind: string } };
+    expect(arg.reviewInput.kind).toBe("github-issue");
+  });
+
+  it("a no-input one-shot never calls getIssue but still runs the pipeline", async () => {
+    const { deps, github, runOne } = makeDeps();
+    await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+    expect(github.getIssue).not.toHaveBeenCalled();
+    expect(github.getPullRequest).toHaveBeenCalledWith("acme/widget", 7);
+    expect(runOne).toHaveBeenCalledTimes(1);
+  });
+
+  it("an invalid input never invokes the pipeline or a model", async () => {
+    const badResolve = vi.fn(() => {
+      throw new ReviewInputError("not-found", "spec file not found");
+    });
+    const { deps, runOne } = makeDeps({ resolveInput: badResolve as never });
+    await runReview(
+      ["--repo", "acme/widget", "--pr", "7", "--spec-file", "missing.md"],
+      { deps }
+    );
+    expect(err.join("")).toMatch(/review input error/);
+    expect(exitCode).toBe(1);
+    expect(runOne).not.toHaveBeenCalled();
+  });
+
+  it("forwards --notify to the injected completion notifier from the run result", async () => {
+    const { deps } = makeDeps();
+    await runReview(["--repo", "acme/widget", "--pr", "7", "--notify"], {
+      deps,
+    });
+    expect(
+      deps.notifyComplete as ReturnType<typeof vi.fn>
+    ).toHaveBeenCalledWith(1, true);
+  });
+
+  it("the flat bin mirrors the existing thin bins and package.json exposes otto-review", () => {
+    const bin = readFileSync(
+      join(REPO_ROOT, "apps", "cli", "bin", "otto-review.js"),
+      "utf8"
+    );
+    expect(bin).toContain("#!/usr/bin/env node");
+    expect(bin).toContain("import { runReview }");
+    expect(bin).toContain("runReview(process.argv.slice(2), { cliVersion })");
+    const pkg = JSON.parse(
+      readFileSync(join(REPO_ROOT, "apps", "cli", "package.json"), "utf8")
+    );
+    expect(pkg.bin["otto-review"]).toBe("./bin/otto-review.js");
+  });
+});

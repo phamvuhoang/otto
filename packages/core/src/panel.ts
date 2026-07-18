@@ -529,9 +529,15 @@ export async function analyzeReview(
       outcomeLine("no findings — skipping verify");
       return makeResult([], [], emptySeverity());
     }
+    // The merged candidate findings, as pipe-delimited wire rows. Written to
+    // findings-merged.md (globbed via FINDINGS_DIR by the substrate verifier) AND
+    // exposed as the `CANDIDATE_FINDINGS` var so a template can inline them
+    // directly (the P32 `pr-review-verify.md` contract). The substrate
+    // `review-verify.md` ignores CANDIDATE_FINDINGS, so this is inert there.
+    const candidateFindingsWire = findings.map(findingToWire).join("\n");
     writeFileSync(
       join(panelHostDir, "findings-merged.md"),
-      findings.map(findingToWire).join("\n") + "\n",
+      candidateFindingsWire + "\n",
       "utf8"
     );
     if (cooldownMs > 0) await sleep(cooldownMs * cooldownFactor, signal);
@@ -545,6 +551,7 @@ export async function analyzeReview(
         stage: verifyStage,
         vars: {
           FINDINGS_DIR: findingsDirRef,
+          CANDIDATE_FINDINGS: candidateFindingsWire,
           RESUME: resumeWithXtask,
           ...extraVars,
         },

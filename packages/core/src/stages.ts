@@ -103,4 +103,22 @@ export const STAGES = {
     template: "journal-screen.md",
     permissionMode: "bypassPermissions",
   } satisfies Stage,
+  // P32 automated PR review (issue P32): one read-only lens over the exact PR
+  // revision, and the adversarial verifier that refutes its candidate findings.
+  // Both run `access: "read-only"` so an untrusted PR head is reviewed with no
+  // write or GitHub capability, and `plan` permission mode denies edits.
+  prReviewLens: {
+    name: "pr-review-lens",
+    template: "pr-review-lens.md",
+    permissionMode: "plan",
+    tier: "strong",
+    access: "read-only",
+  } satisfies Stage,
+  prReviewVerify: {
+    name: "pr-review-verify",
+    template: "pr-review-verify.md",
+    permissionMode: "plan",
+    tier: "strong",
+    access: "read-only",
+  } satisfies Stage,
 };

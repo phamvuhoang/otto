@@ -699,10 +699,21 @@ export {
 export {
   ineligibleReason,
   outcomeForFindings,
+  readReviewAnalysisArtifact,
   revisionKey,
+  runPullRequestReview,
   type PullRequestRevision,
+  type PullRequestReviewAnalysisArtifact,
+  type PullRequestReviewDeps,
   type PullRequestReviewOutcome,
+  type PullRequestReviewRunResult,
+  type PullRequestReviewRunStatus,
 } from "./pr-review.js";
+export {
+  runReview,
+  type ReviewMainDeps,
+  type RunReviewOptions,
+} from "./review-main.js";
 export {
   parseSpecIssueRef,
   parseReviewInputFingerprint,

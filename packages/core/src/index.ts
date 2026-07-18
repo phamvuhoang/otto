@@ -715,6 +715,10 @@ export {
   type RunReviewOptions,
 } from "./review-main.js";
 export {
+  runPullRequestReviewWatch,
+  type ReviewWatchDeps,
+} from "./pr-review-watch.js";
+export {
   parseSpecIssueRef,
   parseReviewInputFingerprint,
   reviewInputFingerprint,

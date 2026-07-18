@@ -86,7 +86,9 @@ describe("runReview", () => {
       },
       createGithub: vi.fn(() => github) as never,
       runOne: runOne as never,
+      runWatch: vi.fn(async () => undefined) as never,
       originUrl: () => "https://github.com/acme/widget.git",
+      detach: vi.fn(() => undefined as never) as never,
       notifyComplete: vi.fn(),
       notifyError: vi.fn(),
       ...over,
@@ -152,12 +154,48 @@ describe("runReview", () => {
     expect(exitCode).toBeNull();
   });
 
-  it("--watch reports that it is not available until Slice 2", async () => {
-    const { deps, runOne } = makeDeps();
-    await runReview(["--repo", "acme/widget", "--watch"], { deps });
-    expect(err.join("")).toContain("not available until Slice 2");
-    expect(exitCode).toBe(1);
+  it("--watch dispatches the daemon with the unresolved review input and daemon controls, resolving no issue first", async () => {
+    const { deps, github, runOne } = makeDeps();
+    const runWatch = deps.runWatch as ReturnType<typeof vi.fn>;
+    await runReview(
+      [
+        "--repo",
+        "acme/widget",
+        "--watch",
+        "--spec-issue",
+        "42",
+        "--budget",
+        "5",
+      ],
+      { deps }
+    );
+    expect(runWatch).toHaveBeenCalledTimes(1);
+    const arg = runWatch.mock.calls[0][0] as {
+      config: { watch: boolean; output: string; reviewInput: { kind: string } };
+      budgetUsd?: number;
+    };
+    // the daemon receives the UNRESOLVED review input request (child owns the
+    // per-poll snapshot) — the parent never resolved the issue.
+    expect(arg.config.watch).toBe(true);
+    expect(arg.config.reviewInput.kind).toBe("github-issue");
+    expect(arg.config.output).toBe("comment");
+    expect(arg.budgetUsd).toBe(5);
+    expect(github.getIssue).not.toHaveBeenCalled();
+    // the one-shot pipeline is not used for a watch run.
     expect(runOne).not.toHaveBeenCalled();
+    expect(exitCode).toBeNull();
+  });
+
+  it("--watch --detach forks via the injected detach seam before running the daemon", async () => {
+    const detach = vi.fn(() => undefined as never);
+    const { deps } = makeDeps({ detach: detach as never });
+    const runWatch = deps.runWatch as ReturnType<typeof vi.fn>;
+    await runReview(["--repo", "acme/widget", "--watch", "--detach"], { deps });
+    expect(detach).toHaveBeenCalledTimes(1);
+    // detach is a `never`-returning fork; our fake returns, so the daemon still
+    // runs in-test, but a real detach would have exited the parent first.
+    const detachArg = detach.mock.calls[0][0] as { argv: string[] };
+    expect(detachArg.argv).toContain("--watch");
   });
 
   it("a failed remote preflight sets a clean one-line error and never runs the pipeline", async () => {

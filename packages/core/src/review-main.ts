@@ -26,6 +26,7 @@ import { notifyComplete, notifyError } from "./notify.js";
 import { runPreflight, runReviewPreflight } from "./preflight.js";
 import { resolveReviewInput, ReviewInputError } from "./pr-review-input.js";
 import { runPullRequestReview } from "./pr-review.js";
+import { runPullRequestReviewWatch } from "./pr-review-watch.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import {
   formatReviewConfig,
@@ -33,6 +34,7 @@ import {
   parseReviewFlags,
   readPullRequestReviewConfig,
   resolvePullRequestReviewConfig,
+  type PullRequestReviewConfig,
 } from "./review-cli.js";
 import type { TokenMode } from "./tokens.js";
 
@@ -46,6 +48,7 @@ export type ReviewMainDeps = {
   createGithub: typeof createGitHubPrClient;
   resolveInput: typeof resolveReviewInput;
   runOne: typeof runPullRequestReview;
+  runWatch: typeof runPullRequestReviewWatch;
   originUrl: (workspaceDir: string) => string | null;
   detach: typeof detachAndExit;
   notifyComplete: typeof notifyComplete;
@@ -83,6 +86,7 @@ export async function runReview(
     createGithub: opts.deps?.createGithub ?? createGitHubPrClient,
     resolveInput: opts.deps?.resolveInput ?? resolveReviewInput,
     runOne: opts.deps?.runOne ?? runPullRequestReview,
+    runWatch: opts.deps?.runWatch ?? runPullRequestReviewWatch,
     originUrl: opts.deps?.originUrl ?? defaultOriginUrl,
     detach: opts.deps?.detach ?? detachAndExit,
     notifyComplete: opts.deps?.notifyComplete ?? notifyComplete,
@@ -183,10 +187,34 @@ export async function runReview(
     return;
   }
 
-  // --watch is a Slice 2 capability.
+  // --watch (Slice 2): run the sequential labelled-PR daemon. Optionally fork
+  // into the background FIRST (the child owns per-poll snapshots — we resolve no
+  // issue/file here), then poll+review continuously until abort/budget.
   if (config.watch) {
-    deps.stderr("--watch is not available until Slice 2\n");
-    return deps.exit(1);
+    if (flags.detach) {
+      const logPath =
+        flags.log ??
+        resolve(workspaceDir, ".otto-tmp", "logs", `review-${process.pid}.log`);
+      deps.detach({ logPath, argv, binEntry: process.argv[1] });
+    }
+    await deps.runWatch({
+      workspaceDir,
+      packageDir,
+      config: config as PullRequestReviewConfig & { watch: true },
+      agentId: agent.id,
+      fallbackAgentId: fallback.agent?.id,
+      autoSwitchOnLimit: fallback.autoSwitch,
+      modelRouting: flags.modelRouting,
+      tierLadder,
+      tokenMode,
+      contextCompressor,
+      maxRetries: flags.maxRetries ?? DEFAULT_MAX_RETRIES,
+      cooldownMs: flags.cooldownMs ?? 0,
+      budgetUsd: flags.budget,
+      notify: flags.notify,
+      verbose: flags.verbose,
+    });
+    return;
   }
 
   if (config.pullRequest == null) {

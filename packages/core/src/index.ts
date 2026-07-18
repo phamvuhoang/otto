@@ -219,6 +219,20 @@ export {
   type WriteInventory,
 } from "./codebase-memory-adapter.js";
 export {
+  runIndexRepository,
+  decideIndexAction,
+  canInject,
+  type IndexResult,
+  type IndexInputs,
+  type IndexAction,
+} from "./cbm-index.js";
+export {
+  stageQueries,
+  buildCbmInjection,
+  GRAPH_BLOCK_TAG,
+  type CbmInjection,
+} from "./cbm-inject.js";
+export {
   formatPlanReport,
   readTaskPlans,
   runPlanReport,

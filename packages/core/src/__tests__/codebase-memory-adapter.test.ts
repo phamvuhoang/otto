@@ -9,7 +9,7 @@ describe("codebaseMemoryToolDefinition", () => {
     const t = codebaseMemoryToolDefinition("cbm");
     expect(t.kind).toBe("mcp");
     expect(t.networkDomains).toEqual([]);
-    expect(t.writeRoots).toEqual([".codebase-memory"]);
+    expect(t.writeRoots).toEqual([".otto/cbm-scratch"]);
     const names = (t.operations ?? []).map((o) => o.name);
     expect(names).toContain("index_repository");
     expect(names).toContain("search_graph");

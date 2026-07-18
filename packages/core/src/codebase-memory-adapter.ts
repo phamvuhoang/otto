@@ -15,7 +15,7 @@ import type { ToolDefinition, ToolOperation } from "./tools.js";
  * `stages: []` (no default injection into any stage template), `enabled:
  * false` (registry-level off switch), `networkDomains: []` (no runtime
  * network — the graph lives entirely in a local cache), and `writeRoots:
- * [".codebase-memory"]` (writes confined to its own cache directory).
+ * [".otto/cbm-scratch"]` (writes confined to Otto's own scratch directory).
  */
 
 /** One JSON-RPC request to the codebase-memory MCP child. */
@@ -58,9 +58,10 @@ const OPERATIONS: ToolOperation[] = [
 /**
  * The {@link ToolDefinition} a repo drops into `.otto/tools/codebase-memory.json`
  * (mirrors {@link ./headroom-adapter.js}'s `headroomToolDefinition`). Declares
- * no runtime network, cache-only writes, and the operation allowlist
- * (`operations`) that a caller can gate calls against. `stages: []` and
- * `enabled: false` keep it fully opt-in — a bare repo behaves as before.
+ * no runtime network, writes confined to the Otto-owned scratch directory
+ * `.otto/cbm-scratch`, and the operation allowlist (`operations`) that a
+ * caller can gate calls against. `stages: []` and `enabled: false` keep it
+ * fully opt-in — a bare repo behaves as before.
  */
 export function codebaseMemoryToolDefinition(
   command = "codebase-memory"
@@ -80,7 +81,7 @@ export function codebaseMemoryToolDefinition(
     command,
     env: [],
     networkDomains: [], // no runtime network
-    writeRoots: [".codebase-memory"], // cache-only
+    writeRoots: [".otto/cbm-scratch"], // Otto-owned confined scratch
     secretRefs: [],
     timeoutMs: 120_000,
     healthCheck: `${command} --version`,
@@ -163,7 +164,7 @@ export function createStdioCbmRunner(
 }
 
 /**
- * Identity stamp a persisted `.codebase-memory/` index carries, so a later
+ * Identity stamp a persisted `.otto/cbm-scratch` index carries, so a later
  * run can tell whether it's safe to trust without re-indexing: which
  * workspace it was built for, the source revision it was built at, whether
  * the worktree was dirty at build time, and tool/index bookkeeping.
@@ -208,9 +209,9 @@ export function classifyIndexFreshness(
 /**
  * New files written during a run (`after \ before`) plus which of those
  * escaped the tool's declared write roots — i.e. wrote outside
- * `.codebase-memory/` (see `writeRoots` on {@link codebaseMemoryToolDefinition}).
+ * `.otto/cbm-scratch` (see `writeRoots` on {@link codebaseMemoryToolDefinition}).
  * A declared root matches itself exactly or any path under `root + "/"`, so
- * a root doesn't accidentally prefix-match a sibling like `.codebase-memory-foo`.
+ * a root doesn't accidentally prefix-match a sibling like `.otto/cbm-scratch-foo`.
  */
 export type WriteInventory = { files: string[]; escaped: string[] };
 
@@ -224,8 +225,8 @@ export function diffWriteInventory(
   const files = after.filter((f) => !beforeSet.has(f));
   const under = (f: string) =>
     declaredRoots.some((raw) => {
-      // Normalize a trailing slash so a root declared as `.codebase-memory/`
-      // classifies the bare directory the same as `.codebase-memory` does.
+      // Normalize a trailing slash so a root declared as `.otto/cbm-scratch/`
+      // classifies the bare directory the same as `.otto/cbm-scratch` does.
       const r = raw.replace(/\/+$/, "");
       return f === r || f.startsWith(`${r}/`);
     });

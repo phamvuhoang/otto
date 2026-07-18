@@ -125,7 +125,7 @@ const PROFILES: ExtensionProfile[] = [
     sources: [],
     tools: [codebaseMemoryToolDefinition()],
     config: { tools: { "codebase-memory": { enabled: true, stages: [] } } },
-    policy: { allowedWriteRoots: [".codebase-memory"] },
+    policy: { allowedWriteRoots: [".otto/cbm-scratch"] },
     requires: ["codebase-memory"],
     followUp: "Next: otto-tools health && otto-tools why plan",
   },

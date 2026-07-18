@@ -10,7 +10,7 @@ const CBM: ToolDefinition = {
   stages: ["plan", "reviewer"],
   env: [],
   networkDomains: [],
-  writeRoots: [".codebase-memory"],
+  writeRoots: [".otto/cbm-scratch"],
   secretRefs: [],
   approvalActions: [],
   enabled: true,
@@ -44,7 +44,7 @@ describe("authorizeToolOperation", () => {
       "plan",
       "index_repository",
       {
-        writePaths: [".codebase-memory/graph.db.zst"],
+        writePaths: [".otto/cbm-scratch/graph.db.zst"],
       }
     );
     expect(a.allowed).toBe(true);

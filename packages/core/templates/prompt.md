@@ -42,6 +42,8 @@ Explore the repo.
 
 Complete the task.
 
+If a `<graph-map>` navigation block is present, treat it as a map, not the source of truth: it can be stale for dynamic dispatch or generated code. Open and read the actual files before changing them; tests remain the completion gate.
+
 # FEEDBACK LOOPS
 
 Before committing, run the feedback loops:

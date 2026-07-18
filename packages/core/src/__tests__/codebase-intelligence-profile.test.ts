@@ -8,7 +8,7 @@ describe("codebase-intelligence profile", () => {
     const tool = p!.tools.find((t) => t.name === "codebase-memory");
     expect(tool?.kind).toBe("mcp");
     expect(tool?.networkDomains).toEqual([]);
-    expect(p!.policy?.allowedWriteRoots).toContain(".codebase-memory");
+    expect(p!.policy?.allowedWriteRoots).toContain(".otto/cbm-scratch");
     expect(p!.requires).toContain("codebase-memory");
   });
 });

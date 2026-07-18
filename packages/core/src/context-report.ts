@@ -66,6 +66,9 @@ const BLOCK_CATEGORY: Record<string, ContextCategory> = {
   issue: "evidence",
   "issues-summary": "evidence",
   "issues-full-file": "evidence",
+  // Injected code-graph navigation results (P26 slice2): retrievable evidence —
+  // the full result is stored via runRetrievalStore, so later prompts retire it.
+  "graph-map": "evidence",
 };
 
 /** Sum the char footprint of every recognized `<tag>…</tag>` span, by category. */

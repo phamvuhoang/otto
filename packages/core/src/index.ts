@@ -734,6 +734,17 @@ export {
   type PullRequestWorktree,
 } from "./pr-review-worktree.js";
 export {
+  headMarker,
+  inputMarker,
+  renderCanonicalReview,
+  renderReviewText,
+  reviewMarker,
+  summaryMarker,
+  writeCanonicalReview,
+  type CanonicalReview,
+  type PublishedReviewFinding,
+} from "./pr-review-output.js";
+export {
   findingToWire,
   parseReviewVerdicts,
   type Finding,

@@ -667,6 +667,43 @@ describe("runLoop", () => {
     expect(manifest?.codebaseMemory).toBeUndefined();
   });
 
+  it("rejects the index (no injection) when index_repository writes escape the scratch dir at the workspace root (P26 slice2 fix: watchDir)", async () => {
+    const dirs = makeDirs();
+    roots.push(dirs.root);
+    writeCbmTool(dirs.workspaceDir, ["plan", "implementer"]);
+    mocks.runStage.mockResolvedValue(ok(sentinel));
+    // Simulates the operator binary ignoring `cacheDir` and writing at cwd
+    // (the workspace root) instead of the declared `.otto/cbm-scratch` root —
+    // the exact escape this fix must catch via the workspace-wide watchDir
+    // snapshot (previously only the scratch dir itself was snapshotted, so
+    // this escape was invisible and the index was wrongly trusted).
+    const escapingCbmRunner = (_command: string, cwd: string) => ({
+      available: () => true,
+      call: (req: { operation: string }) => {
+        if (req.operation === "index_repository") {
+          writeFileSync(join(cwd, ".gitattributes"), "escape", "utf8");
+        }
+        return { ok: true, result: `CBM:${req.operation}` };
+      },
+    });
+
+    await runLoop(loopOptions(dirs, { cbmRunner: escapingCbmRunner }));
+
+    // The escaped write actually landed at the workspace root...
+    expect(existsSync(join(dirs.workspaceDir, ".gitattributes"))).toBe(true);
+    // ...but the escape was detected: nothing was injected into any prompt.
+    for (const call of mocks.runStage.mock.calls) {
+      expect(String(call[1])).not.toContain("<graph-map>");
+    }
+    // ...and the manifest never records a trusted index identity for this
+    // run (the aborted build only records timing, not `indexIdentity`).
+    const manifest = readManifest(
+      dirs.workspaceDir,
+      listRunIds(dirs.workspaceDir)[0]
+    );
+    expect(manifest?.codebaseMemory?.indexIdentity).toBeUndefined();
+  });
+
   it("records a --verify run's verification matrix from the scratch file onto the manifest (#181 P24)", async () => {
     const dirs = makeDirs();
     roots.push(dirs.root);

@@ -619,15 +619,25 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     if (candidate.available()) cbmRunnerInstance = candidate;
   }
   // List files under `dir` as workspace-relative paths, so the write-inventory
-  // diff can classify them against the declared `.otto/cbm-scratch` root.
+  // diff can classify them against the declared `.otto/cbm-scratch` root. Used
+  // as both `scratchDir` (default) and `watchDir` (whole workspace) snapshots
+  // for `runIndexRepository` — pruned dirs are large/irrelevant to escape
+  // detection, or (`.otto/runs`) written by Otto itself every run.
+  const prunedCbmDirs = new Set([
+    join(workspaceDir, ".git"),
+    join(workspaceDir, "node_modules"),
+    join(workspaceDir, ".otto", "runs"),
+  ]);
   const listCbmFilesRel = (dir: string): string[] => {
     const out: string[] = [];
     const walk = (d: string): void => {
       try {
         for (const e of readdirSync(d, { withFileTypes: true })) {
           const full = join(d, String(e.name));
-          if (e.isDirectory()) walk(full);
-          else out.push(relative(workspaceDir, full));
+          if (e.isDirectory()) {
+            if (prunedCbmDirs.has(full)) continue;
+            walk(full);
+          } else out.push(relative(workspaceDir, full));
         }
       } catch {
         // unreadable/absent dir contributes no files to the inventory.
@@ -689,6 +699,11 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         const result = runIndexRepository({
           runner: cbmRunnerInstance,
           scratchDir: cbmScratchDir,
+          // Snapshot the whole workspace (not just the scratch dir) so a
+          // write that escapes the declared root — e.g. the underlying tool
+          // ignoring `cacheDir` and writing at cwd — is actually detected
+          // instead of silently trusted (P26 slice2 safety fix).
+          watchDir: workspaceDir,
           declaredRoots: [cbmScratchRel],
           snapshot: listCbmFilesRel,
           identity: { ...current, toolVersion: "", indexedAt: nowIso() },

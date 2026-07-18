@@ -17,6 +17,14 @@ export type IndexResult = {
 export type IndexInputs = {
   runner: CbmRunner;
   scratchDir: string;
+  /**
+   * Directory the before/after snapshot walks to detect confinement escapes.
+   * Must be broader than (or equal to) `scratchDir` — an escaped write that
+   * lands outside `scratchDir` is only visible if the snapshot actually walks
+   * past it. Defaults to `scratchDir` (preserves prior, scratch-only
+   * behavior) when omitted.
+   */
+  watchDir?: string;
   declaredRoots: string[];
   snapshot: (dir: string) => string[];
   identity: Omit<CbmIndexIdentity, "indexStatus">;
@@ -26,12 +34,17 @@ const EMPTY_INVENTORY: WriteInventory = { files: [], escaped: [] };
 
 /**
  * Run `index_repository` confined to `scratchDir`, then verify no write escaped
- * the declared roots. Any escape (or a failed call) aborts: the index is not
+ * the declared roots. The before/after snapshot walks `watchDir` (default
+ * `scratchDir`) rather than `scratchDir` itself, so a write that lands outside
+ * the declared roots — e.g. at the workspace root, if the underlying tool
+ * ignores `cacheDir` — is actually visible to the diff instead of silently
+ * escaping detection. Any escape (or a failed call) aborts: the index is not
  * trusted and the caller falls back to normal search. Pure w.r.t. its injected
  * `snapshot`/`runner` — the loop supplies fs-backed impls.
  */
 export function runIndexRepository(inputs: IndexInputs): IndexResult {
-  const before = inputs.snapshot(inputs.scratchDir);
+  const watchDir = inputs.watchDir ?? inputs.scratchDir;
+  const before = inputs.snapshot(watchDir);
   const res = inputs.runner.call({
     operation: "index_repository",
     params: { cacheDir: inputs.scratchDir },
@@ -43,7 +56,7 @@ export function runIndexRepository(inputs: IndexInputs): IndexResult {
       writeInventory: EMPTY_INVENTORY,
     };
   }
-  const after = inputs.snapshot(inputs.scratchDir);
+  const after = inputs.snapshot(watchDir);
   const inventory = diffWriteInventory(before, after, inputs.declaredRoots);
   if (inventory.escaped.length > 0) {
     return {

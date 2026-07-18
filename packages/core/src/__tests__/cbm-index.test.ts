@@ -52,6 +52,36 @@ describe("runIndexRepository", () => {
     expect(r.identity).toBeUndefined();
   });
 
+  it("detects a workspace-root escape when watchDir spans the whole workspace (P26 slice2 fix)", () => {
+    // Simulates the real production wiring: `snapshot` walks `watchDir` (the
+    // workspace root), not `scratchDir`, so a write that lands outside the
+    // declared scratch root — e.g. because the underlying tool ignored
+    // `cacheDir` and wrote at cwd — is actually observed by the diff.
+    const scratchFile = ".otto/cbm-scratch/.codebase-memory/graph.db.zst";
+    const rootEscape = ".gitattributes";
+    let call = 0;
+    const seenDirs: string[] = [];
+    const snapshot = (dir: string) => {
+      seenDirs.push(dir);
+      call++;
+      // Both before/after snapshots walk watchDir; scratch-dir writes stay
+      // inside declaredRoots, but the root escape only shows up in `after`.
+      return call === 1 ? [] : [scratchFile, rootEscape];
+    };
+    const r = runIndexRepository(
+      inputs({
+        watchDir: "/repo",
+        snapshot,
+      })
+    );
+    // Proves the snapshot was called with watchDir, not scratchDir.
+    expect(seenDirs).toEqual(["/repo", "/repo"]);
+    expect(r.ok).toBe(false);
+    expect(r.fallbackReason).toMatch(/escap/i);
+    expect(r.writeInventory.escaped).toEqual([rootEscape]);
+    expect(r.identity).toBeUndefined();
+  });
+
   it("aborts when the runner call fails", () => {
     const r = runIndexRepository(
       inputs({

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.35.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.34.0...otto-core-v0.35.0) (2026-07-18)
+
+
+### Features
+
+* **cbm:** P26 Codebase Memory production adapter — confined indexing + bounded graph injection (slice 2) ([#210](https://github.com/phamvuhoang/otto/issues/210)) ([dc4616f](https://github.com/phamvuhoang/otto/commit/dc4616f7d53a6c36964730863ea0a52a9838d8f5))
+
 ## [0.34.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.33.1...otto-core-v0.34.0) (2026-07-17)
 
 

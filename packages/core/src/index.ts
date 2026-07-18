@@ -724,6 +724,16 @@ export {
   type ReviewSkillSelection,
 } from "./pr-review-skill.js";
 export {
+  assertReviewWorktreeClean,
+  buildBaseInstructionBundle,
+  buildReviewContext,
+  createPullRequestWorktree,
+  prepareReviewLocalExcludes,
+  PullRequestWorktreeError,
+  type GitCommandRunner,
+  type PullRequestWorktree,
+} from "./pr-review-worktree.js";
+export {
   findingToWire,
   parseReviewVerdicts,
   type Finding,

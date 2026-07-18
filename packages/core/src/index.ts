@@ -667,3 +667,22 @@ export {
   recentlyPosted,
   type PostedEntry,
 } from "./journal-ledger.js";
+export {
+  formatReviewConfig,
+  formatReviewHelp,
+  parsePullRequestRef,
+  parseReviewFlags,
+  readPullRequestReviewConfig,
+  resolvePullRequestReviewConfig,
+  type PullRequestReviewConfig,
+  type ReviewCliFlags,
+  type ReviewInputRequest,
+  type ReviewOutputMode,
+} from "./review-cli.js";
+export {
+  ineligibleReason,
+  outcomeForFindings,
+  revisionKey,
+  type PullRequestRevision,
+  type PullRequestReviewOutcome,
+} from "./pr-review.js";

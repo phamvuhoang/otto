@@ -1,10 +1,15 @@
 # Otto Harness Roadmap — Phase 6: Attested Outcomes, Bounded Context
 
-Last updated: 2026-07-10
+Last updated: 2026-07-18
 
-> **Status:** Planned. No Phase 6 initiative has an implementation slice yet.
+> **Status:** Planned. No P27–P31 initiative has an implementation slice yet —
+> this update does not claim any of them shipped. **P32 (automated
+> pull-request code review) is an URGENT PARALLEL initiative that has
+> shipped** alongside this backlog, not a renumbering or reordering of
+> P27–P31: it addressed a separate, higher-urgency need (unattended PR review)
+> and was pulled forward and built end-to-end while P27–P31 remained planned.
 > Tracking: epic and per-initiative GitHub issues to be filed when the first
-> slice starts.
+> P27–P31 slice starts.
 
 Phase 1 ([`HARNESS_ENHANCEMENT_ROADMAP.md`](./HARNESS_ENHANCEMENT_ROADMAP.md),
 P0–P6) made Otto governed, measurable, and adaptive. Phase 2
@@ -108,13 +113,14 @@ reduce` only strips whitespace and hardcodes `cacheHits: 0`.
 
 ## Prioritized Initiatives
 
-| Priority | Initiative                                  | Outcome                                                                      | Size   | Confidence |
-| -------- | ------------------------------------------- | ---------------------------------------------------------------------------- | ------ | ---------- |
-| P27      | Harness-attested feedback loops             | Test/typecheck/build outcomes are executed and recorded by the harness.      | Medium | High       |
-| P29      | Prompt diet: bounded injection, cache shape | Cut per-iteration prompt cost by wiring built levers and deduping payloads.  | Medium | High       |
-| P28      | Regression signals and review integrity     | Iteration control reacts to attested failures and recurring findings.        | Medium | High       |
-| P30      | Context budget enforcement and state digest | Over-budget context degrades through governed levers; stale context retires. | Medium | Medium     |
-| P31      | Plan soundness and a working human loop     | Plans are judged on substance and the checkpoint edit path works.            | Large  | Medium     |
+| Priority | Initiative                                                                     | Outcome                                                                                                                           | Size   | Confidence |
+| -------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------- |
+| P27      | Harness-attested feedback loops                                                | Test/typecheck/build outcomes are executed and recorded by the harness.                                                           | Medium | High       |
+| P29      | Prompt diet: bounded injection, cache shape                                    | Cut per-iteration prompt cost by wiring built levers and deduping payloads.                                                       | Medium | High       |
+| P28      | Regression signals and review integrity                                        | Iteration control reacts to attested failures and recurring findings.                                                             | Medium | High       |
+| P30      | Context budget enforcement and state digest                                    | Over-budget context degrades through governed levers; stale context retires.                                                      | Medium | Medium     |
+| P31      | Plan soundness and a working human loop                                        | Plans are judged on substance and the checkpoint edit path works.                                                                 | Large  | Medium     |
+| **P32**  | **Automated pull-request code review (urgent, PARALLEL to P27–P31 — shipped)** | An unattended, read-only `otto-review` bin reviews an exact PR revision and publishes an idempotent report/comment/formal review. | Large  | High       |
 
 P27 leads because it is the foundation: attested check results are the input
 P28's signals consume, the strongest evidence P24's matrix can cite, and the
@@ -124,6 +130,21 @@ promote those foundations into live loop behavior. P31 is last not because it
 matters least but because it is the largest and benefits from P27 (attested
 verify commands in plan rubrics) and P24 (matrix rows to trace requirements
 into).
+
+**P32 is not part of this P27→P31 sequence at all.** It is an URGENT initiative
+that surfaced independently (unattended PR review was needed now) and was
+built in PARALLEL alongside this Phase 6 backlog — it does not renumber,
+reorder, or supersede P27–P31, none of which have shipped. P32's own scope is
+orthogonal to this phase's "attested outcomes, bounded context" theme: optional
+issue/file/prompt review input (invocation-only, no env/config equivalent),
+a composite `(repository, pullRequest, headSha, inputFingerprint)` identity so
+a changed input or a force-push is always a fresh, exactly-once review, and an
+exact, uncompressed input/diff evidence trail (`--context-compressor headroom`
+compresses only the PR body, never the review-input artifact). **P27's
+attested-check results can enrich a future P32 review** (e.g. citing a real
+test-run outcome in a finding) once P27 ships, **but P32 does not block on
+P27** — it shipped against today's (unattested) evidence model and can adopt
+P27's signal later as a pure addition.
 
 Numbering continues from Phase 5. Prior roadmap epics:
 [Phase 1 #38](https://github.com/phamvuhoang/otto/issues/38),

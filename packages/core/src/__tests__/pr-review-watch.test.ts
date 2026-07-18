@@ -558,6 +558,73 @@ describe("runPullRequestReviewWatch", () => {
     expect(h.release).toHaveBeenCalledTimes(1);
   });
 
+  it("does not hot-spin when a run leaves the same identity runnable — it sleeps before re-selecting", async () => {
+    const controller = new AbortController();
+    const listPullRequests = vi.fn(() => [rev(1)]);
+    // The run returns a non-terminal outcome and the persisted state stays
+    // runnable (cancelled ⇒ isStateRunnable === true), so the SAME composite
+    // identity is re-selected next poll.
+    const readState = vi.fn(
+      (): PullRequestReviewState => ({
+        ...succeededState(rev(1), FP_A),
+        status: "cancelled",
+      })
+    );
+    let runs = 0;
+    const runRevision = vi.fn(async () => {
+      runs += 1;
+      // Safety net: if the (buggy) daemon tight-loops with no sleep, bound it so
+      // the test terminates instead of hanging.
+      if (runs >= 5) controller.abort();
+      return okResult(rev(1), FP_A, { status: "cancelled" });
+    });
+    const sleep = stopSleep(controller, 1); // aborts on the FIRST sleep
+    const h = harness(
+      {
+        listPullRequests: listPullRequests as never,
+        readState: readState as never,
+        runRevision: runRevision as never,
+        sleep: sleep as never,
+      },
+      controller
+    );
+    await runPullRequestReviewWatch(baseOpts(h.deps, controller.signal));
+
+    // The identity is run once, then the daemon SLEEPS rather than re-selecting
+    // and repaying for it back-to-back.
+    expect(runRevision).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it("a state-read / selection throw is caught as a bounded poll failure and does not kill the daemon", async () => {
+    const controller = new AbortController();
+    const listPullRequests = vi.fn(() => [rev(1)]);
+    const readState = vi.fn(() => {
+      throw new Error("corrupt review-state file");
+    });
+    const sleep = stopSleep(controller, 1);
+    const h = harness(
+      {
+        listPullRequests: listPullRequests as never,
+        readState: readState as never,
+        sleep: sleep as never,
+      },
+      controller
+    );
+    await expect(
+      runPullRequestReviewWatch(baseOpts(h.deps, controller.signal))
+    ).resolves.toBeUndefined();
+
+    const log = h.stderr.mock.calls.map((c) => c[0]).join("");
+    expect(log).toMatch(/corrupt review-state file/);
+    expect(log).toMatch(/poll failure/);
+    expect(h.runRevision).not.toHaveBeenCalled();
+    expect(sleep).toHaveBeenCalledTimes(1);
+    // a recoverable poll failure is NOT an unrecoverable daemon failure.
+    expect(notifyMocks.notifyError).not.toHaveBeenCalled();
+    expect(h.release).toHaveBeenCalledTimes(1);
+  });
+
   it("an already-aborted signal performs no poll at all", async () => {
     const controller = new AbortController();
     controller.abort();

@@ -187,6 +187,14 @@ export async function runPullRequestReviewWatch(opts: {
   // Track idle state so the "no eligible PR" line prints only on the
   // busy→idle transition — an overnight watch must not flood the log.
   let wasIdle = false;
+  // The composite key of the revision run in the IMMEDIATELY preceding
+  // iteration, if any. The drain path only re-polls without sleeping when the
+  // last run made progress (advanced that identity out of the runnable set). If
+  // the same identity is re-selected right after running it — e.g. a run that
+  // returned a `superseded`/`cancelled` outcome that `isStateRunnable` keeps
+  // runnable, or returned before persisting a terminal `succeeded` state — we
+  // must NOT tight-loop and repay the pipeline; we back off one interval first.
+  let lastRanKey: string | null = null;
 
   try {
     for (;;) {
@@ -224,8 +232,19 @@ export async function runPullRequestReviewWatch(opts: {
         continue;
       }
 
-      // 3. Select the first runnable composite identity for THIS snapshot.
-      const candidate = selectRunnable(prs, resolved);
+      // 3. Select the first runnable composite identity for THIS snapshot. A
+      //    state-read throw (corrupt/locked state file) is a BOUNDED poll
+      //    failure — it must never end the daemon.
+      let candidate: PullRequestRevision | null;
+      try {
+        candidate = selectRunnable(prs, resolved);
+      } catch (err) {
+        wasIdle = false;
+        lastRanKey = null;
+        logSelectionFailure(deps.stderr, err);
+        await sleepInterval();
+        continue;
+      }
       if (!candidate) {
         if (!wasIdle) {
           wasIdle = true;
@@ -233,10 +252,21 @@ export async function runPullRequestReviewWatch(opts: {
             `no eligible pull request labelled ${label} — idle, next poll in ${config.watchIntervalSec}s\n`
           );
         }
+        lastRanKey = null;
         await sleepInterval();
         continue;
       }
       wasIdle = false;
+
+      // Hot-spin guard: if the immediately-preceding run left THIS exact
+      // composite identity runnable, do not re-select and repay for it in a
+      // tight loop — back off one interval before re-attempting.
+      const candidateKey = compositeKey(candidate, resolved.fingerprint);
+      if (candidateKey === lastRanKey) {
+        lastRanKey = null;
+        await sleepInterval();
+        continue;
+      }
 
       // 4. Review exactly one revision. A throw here — including a known
       //    resume-path re-query throw — is a BOUNDED revision failure: log it
@@ -274,12 +304,16 @@ export async function runPullRequestReviewWatch(opts: {
         deps.stderr(
           `review of ${repository}#${candidate.number} failed: ${(err as Error).message} — continuing\n`
         );
+        lastRanKey = null;
         // A caught revision failure is recoverable: back off one interval so a
         // transient fault clears, then re-poll (state is unchanged).
         await sleepInterval();
         continue;
       }
       cumulativeCost += cost;
+      // Remember what we just ran so the next selection can detect a no-progress
+      // re-selection of the SAME identity and back off instead of hot-spinning.
+      lastRanKey = candidateKey;
 
       // On shutdown the active run already finalized/released; do not re-poll.
       if (daemonAbort.signal.aborted) return;
@@ -298,6 +332,21 @@ export async function runPullRequestReviewWatch(opts: {
     if (external) external.removeEventListener("abort", onExternalAbort);
     releaseOnce();
   }
+}
+
+/** The immediate-re-poll dedup key for one (revision, input) identity. */
+function compositeKey(
+  revision: PullRequestRevision,
+  inputFingerprint: string
+): string {
+  return `${revision.number}@${revision.headSha}:${inputFingerprint}`;
+}
+
+/** Log a revision-selection / state-read failure as a bounded poll failure. */
+function logSelectionFailure(stderr: (t: string) => void, err: unknown): void {
+  stderr(
+    `pull-request selection failed (state read) — poll failure: ${(err as Error).message}\n`
+  );
 }
 
 /** Log a review-input resolution failure as a distinct, actionable poll failure. */

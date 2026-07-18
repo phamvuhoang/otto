@@ -84,5 +84,31 @@
         { "name": "fanout-contributions", "command": "node check-fanout.mjs" }
       ]
     }
+  },
+  {
+    "id": "cbm-refresh",
+    "kind": "memory-refresh",
+    "fixture": "fixtures/cbm-refresh",
+    "bin": "otto-afk",
+    "args": ["--enable-tool", "codebase-memory"],
+    "env": { "OTTO_CBM_E2E": "1" },
+    "inputs": "Rename retryDelayMs in policy.mjs to computeBackoffMs and use it from alerts.mjs's scheduleAlertRetry instead of its duplicated backoff math. Done when `node --test` is green.",
+    "expect": {
+      "succeeded": true,
+      "checks": [{ "name": "tests", "command": "node --test" }]
+    }
+  },
+  {
+    "id": "cbm-dynamic-fallback",
+    "kind": "memory-fallback",
+    "fixture": "fixtures/cbm-dynamic-fallback",
+    "bin": "otto-afk",
+    "args": ["--enable-tool", "codebase-memory"],
+    "env": { "OTTO_CBM_E2E": "1" },
+    "inputs": "registry.mjs dispatches events by looking up handlers[`handle${Type}`] at runtime. Add a handleRefund(payload) export to handlers.mjs returning { orderId: payload.orderId, refunded: payload.amount } so dispatch('refund', payload) resolves it. Done when `node --test` is green.",
+    "expect": {
+      "succeeded": true,
+      "checks": [{ "name": "tests", "command": "node --test" }]
+    }
   }
 ]

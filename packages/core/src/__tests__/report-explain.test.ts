@@ -7,6 +7,7 @@ import { formatPlainReport, runExplain } from "../report-explain.js";
 import {
   writeManifest,
   writeRunReport,
+  type PullRequestReviewEvidence,
   type RunManifest,
 } from "../run-report.js";
 import { emptyTokenUsage } from "../tokens.js";
@@ -55,6 +56,28 @@ const REPORT = [
   "- foo.ts:42",
 ].join("\n");
 
+const pullRequestReview: PullRequestReviewEvidence = {
+  repository: "acme/widgets",
+  pullRequest: 42,
+  url: "https://github.com/acme/widgets/pull/42",
+  baseSha: "a".repeat(40),
+  headSha: "b".repeat(40),
+  label: "otto-review",
+  reviewInput: {
+    kind: "prompt",
+    source: "direct",
+    fingerprint: "c".repeat(64),
+    artifactPath: ".otto/runs/2026-06-19T00-00-00-000Z-13793/review-input.txt",
+  },
+  outcome: "changes-requested",
+  confirmed: 2,
+  rejected: 1,
+  outputMode: "comment",
+  githubReview: true,
+  commentId: 555,
+  reviewId: 999,
+};
+
 describe("formatPlainReport", () => {
   it("leads with the persisted plain report, then the run facts", () => {
     const out = formatPlainReport(manifest, REPORT);
@@ -97,6 +120,30 @@ describe("formatPlainReport", () => {
     expect(out).toContain("Run facts");
     expect(out).toContain("$1.23");
     expect(out).not.toContain("# Otto quality report");
+  });
+
+  describe("pull request review evidence (P32 Task 9)", () => {
+    it("adds the composite PR/input identity and outcome to Run facts when present", () => {
+      const withPr: RunManifest = {
+        ...manifest,
+        mode: "github-pr-review",
+        pullRequestReview,
+      };
+      const out = formatPlainReport(withPr, REPORT);
+      expect(out).toContain(
+        `${pullRequestReview.repository}#${pullRequestReview.pullRequest}` +
+          `@${pullRequestReview.headSha}:${pullRequestReview.reviewInput.fingerprint}`
+      );
+      expect(out).toContain(pullRequestReview.outcome as string);
+      // exitReason stays authoritative for run completion — still present.
+      expect(out).toContain("complete");
+    });
+
+    it("omits the pull-request facts when no evidence is present", () => {
+      const out = formatPlainReport(manifest, REPORT);
+      expect(out).not.toContain(pullRequestReview.repository);
+      expect(out).not.toContain(pullRequestReview.reviewInput.fingerprint);
+    });
   });
 });
 

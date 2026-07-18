@@ -115,6 +115,7 @@ export {
   writeManifest,
   writeRunReport,
   writeStageRecord,
+  type PullRequestReviewEvidence,
   type RunArtifact,
   type RunManifest,
   type SafetyEvent,

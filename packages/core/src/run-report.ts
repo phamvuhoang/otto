@@ -22,6 +22,8 @@ import type {
   WriteInventory,
 } from "./codebase-memory-adapter.js";
 import type { FanoutResult } from "./fanout.js";
+import type { PullRequestReviewOutcome } from "./pr-review.js";
+import type { ReviewInputRequest, ReviewOutputMode } from "./review-cli.js";
 
 /**
  * A safety-relevant occurrence recorded in a run's trajectory so policy
@@ -174,6 +176,46 @@ export type StageRecord = {
 };
 
 /**
+ * P32 evidence for a finalized `github-pr-review` run (Task 9): the reviewed
+ * PR identity, the exact review-input provenance (never its raw content —
+ * that lives only in the on-disk artifact `reviewInput.artifactPath` points
+ * at), the verdict, and the publish receipts. Optional and strictly additive:
+ * absent on every non-P32 manifest, and no P32-only field appears elsewhere.
+ *
+ * `outcome` is the REVIEW verdict (changes-requested/comment/approved), not a
+ * run-completion signal — `RunManifest.exitReason` remains the sole authority
+ * for whether the run itself finished cleanly; a reader must not infer one
+ * from the other.
+ */
+export type PullRequestReviewEvidence = {
+  repository: string;
+  pullRequest: number;
+  url: string;
+  baseSha: string;
+  headSha: string;
+  label: string;
+  reviewInput: {
+    kind: ReviewInputRequest["kind"];
+    source: string;
+    fingerprint: string;
+    artifactPath: string;
+  };
+  /** Absent when the review has not yet produced a verdict. */
+  outcome?: PullRequestReviewOutcome;
+  confirmed: number;
+  rejected: number;
+  outputMode: ReviewOutputMode;
+  /** Whether a live GitHub review/comment was published for this attempt. */
+  githubReview: boolean;
+  /** The published PR comment's id, when `output` was `comment`. */
+  commentId?: number;
+  /** The published formal GitHub review's id, when one was created. */
+  reviewId?: number;
+  /** The head SHA of a newer revision that superseded this attempt, if any. */
+  supersededBy?: string;
+};
+
+/**
  * The top-level evidence bundle for one Otto run, written to
  * `.otto/runs/<run-id>/manifest.json`. The per-stage records live alongside
  * under `stages/` — the directory is the list, so the manifest does not
@@ -240,6 +282,9 @@ export type RunManifest = {
     }[];
     crossTaskSummary: string;
   };
+  /** P32 pull-request review evidence when `mode` is `github-pr-review`
+   *  (Task 9); absent for every other run mode. */
+  pullRequestReview?: PullRequestReviewEvidence;
   startedAt: string;
   finishedAt?: string;
 };

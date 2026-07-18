@@ -6,7 +6,9 @@ import {
   readManifest,
   readRunReport,
   readStageRecords,
+  type PullRequestReviewEvidence,
   type RunManifest,
+  type SkillUsage,
   type StageRecord,
 } from "./run-report.js";
 import { formatTokenUsage } from "./tokens.js";
@@ -34,6 +36,70 @@ const defaultDeps: InspectDeps = {
 };
 
 const USAGE = "Usage: otto-inspect [--plain] [<run-id>|latest]";
+
+/** First 8 hex characters of a full SHA — a git-style short SHA for a
+ *  terminal reader; the manifest itself still carries the full value. */
+function shortSha(sha: string): string {
+  return sha.slice(0, 8);
+}
+
+/** First 12 hex characters of a fingerprint — enough to disambiguate in a
+ *  terminal without dumping the full 64-character digest. */
+function shortFingerprint(fingerprint: string): string {
+  return fingerprint.slice(0, 12);
+}
+
+/**
+ * Render the compact `Pull request review:` section for a P32
+ * `github-pr-review` run (Task 9). SHAs and the review-input fingerprint are
+ * SHORTENED here for a terminal reader — the manifest (and the on-disk
+ * artifacts it points at) still carry the full values, so nothing is lost.
+ *
+ * Renders review-input PROVENANCE only (kind/source/fingerprint/artifact
+ * path) — never content, so a `direct` prompt's raw untrusted text can never
+ * leak into this operator view. Does not use `outcome` to imply the run
+ * completed; `exitReason` (printed separately, above) remains authoritative.
+ */
+function formatPullRequestReviewSection(
+  pr: PullRequestReviewEvidence,
+  skillsUsed: SkillUsage[] | undefined
+): string[] {
+  const lines: string[] = [];
+  lines.push("");
+  lines.push("Pull request review:");
+  lines.push(`  ${pr.repository}#${pr.pullRequest} (${pr.url})`);
+  lines.push(`  label:        ${pr.label}`);
+  lines.push(
+    `  base/head:    ${shortSha(pr.baseSha)} / ${shortSha(pr.headSha)}`
+  );
+  lines.push(
+    `  review input: ${pr.reviewInput.kind} (${pr.reviewInput.source}), ` +
+      `fingerprint ${shortFingerprint(pr.reviewInput.fingerprint)}…, ` +
+      `artifact ${pr.reviewInput.artifactPath}`
+  );
+  lines.push(`  outcome:      ${pr.outcome ?? "(not yet determined)"}`);
+  lines.push(`  confirmed/rejected: ${pr.confirmed} / ${pr.rejected}`);
+  lines.push(`  output mode:  ${pr.outputMode}`);
+
+  const receipts: string[] = [pr.githubReview ? "published" : "not published"];
+  if (pr.commentId !== undefined) receipts.push(`comment #${pr.commentId}`);
+  if (pr.reviewId !== undefined) receipts.push(`review #${pr.reviewId}`);
+  lines.push(`  github review: ${receipts.join(", ")}`);
+
+  if (pr.supersededBy !== undefined) {
+    lines.push(`  superseded by: ${shortSha(pr.supersededBy)}`);
+  }
+
+  const reviewSkill = skillsUsed?.find((u) => u.stage === "pr-review");
+  if (reviewSkill?.checksum) {
+    lines.push(
+      `  skill:        ${reviewSkill.name}@${reviewSkill.version} ` +
+        `(checksum ${reviewSkill.checksum})`
+    );
+  }
+
+  return lines;
+}
 
 /**
  * Render one run's evidence bundle (manifest + stage records) into a compact,
@@ -145,6 +211,17 @@ export function formatRunReport(
       const at = u.stage ? ` at ${u.stage}` : "";
       lines.push(`  - ${u.name}@${u.version}${src}${at}`);
     }
+  }
+
+  // P32 pull-request review evidence (Task 9): additive and optional — only
+  // ever present on a finalized `github-pr-review` run.
+  if (manifest.pullRequestReview) {
+    lines.push(
+      ...formatPullRequestReviewSection(
+        manifest.pullRequestReview,
+        manifest.skillsUsed
+      )
+    );
   }
 
   return lines.join("\n");

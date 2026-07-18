@@ -254,6 +254,124 @@ describe("runReview", () => {
     ).toHaveBeenCalledWith(1, true);
   });
 
+  describe("run-result exit-code contract", () => {
+    it("succeeded exits cleanly (exit not called)", async () => {
+      const { deps } = makeDeps();
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(exitCode).toBeNull();
+    });
+
+    it("publish-failed exits 1 and names the failure on stderr", async () => {
+      const publishFailedRunOne = vi.fn(async () =>
+        okResult({ status: "publish-failed", error: "comment API 500" })
+      );
+      const { deps } = makeDeps({ runOne: publishFailedRunOne as never });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(publishFailedRunOne).toHaveBeenCalledTimes(1);
+      expect(exitCode).toBe(1);
+      expect(err.join("")).toMatch(/publish.*failed/i);
+      expect(err.join("")).toContain("comment API 500");
+    });
+
+    it("a retryable publish-failed says it will be retried", async () => {
+      const { deps } = makeDeps({
+        runOne: vi.fn(async () =>
+          okResult({
+            status: "publish-failed",
+            error: "rate limited",
+            retryable: true,
+            nextRetryAt: "2026-01-01T00:05:00Z",
+          })
+        ) as never,
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(exitCode).toBe(1);
+      expect(err.join("")).toMatch(/retr/i);
+      expect(err.join("")).toContain("2026-01-01T00:05:00Z");
+    });
+
+    it("analysis-failed exits 1 with the existing message (unchanged)", async () => {
+      const { deps } = makeDeps({
+        runOne: vi.fn(async () =>
+          okResult({ status: "analysis-failed", error: "model timed out" })
+        ) as never,
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(exitCode).toBe(1);
+      expect(err.join("")).toMatch(/review failed/);
+      expect(err.join("")).toContain("model timed out");
+    });
+
+    it("superseded exits 0 and states no remote output was published", async () => {
+      const { deps } = makeDeps({
+        runOne: vi.fn(async () => okResult({ status: "superseded" })) as never,
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(exitCode).toBeNull();
+      expect(err.join("")).toMatch(/head changed/i);
+      expect(err.join("")).toMatch(/no.*output.*published/i);
+    });
+
+    it("cancelled exits 0 and states no remote output was published", async () => {
+      const { deps } = makeDeps({
+        runOne: vi.fn(async () => okResult({ status: "cancelled" })) as never,
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(exitCode).toBeNull();
+      expect(err.join("")).toMatch(/closed|draft|unlabell?ed/i);
+      expect(err.join("")).toMatch(/no.*output.*published/i);
+    });
+  });
+
+  describe("one-shot PR eligibility gate", () => {
+    it("a draft PR is never analyzed: exits 1 before runOne, naming the reason", async () => {
+      const { deps, github, runOne } = makeDeps();
+      (github.getPullRequest as ReturnType<typeof vi.fn>).mockReturnValue({
+        ...revision,
+        isDraft: true,
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(runOne).not.toHaveBeenCalled();
+      expect(exitCode).toBe(1);
+      expect(err.join("")).toContain("acme/widget#7");
+      expect(err.join("")).toMatch(/draft/);
+    });
+
+    it("a closed PR is never analyzed: exits 1 before runOne, naming the reason", async () => {
+      const { deps, github, runOne } = makeDeps();
+      (github.getPullRequest as ReturnType<typeof vi.fn>).mockReturnValue({
+        ...revision,
+        state: "CLOSED",
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(runOne).not.toHaveBeenCalled();
+      expect(exitCode).toBe(1);
+      expect(err.join("")).toContain("acme/widget#7");
+      expect(err.join("")).toMatch(/closed/);
+    });
+
+    it("an unlabelled PR is never analyzed: exits 1 before runOne, naming the reason", async () => {
+      const { deps, github, runOne } = makeDeps();
+      (github.getPullRequest as ReturnType<typeof vi.fn>).mockReturnValue({
+        ...revision,
+        labels: [],
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(runOne).not.toHaveBeenCalled();
+      expect(exitCode).toBe(1);
+      expect(err.join("")).toContain("acme/widget#7");
+      expect(err.join("")).toMatch(/label/);
+    });
+
+    it("an eligible PR (open, non-draft, labelled) still runs the pipeline", async () => {
+      const { deps, github, runOne } = makeDeps();
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(github.getPullRequest).toHaveBeenCalledWith("acme/widget", 7);
+      expect(runOne).toHaveBeenCalledTimes(1);
+      expect(exitCode).toBeNull();
+    });
+  });
+
   it("the flat bin mirrors the existing thin bins and package.json exposes otto-review", () => {
     const bin = readFileSync(
       join(REPO_ROOT, "apps", "cli", "bin", "otto-review.js"),

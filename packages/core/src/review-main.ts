@@ -25,7 +25,7 @@ import { resolveTierLadder } from "./model-tier.js";
 import { notifyComplete, notifyError } from "./notify.js";
 import { runPreflight, runReviewPreflight } from "./preflight.js";
 import { resolveReviewInput, ReviewInputError } from "./pr-review-input.js";
-import { runPullRequestReview } from "./pr-review.js";
+import { ineligibleReason, runPullRequestReview } from "./pr-review.js";
 import { runPullRequestReviewWatch } from "./pr-review-watch.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import {
@@ -285,6 +285,18 @@ export async function runReview(
     return deps.exit(1);
   }
 
+  // Eligibility gate BEFORE the (paid) pipeline: a closed/draft/unlabelled PR
+  // is never claimed, worktree'd, or model-analyzed for a one-shot run. Watch
+  // mode already filters eligibility on its own poll loop, so this check is
+  // one-shot only.
+  const ineligible = ineligibleReason(revision, config.label);
+  if (ineligible) {
+    deps.stderr(
+      `PR ${config.repository}#${pullRequest} is not eligible for review: ${ineligible}\n`
+    );
+    return deps.exit(1);
+  }
+
   const result = await deps.runOne({
     workspaceDir,
     packageDir,
@@ -318,8 +330,42 @@ export async function runReview(
     }
   }
 
+  // Explicit run-result -> exit-code contract for every terminal status:
+  //   succeeded      -> 0 (falls through below).
+  //   publish-failed -> 1: the analysis ran (was paid for) but the requested
+  //                     GitHub output was NOT delivered — a script must see
+  //                     this as a failure even though nothing crashed.
+  //   analysis-failed-> 1 (unchanged).
+  //   superseded     -> 0: the PR head changed under us; declining to publish
+  //                     against a stale head is correct, not a failure.
+  //   cancelled      -> 0: the PR became closed/draft/unlabelled mid-run;
+  //                     declining to publish is correct, not a failure.
+  if (result.status === "publish-failed") {
+    const retryNote = result.retryable
+      ? ` (will be retried${result.nextRetryAt ? ` at ${result.nextRetryAt}` : ""})`
+      : "";
+    deps.stderr(
+      `publish failed: ${result.error ?? "unknown error"} — no remote output was delivered${retryNote}\n`
+    );
+    return deps.exit(1);
+  }
+
   if (result.status === "analysis-failed") {
     deps.stderr(`review failed: ${result.error ?? "analysis failed"}\n`);
     return deps.exit(1);
+  }
+
+  if (result.status === "superseded") {
+    deps.stderr(
+      `review declined: the PR head changed during the run — no remote output was published\n`
+    );
+    return;
+  }
+
+  if (result.status === "cancelled") {
+    deps.stderr(
+      `review declined: the PR was closed, drafted, or unlabelled during the run — no remote output was published\n`
+    );
+    return;
   }
 }

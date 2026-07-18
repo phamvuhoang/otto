@@ -7,6 +7,7 @@ dist/
 # Otto runtime (scratch is gitignored; .otto/ content is tracked, state.json is not)
 .otto-tmp/
 .otto/state.json
+.otto/cbm-scratch/
 # Eval fixture replay artifacts (otto writes a run bundle inside each fixture)
 benchmarks/fixtures/*/.otto/runs/
 # docs/ROADMAP.md is temporary planning scratch, not an official roadmap

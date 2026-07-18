@@ -15,7 +15,7 @@ import type { ToolDefinition, ToolOperation } from "./tools.js";
  * `stages: []` (no default injection into any stage template), `enabled:
  * false` (registry-level off switch), `networkDomains: []` (no runtime
  * network — the graph lives entirely in a local cache), and `writeRoots:
- * [".codebase-memory"]` (writes confined to its own cache directory).
+ * [".otto/cbm-scratch"]` (writes confined to Otto's own scratch directory).
  */
 
 /** One JSON-RPC request to the codebase-memory MCP child. */
@@ -58,9 +58,10 @@ const OPERATIONS: ToolOperation[] = [
 /**
  * The {@link ToolDefinition} a repo drops into `.otto/tools/codebase-memory.json`
  * (mirrors {@link ./headroom-adapter.js}'s `headroomToolDefinition`). Declares
- * no runtime network, cache-only writes, and the operation allowlist
- * (`operations`) that a caller can gate calls against. `stages: []` and
- * `enabled: false` keep it fully opt-in — a bare repo behaves as before.
+ * no runtime network, writes confined to the Otto-owned scratch directory
+ * `.otto/cbm-scratch`, and the operation allowlist (`operations`) that a
+ * caller can gate calls against. `stages: []` and `enabled: false` keep it
+ * fully opt-in — a bare repo behaves as before.
  */
 export function codebaseMemoryToolDefinition(
   command = "codebase-memory"
@@ -80,7 +81,7 @@ export function codebaseMemoryToolDefinition(
     command,
     env: [],
     networkDomains: [], // no runtime network
-    writeRoots: [".codebase-memory"], // cache-only
+    writeRoots: [".otto/cbm-scratch"], // Otto-owned confined scratch
     secretRefs: [],
     timeoutMs: 120_000,
     healthCheck: `${command} --version`,

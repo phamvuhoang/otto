@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterEach, beforeEach } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   formatReviewConfig,
   formatReviewHelp,
   parsePullRequestRef,
   parseReviewFlags,
+  readPullRequestReviewConfig,
   resolvePullRequestReviewConfig,
   type PullRequestReviewConfig,
   type ReviewCliFlags,
@@ -649,6 +653,54 @@ describe("resolvePullRequestReviewConfig", () => {
         },
       });
       expect(config.reviewInput).toEqual({ kind: "none" });
+    });
+  });
+});
+
+describe("readPullRequestReviewConfig", () => {
+  let ws: string;
+
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), "otto-review-cli-"));
+  });
+
+  afterEach(() => {
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("returns undefined when .otto/config.json is missing", () => {
+    expect(readPullRequestReviewConfig(ws)).toBeUndefined();
+  });
+
+  it("returns undefined and does not throw on malformed JSON", () => {
+    mkdirSync(join(ws, ".otto"), { recursive: true });
+    writeFileSync(join(ws, ".otto", "config.json"), "{ not valid json", "utf8");
+    expect(() => readPullRequestReviewConfig(ws)).not.toThrow();
+    expect(readPullRequestReviewConfig(ws)).toBeUndefined();
+  });
+
+  it("returns the raw pullRequestReview value unvalidated when it is a non-object type (validation is the resolver's job)", () => {
+    mkdirSync(join(ws, ".otto"), { recursive: true });
+    writeFileSync(
+      join(ws, ".otto", "config.json"),
+      JSON.stringify({ pullRequestReview: "not-an-object" }),
+      "utf8"
+    );
+    expect(readPullRequestReviewConfig(ws)).toBe("not-an-object");
+  });
+
+  it("returns the parsed pullRequestReview object on the happy path", () => {
+    mkdirSync(join(ws, ".otto"), { recursive: true });
+    writeFileSync(
+      join(ws, ".otto", "config.json"),
+      JSON.stringify({
+        pullRequestReview: { label: "otto-review", output: "text" },
+      }),
+      "utf8"
+    );
+    expect(readPullRequestReviewConfig(ws)).toEqual({
+      label: "otto-review",
+      output: "text",
     });
   });
 });

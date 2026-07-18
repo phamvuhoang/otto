@@ -1,11 +1,23 @@
 import type { ModelTier } from "./model-tier.js";
 
+/**
+ * OS-enforced execution capability for a stage (issue P32). `workspace-write`
+ * is today's behavior: the stage may write inside the sandboxed workspace.
+ * `read-only` denies all writes and network egress and scrubs credentials, so an
+ * untrusted PR head can be reviewed without any write or GitHub capability.
+ * Absent ⇒ `workspace-write` (see {@link stageAccess}), keeping every existing
+ * stage byte-for-byte unchanged.
+ */
+export type StageAccess = "workspace-write" | "read-only";
+
 export type Stage = {
   name: string;
   template: string;
   permissionMode?: string;
   /** Difficulty tier for model routing (issue #66 P11). Absent ⇒ runtime default model. */
   tier?: ModelTier;
+  /** OS-enforced access mode (issue P32). Absent ⇒ `workspace-write` (today). */
+  access?: StageAccess;
 };
 
 // Every stage runs `claude --permission-mode bypassPermissions` so bash + edits

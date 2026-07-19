@@ -1575,11 +1575,12 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
     expect(gh.calls.createReview).toHaveLength(0);
   });
 
-  it("(#2) ownership lost between the comment write and the formal-review write: comment written, review WITHHELD, resumable", async () => {
-    // Per-write ownership fence. `lease.ownsClaim()` is true before the comment
-    // write, then the comment write side-effect removes the on-disk claim so the
-    // fence before the formal-review write sees ownsClaim()===false → the review
-    // is NOT written, publication stops, and the comment receipt is preserved.
+  it("(#2) caller shutdown between the comment write and the formal-review write: comment written, review WITHHELD, resumable", async () => {
+    // With flock, ownership cannot change under a live holder — but a caller
+    // SHUTDOWN abort can still fire between the two INDEPENDENT remote writes. The
+    // per-write fence before the formal review sees the abort → the review is NOT
+    // written, publication stops, and the comment receipt is preserved.
+    const controller = new AbortController();
     const fake = makeFakeAnalyze({
       confirmed: [finding({ file: "src/app.ts", line: "1" })],
     });
@@ -1587,23 +1588,21 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
     const origCreate = gh.github.createIssueComment;
     gh.github.createIssueComment = (r: string, n: number, b: string) => {
       const c = origCreate(r, n, b);
-      // The claim vanishes right after the comment lands: a stand-in for another
-      // process taking over — ownsClaim() will read no owned claim and be false.
-      rmSync(join(fx.workspaceDir, ".otto", "review-state"), {
-        recursive: true,
-        force: true,
-      });
+      // Caller shutdown fires right after the comment lands, before the formal
+      // review's own write.
+      controller.abort();
       return c;
     };
     const res = await runPullRequestReview({
       ...baseArgs(fx),
       reviewInput: resolvedInput(fx),
       config: makeConfig({ output: "comment", githubReview: true }),
+      signal: controller.signal,
       deps: { analyze: fake.fn, github: gh.github, stdout, now },
     });
-    // The comment WAS written (fence passed while ownership held)…
+    // The comment WAS written (fence passed while still authorized)…
     expect(gh.calls.createComment).toBe(1);
-    // …but the formal review was WITHHELD (fence failed after ownership loss).
+    // …but the formal review was WITHHELD (fence failed after the abort).
     expect(gh.calls.createReview).toHaveLength(0);
     // The comment receipt survives and the run persists RESUMABLE `running`.
     expect(res.commentId).toBeDefined();
@@ -1618,6 +1617,56 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
     expect(st?.status).toBe("running");
     expect(st?.outputs.comment?.status).toBe("succeeded");
     expect(st?.outputs.githubReview).toBeUndefined();
+  });
+
+  it("(#2b) caller shutdown DURING the summary-comment helper's reads publishes NO comment (write-boundary fence)", async () => {
+    // The write-boundary fence is threaded INTO upsertSummaryComment and invoked
+    // AFTER its viewer/list reconciliation, IMMEDIATELY before the create write.
+    // A caller shutdown that fires during those reads — after the pipeline's
+    // pre-helper fence already passed — must still withhold the write. Without the
+    // threaded fence the pre-helper check would have passed and the comment would
+    // be published; with it, nothing is written and the run is resumable.
+    const controller = new AbortController();
+    let analyzed = false;
+    const base = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const analyze: typeof base.fn = async (opts) => {
+      const out = await base.fn(opts);
+      analyzed = true;
+      return out;
+    };
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const origList = gh.github.listIssueComments;
+    gh.github.listIssueComments = () => {
+      // Recovery lists BEFORE analysis (analyzed===false) and must not abort; the
+      // list inside upsertSummaryComment runs AFTER analysis — abort there, during
+      // the helper's own reads.
+      if (analyzed && !controller.signal.aborted) controller.abort();
+      return origList();
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      signal: controller.signal,
+      deps: { analyze, github: gh.github, stdout, now },
+    });
+    // NO comment (and no review) was written — the boundary fence withheld it.
+    expect(gh.calls.createComment).toBe(0);
+    expect(gh.calls.createReview).toHaveLength(0);
+    expect(res.commentId).toBeUndefined();
+    // Paid analysis is preserved in a resumable `running` state (not cost 0).
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("running");
+    expect(st?.outputs.comment).toBeUndefined();
+    expect(st?.analysisArtifact).toBe(`.otto/runs/${res.runId}/analysis.json`);
   });
 
   it("(#3a) recovery with >1 owned summary comment is a permanent publish-failed, NOT a silent success", async () => {

@@ -48,6 +48,25 @@ import {
 } from "./pr-review.js";
 
 // ---------------------------------------------------------------------------
+// Write-boundary authorization fence
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown by an {@link upsertSummaryComment}/{@link publishFormalReview}
+ * `ensureAuthorized` callback when the run is no longer authorized to write at
+ * the boundary (a caller shutdown fired, or the lease is no longer held). The
+ * pipeline maps it to the aborted/lost terminal path — publishing nothing
+ * further and preserving any prior receipt. It is DISTINCT from a
+ * {@link GitHubPrError} so it is never recorded as a publish failure.
+ */
+export class ReviewWriteAbortedError extends Error {
+  constructor(message = "review write aborted at the authorization boundary") {
+    super(message);
+    this.name = "ReviewWriteAbortedError";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Reconciliation
 // ---------------------------------------------------------------------------
 
@@ -179,6 +198,14 @@ export function upsertSummaryComment(opts: {
   headSha: string;
   inputFingerprint: string;
   body: string;
+  /**
+   * Write-boundary fence, invoked IMMEDIATELY before the create/update write
+   * (after the viewer/list reconciliation). Throws {@link ReviewWriteAbortedError}
+   * if the run may no longer write — so a caller shutdown that fires during the
+   * reconciliation reads publishes nothing. A no-op `reuse` performs no write and
+   * is not fenced.
+   */
+  ensureAuthorized?: () => void;
 }): SummaryCommentReceipt {
   const { github, repository, pullRequest, headSha, inputFingerprint, body } =
     opts;
@@ -197,6 +224,7 @@ export function upsertSummaryComment(opts: {
   );
 
   if (existing === null) {
+    opts.ensureAuthorized?.();
     const created = github.createIssueComment(repository, pullRequest, body);
     return { commentId: created.id, action: "created", body };
   }
@@ -211,6 +239,7 @@ export function upsertSummaryComment(opts: {
     return { commentId: existing.id, action: "reused", body: existing.body };
   }
 
+  opts.ensureAuthorized?.();
   const updated = github.updateIssueComment(repository, existing.id, body);
   return { commentId: updated.id, action: "updated", body };
 }
@@ -269,6 +298,12 @@ export function githubReviewEvent(
 export function publishFormalReview(opts: {
   github: Pick<GitHubPrClient, "viewer" | "listReviews" | "createReview">;
   review: CanonicalReview;
+  /**
+   * Write-boundary fence, invoked IMMEDIATELY before `createReview` (after the
+   * viewer/list reconciliation). Throws {@link ReviewWriteAbortedError} if the
+   * run may no longer write. A no-op `reuse` performs no write and is not fenced.
+   */
+  ensureAuthorized?: () => void;
 }): FormalReviewReceipt {
   const { github, review } = opts;
   const { repository, pullRequest, headSha } = review;
@@ -309,6 +344,7 @@ export function publishFormalReview(opts: {
       body: renderInlineComment(f),
     }));
 
+  opts.ensureAuthorized?.();
   const created = github.createReview({
     repository,
     pullRequest,

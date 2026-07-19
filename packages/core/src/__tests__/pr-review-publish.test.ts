@@ -5,6 +5,7 @@ import {
   nextPublicationRetryAt,
   publishFormalReview,
   reconcilePublication,
+  ReviewWriteAbortedError,
   upsertSummaryComment,
 } from "../pr-review-publish.js";
 import {
@@ -301,6 +302,55 @@ describe("upsertSummaryComment", () => {
     expect(calls.update).toHaveLength(0);
     expect(calls.create).toHaveLength(0);
   });
+
+  it("(#2) runs ensureAuthorized at the write boundary — a create is NOT issued when it throws", () => {
+    // The fence fires AFTER viewer()+list reconciliation but IMMEDIATELY before
+    // the create write, so a caller shutdown during the helper's reads publishes
+    // nothing.
+    const { github, calls } = fakeGithub({ comments: [] });
+    expect(() =>
+      upsertSummaryComment({
+        github,
+        repository: REPO,
+        pullRequest: PR,
+        headSha: HEAD,
+        inputFingerprint: FP,
+        body: body(HEAD, FP),
+        ensureAuthorized: () => {
+          throw new ReviewWriteAbortedError("aborted at boundary");
+        },
+      })
+    ).toThrow(ReviewWriteAbortedError);
+    // The reads happened, but NO comment was created.
+    expect(calls.viewer).toBe(1);
+    expect(calls.list).toBe(1);
+    expect(calls.create).toHaveLength(0);
+    expect(calls.update).toHaveLength(0);
+  });
+
+  it("(#2) runs ensureAuthorized at the write boundary — an update is NOT issued when it throws", () => {
+    const owned = comment({
+      id: 55,
+      author: VIEWER,
+      body: body("e".repeat(40), FP), // older head → would update
+    });
+    const { github, calls } = fakeGithub({ comments: [owned] });
+    expect(() =>
+      upsertSummaryComment({
+        github,
+        repository: REPO,
+        pullRequest: PR,
+        headSha: HEAD,
+        inputFingerprint: FP,
+        body: body(HEAD, FP),
+        ensureAuthorized: () => {
+          throw new ReviewWriteAbortedError("aborted at boundary");
+        },
+      })
+    ).toThrow(ReviewWriteAbortedError);
+    expect(calls.update).toHaveLength(0);
+    expect(calls.create).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -585,6 +635,23 @@ describe("publishFormalReview", () => {
       expect(e).toBeInstanceOf(GitHubPrError);
       expect((e as GitHubPrError).retryable).toBe(false);
     }
+    expect(calls.create).toHaveLength(0);
+  });
+
+  it("(#2) runs ensureAuthorized at the write boundary — createReview is NOT issued when it throws", () => {
+    const { github, calls } = fakeReviewGithub({});
+    expect(() =>
+      publishFormalReview({
+        github,
+        review: canonical(),
+        ensureAuthorized: () => {
+          throw new ReviewWriteAbortedError("aborted at boundary");
+        },
+      })
+    ).toThrow(ReviewWriteAbortedError);
+    // Reconciliation reads ran, but NO review was created.
+    expect(calls.viewer).toBe(1);
+    expect(calls.list).toBe(1);
     expect(calls.create).toHaveLength(0);
   });
 });

@@ -1,7 +1,9 @@
 import {
+  closeSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -9,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { flockSync } from "fs-ext";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   reviewStatePath,
@@ -16,8 +19,6 @@ import {
   writeReviewState,
   acquireReviewLease,
   isStateRunnable,
-  REVIEW_LEASE_HEARTBEAT_MS,
-  REVIEW_LEASE_STALE_MS,
   type ReviewLease,
   type PullRequestReviewState,
 } from "../pr-review-state.js";
@@ -186,7 +187,14 @@ describe("writeReviewState / readReviewState", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Ownership-fenced PID-liveness lease
+// OS flock (advisory-lock) lease
+//
+// The lease is a real kernel-serialized `flock` held on an open fd for the run's
+// lifetime. Two independent open file descriptions cannot both take the
+// exclusive lock, so two acquirers can NEVER both get `acquired: true` — the
+// exact double-hold the old read-decide-takeover claim scheme could not close.
+// The kernel auto-releases the lock when the holding fd closes or the process
+// dies, so crash recovery needs no PID probe, tombstone, or staleness logic.
 // ---------------------------------------------------------------------------
 
 const leaseOpts = (over: Record<string, unknown> = {}) => ({
@@ -199,18 +207,13 @@ const leaseOpts = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-/** The on-disk claim file path for a composite identity. */
-function claimFile(repository = REPO, pr = PR, head = HEAD, fp = FP): string {
+/** The on-disk lock file path for a composite identity. */
+function lockFile(repository = REPO, pr = PR, head = HEAD, fp = FP): string {
   return reviewStatePath(ws, repository, pr, head, fp).replace(
     /\.json$/,
-    ".claim"
+    ".lock"
   );
 }
-
-/** A pid that our injected `isPidAlive` will treat as DEAD (never our own). */
-const DEAD_PID = 999_999_999;
-/** Real liveness: only THIS process is alive; any other recorded pid is dead. */
-const onlySelfAlive = (pid: number) => pid === process.pid;
 
 let held: ReviewLease[] = [];
 afterEach(() => {
@@ -224,7 +227,7 @@ function acquire(over: Record<string, unknown> = {}) {
 }
 
 describe("acquireReviewLease", () => {
-  it("acquires a free identity and writes its claim file", () => {
+  it("acquires a free identity, holds the lock, and reports ownership", () => {
     const res = acquire();
     expect(res.acquired).toBe(true);
     if (res.acquired) {
@@ -232,16 +235,17 @@ describe("acquireReviewLease", () => {
       expect(typeof res.lease.ownsClaim).toBe("function");
       expect(res.lease.ownsClaim()).toBe(true);
     }
-    expect(existsSync(claimFile())).toBe(true);
-    expect(readdirSync(join(claimFile(), ".."))).toContain(`${FP}.claim`);
+    expect(existsSync(lockFile())).toBe(true);
   });
 
-  it("a second acquire while the holder's pid is ALIVE is rejected as busy", () => {
+  it("a SECOND acquire while the first still holds the flock is busy — two independent holders can NEVER both acquire", () => {
+    // This is the exact double-hold the old read-decide-takeover claim scheme
+    // could not close. `acquireReviewLease` opens its OWN fd each call, so these
+    // are two independent open file descriptions; the kernel serializes the
+    // exclusive flock and the second acquirer is rejected outright.
     const first = acquire();
     expect(first.acquired).toBe(true);
 
-    // The holder's recorded pid is our own (alive) → a live holder is never
-    // dispossessed.
     const second = acquireReviewLease(leaseOpts({ runId: "run-other" }));
     expect(second.acquired).toBe(false);
     if (!second.acquired) expect(second.reason).toBe("busy");
@@ -254,56 +258,7 @@ describe("acquireReviewLease", () => {
     expect(b.acquired).toBe(true);
   });
 
-  it("a claim whose recorded pid is DEAD is recoverable by exactly one taker", () => {
-    // Write a stale claim carrying a dead pid (a crashed holder).
-    mkdirSync(join(claimFile(), ".."), { recursive: true });
-    writeFileSync(
-      claimFile(),
-      JSON.stringify({
-        repository: REPO,
-        pullRequest: PR,
-        headSha: HEAD,
-        inputFingerprint: FP,
-        runId: "crashed",
-        pid: DEAD_PID,
-        acquiredAt: T0.toISOString(),
-        heartbeatAt: T0.toISOString(),
-      })
-    );
-    const recovered = acquire({
-      runId: "recoverer",
-      isPidAlive: onlySelfAlive,
-    });
-    expect(recovered.acquired).toBe(true);
-    if (recovered.acquired) expect(recovered.lease.ownsClaim()).toBe(true);
-  });
-
-  it("two racing recoverers of a DEAD claim: exactly one wins (rename arbitration)", () => {
-    mkdirSync(join(claimFile(), ".."), { recursive: true });
-    writeFileSync(
-      claimFile(),
-      JSON.stringify({
-        repository: REPO,
-        pullRequest: PR,
-        headSha: HEAD,
-        inputFingerprint: FP,
-        runId: "crashed",
-        pid: DEAD_PID,
-        acquiredAt: T0.toISOString(),
-        heartbeatAt: T0.toISOString(),
-      })
-    );
-    // A recovers the dead claim and writes a fresh LIVE claim; B then sees A's
-    // live claim and is busy.
-    const a = acquire({ runId: "A", isPidAlive: onlySelfAlive });
-    const b = acquireReviewLease(
-      leaseOpts({ runId: "B", isPidAlive: onlySelfAlive })
-    );
-    expect(a.acquired).toBe(true);
-    expect(b.acquired).toBe(false);
-  });
-
-  it("release is ownership-fenced + idempotent", () => {
+  it("release frees the lock so a subsequent acquire succeeds", () => {
     const first = acquireReviewLease(leaseOpts());
     expect(first.acquired).toBe(true);
     if (!first.acquired) throw new Error("expected acquire");
@@ -312,82 +267,61 @@ describe("acquireReviewLease", () => {
     expect(busy.acquired).toBe(false);
 
     first.lease.release();
-    // Idempotent: safe to call again in a finally.
-    first.lease.release();
-    expect(existsSync(claimFile())).toBe(false);
 
     const again = acquire({ runId: "x" });
     expect(again.acquired).toBe(true);
   });
 
-  it("rejects a bad runId before touching disk", () => {
-    expect(() => acquireReviewLease(leaseOpts({ runId: "bad id!" }))).toThrow();
+  it("release is idempotent and ownsClaim is false afterwards", () => {
+    const first = acquireReviewLease(leaseOpts());
+    expect(first.acquired).toBe(true);
+    if (!first.acquired) throw new Error("expected acquire");
+    expect(first.lease.ownsClaim()).toBe(true);
+
+    first.lease.release();
+    // Safe to call again in a finally.
+    first.lease.release();
+    expect(first.lease.ownsClaim()).toBe(false);
   });
 
-  it("treats a byte-EMPTY claim file as BUSY (mid-create), never stolen", () => {
-    // A concurrent create-in-progress could momentarily expose an empty claim
-    // file. A second acquirer must NOT read it as unparseable-and-stale and
-    // steal it — that would reintroduce a transient double-hold. It is BUSY.
-    mkdirSync(join(claimFile(), ".."), { recursive: true });
-    writeFileSync(claimFile(), "");
-    const res = acquireReviewLease(
-      leaseOpts({ runId: "racer", isPidAlive: onlySelfAlive })
-    );
-    expect(res.acquired).toBe(false);
-    if (!res.acquired) expect(res.reason).toBe("busy");
-  });
+  it("crash recovery is automatic: the kernel releases a dead holder's lock on fd close", () => {
+    // Simulate a crashed daemon that still holds the OS lock: open the lock file
+    // on a raw fd and take the exclusive flock ourselves.
+    mkdirSync(join(lockFile(), ".."), { recursive: true });
+    const crashedFd = openSync(lockFile(), "a");
+    flockSync(crashedFd, "exnb");
 
-  it("link-based exclusive create: complete claim, no temp leftover, busy when held", () => {
-    const free = acquire();
-    expect(free.acquired).toBe(true);
-
-    // The claim file appears already containing its FULL content — a reader sees
-    // a COMPLETE parseable claim, never an empty/partial intermediate.
-    const parsed = JSON.parse(readFileSync(claimFile(), "utf8"));
-    expect(parsed.runId).toBe(RUN);
-    expect(parsed.pid).toBe(process.pid);
-
-    // The link-based create leaves no temp file behind.
-    expect(readdirSync(join(claimFile(), ".."))).toEqual([`${FP}.claim`]);
-
-    // Still held by a live claim → a second acquire is busy (EEXIST gate).
-    const busy = acquireReviewLease(leaseOpts({ runId: "other" }));
+    // While that "process" holds the lock, a fresh acquire is busy.
+    const busy = acquireReviewLease(leaseOpts({ runId: "restart" }));
     expect(busy.acquired).toBe(false);
     if (!busy.acquired) expect(busy.reason).toBe("busy");
+
+    // The daemon "crashes": closing its fd makes the kernel release the flock —
+    // no PID probe, tombstone, or staleness logic is involved.
+    closeSync(crashedFd);
+
+    // The restart's exclusive flock simply succeeds.
+    const recovered = acquire({ runId: "restart" });
+    expect(recovered.acquired).toBe(true);
+    if (recovered.acquired) expect(recovered.lease.ownsClaim()).toBe(true);
   });
 
-  it("B recovers A's DEAD claim; A's stale release NEVER deletes B's claim; C is busy", () => {
-    // A acquires normally.
-    const a = acquireReviewLease(leaseOpts({ runId: "A" }));
-    expect(a.acquired).toBe(true);
-    if (!a.acquired) throw new Error("expected A to acquire");
-
-    // A's process dies: rewrite A's claim to carry a DEAD pid (same runId "A", so
-    // A's in-hand lease handle still believes it owns the claim).
-    const aClaim = JSON.parse(readFileSync(claimFile(), "utf8"));
-    writeFileSync(claimFile(), JSON.stringify({ ...aClaim, pid: DEAD_PID }));
-
-    // B recovers A's dead claim (A's pid is dead; B's own pid is alive).
-    const b = acquireReviewLease(
-      leaseOpts({ runId: "B", isPidAlive: onlySelfAlive })
+  it("a stale lock FILE left on disk with no live holder is freely acquirable (file content is not the authority)", () => {
+    // After a crash the lock FILE may survive, possibly holding stale evidence.
+    // With flock the file content is NOT the authority — nothing parses it for a
+    // pid or staleness. An unlocked file is simply acquirable.
+    mkdirSync(join(lockFile(), ".."), { recursive: true });
+    writeFileSync(
+      lockFile(),
+      JSON.stringify({ runId: "crashed", pid: 999_999_999 })
     );
-    expect(b.acquired).toBe(true);
-    if (!b.acquired) throw new Error("expected B to recover");
-    held.push(b.lease);
+    const res = acquire({ runId: "fresh" });
+    expect(res.acquired).toBe(true);
+    if (res.acquired) expect(res.lease.ownsClaim()).toBe(true);
+  });
 
-    // A, holding its STALE lease handle, calls release() — the ownership fence
-    // MUST NOT delete B's claim.
-    a.lease.release();
-    const after = JSON.parse(readFileSync(claimFile(), "utf8"));
-    expect(after.runId).toBe("B");
-    expect(b.lease.ownsClaim()).toBe(true);
-
-    // C therefore sees B's LIVE claim and is BUSY — no double-holder.
-    const c = acquireReviewLease(
-      leaseOpts({ runId: "C", isPidAlive: onlySelfAlive })
-    );
-    expect(c.acquired).toBe(false);
-    if (!c.acquired) expect(c.reason).toBe("busy");
+  it("rejects a bad runId before touching disk", () => {
+    expect(() => acquireReviewLease(leaseOpts({ runId: "bad id!" }))).toThrow();
   });
 });
 
@@ -431,12 +365,5 @@ describe("isStateRunnable", () => {
     expect(isStateRunnable(state, at(4))).toBe(false);
     expect(isStateRunnable(state, at(5))).toBe(true);
     expect(isStateRunnable(state, at(6))).toBe(true);
-  });
-});
-
-describe("lease timing constants", () => {
-  it("matches the brief", () => {
-    expect(REVIEW_LEASE_HEARTBEAT_MS).toBe(60_000);
-    expect(REVIEW_LEASE_STALE_MS).toBe(15 * 60_000);
   });
 });

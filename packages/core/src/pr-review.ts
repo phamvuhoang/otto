@@ -50,6 +50,7 @@ import {
   publishFormalReview,
   nextPublicationRetryAt,
   resolveOwnedUnique,
+  ReviewWriteAbortedError,
 } from "./pr-review-publish.js";
 import { mapFindingsToDiff } from "./pr-review-diff.js";
 import {
@@ -839,6 +840,13 @@ export async function runPullRequestReview(opts: {
               headSha,
               inputFingerprint,
               body: canonicalMarkdown,
+              // Re-check at the write boundary: a caller shutdown that fires
+              // DURING the helper's viewer/list reads still withholds the write.
+              ensureAuthorized: () => {
+                if (runAbort.signal.aborted || !lease.ownsClaim()) {
+                  throw new ReviewWriteAbortedError();
+                }
+              },
             });
             outputs.comment = {
               status: "succeeded",
@@ -846,6 +854,12 @@ export async function runPullRequestReview(opts: {
             };
             commentId = receipt.commentId;
           } catch (err) {
+            // A write-boundary abort is NOT a publish failure: withhold the write
+            // and take the aborted/resumable terminal path, preserving any prior
+            // receipt.
+            if (err instanceof ReviewWriteAbortedError) {
+              return abortedResumable(outputs);
+            }
             const gerr =
               err instanceof GitHubPrError
                 ? err
@@ -961,13 +975,28 @@ export async function runPullRequestReview(opts: {
           if (runAbort.signal.aborted || !lease.ownsClaim()) {
             return abortedResumable(outputs, commentId);
           }
-          const receipt = publishFormalReview({ github, review: canonical });
+          const receipt = publishFormalReview({
+            github,
+            review: canonical,
+            // Re-check at the write boundary: a caller shutdown during the
+            // helper's viewer/list reads withholds the review write.
+            ensureAuthorized: () => {
+              if (runAbort.signal.aborted || !lease.ownsClaim()) {
+                throw new ReviewWriteAbortedError();
+              }
+            },
+          });
           outputs.githubReview = {
             status: "succeeded",
             reviewId: receipt.reviewId,
           };
           reviewId = receipt.reviewId;
         } catch (err) {
+          // A write-boundary abort withholds the review while preserving the
+          // already-succeeded comment receipt (resumable terminal path).
+          if (err instanceof ReviewWriteAbortedError) {
+            return abortedResumable(outputs, commentId);
+          }
           const gerr =
             err instanceof GitHubPrError
               ? err

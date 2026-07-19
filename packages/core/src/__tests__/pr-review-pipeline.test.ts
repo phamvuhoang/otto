@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { getEventListeners } from "node:events";
 import {
   existsSync,
   mkdtempSync,
@@ -1823,6 +1824,183 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
       fp()
     );
     expect(st?.status).toBe("publish-failed");
+  });
+
+  it("(#3c) recovery uniqueness is by author+summaryMarker (like publication): a current comment PLUS a stale-head owned comment is a permanent >1, NOT a silent success", async () => {
+    // Publication (upsertSummaryComment) enforces uniqueness over EVERY owned
+    // stable PR summary marker and rejects `>1`. Recovery MUST reconcile the same
+    // way — resolve by author + summaryMarker FIRST, then validate head/input — so
+    // ONE current-identity comment plus ONE stale-head owned summary comment is the
+    // same permanent reconciliation error, never a head+input first-match success.
+    const current: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const staleHead: GitHubComment = {
+      id: 4243,
+      body: summaryBody("e".repeat(40), fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4243",
+    };
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when recovery hits a >1 conflict"
+        );
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [current, staleHead],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(false);
+    expect(gh.calls.createComment).toBe(0);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    expect(st?.retryable).toBe(false);
+  });
+
+  it("(#3d) recovery with a SINGLE owned comment whose input does NOT match current falls through (returns null), it never declares success", async () => {
+    // A single owned summary comment carrying a DIFFERENT input fingerprint is not
+    // proof THIS composite identity is published: recovery must return null so the
+    // normal analysis path runs and UPDATES that same comment in place.
+    const otherInput: GitHubComment = {
+      id: 4300,
+      body: summaryBody(fx.headSha, "a".repeat(64)),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4300",
+    };
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [otherInput],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    // Recovery fell through: analysis ran and the SAME comment was updated in place.
+    expect(res.status).toBe("succeeded");
+    expect(res.commentId).toBe(4300);
+    expect(gh.calls.createComment).toBe(0);
+    expect(fake.invocationCount()).toBeGreaterThan(0);
+  });
+
+  it("(#3e) a recovered run writes the review-input artifact it references and emits a run report (no dangling reference; evidence present)", async () => {
+    // Recovery reconstructs local artifacts from remote proof. The finalized
+    // manifest references review-input.md, so that artifact MUST actually exist,
+    // and a run report MUST be emitted so otto-explain / evidence tooling works.
+    const existingComment: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when the comment already exists"
+        );
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [existingComment],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: false }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.costUsd).toBe(0);
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    // The referenced review-input artifact is actually present…
+    expect(existsSync(join(runDir, "review-input.md"))).toBe(true);
+    // …and a run report was emitted (consistent with the normal finish path).
+    expect(existsSync(join(runDir, "report.md"))).toBe(true);
+    // The manifest references review-input.md and it exists on disk (no dangling).
+    const m = readManifest(fx.workspaceDir, res.runId);
+    const artifacts = m.artifacts as Array<{ kind: string; path: string }>;
+    const inputArtifact = artifacts.find((a) => a.kind === "review-input");
+    expect(inputArtifact).toBeDefined();
+    expect(existsSync(join(fx.workspaceDir, inputArtifact!.path))).toBe(true);
+  });
+
+  it("(#7) a successful review detaches its caller-signal listener in finally — N runs against one long-lived signal do not accumulate listeners", async () => {
+    // The caller's `signal` is a long-lived daemon signal reused across every
+    // watch iteration. Each run forwards it into a run-scoped abort via an
+    // `addEventListener`; a successful run (abort never fires) MUST still detach
+    // that listener in `finally`, or listeners accumulate on the daemon signal
+    // (memory growth + a MaxListeners warning). Assert the listener count returns
+    // to baseline after every run. RED before the fix (count grows 1,2,3…).
+    const controller = new AbortController();
+    const baseline = getEventListeners(controller.signal, "abort").length;
+    const noAnalyze = {
+      fn: async () => {
+        throw new Error("recovery-success path must not analyze");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    for (let iter = 0; iter < 3; iter++) {
+      // Distinct head → distinct composite identity (fresh state, reaches the
+      // abort attach), recovered from an already-published comment (no worktree,
+      // no analysis).
+      const head = String(iter).repeat(40);
+      const existing: GitHubComment = {
+        id: 8100 + iter,
+        body: summaryBody(head, fp()),
+        author: "otto-bot",
+        url: `https://github.com/acme/widget/issues/7#comment-${8100 + iter}`,
+      };
+      const gh = makeReviewGithub({
+        current: () => ({ ...fx.revision, headSha: head }),
+        comments: [existing],
+      });
+      const res = await runPullRequestReview({
+        ...baseArgs(fx),
+        revision: { ...fx.revision, headSha: head },
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "comment", githubReview: false }),
+        signal: controller.signal,
+        deps: {
+          analyze: noAnalyze.fn as never,
+          github: gh.github,
+          stdout,
+          now,
+        },
+      });
+      expect(res.status).toBe("succeeded");
+      // The forward listener was detached in finally → back to baseline.
+      expect(getEventListeners(controller.signal, "abort").length).toBe(
+        baseline
+      );
+    }
   });
 });
 

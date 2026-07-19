@@ -1183,15 +1183,16 @@ export async function runPullRequestReview(opts: {
     const i = inputMarker(inputFingerprint);
     let owned: GitHubComment | null;
     try {
-      // Zero/one/many reconciliation (shared with the publish helpers): a `>1`
-      // owned comment is a permanent error, never a silent first-match success.
+      // Resolve uniqueness EXACTLY as upsertSummaryComment does: by author + the
+      // stable summaryMarker ONLY (never also head/input). A SECOND owned summary
+      // comment — even a stale-head one — is therefore a permanent `>1`
+      // reconciliation error here, identical to what publication would reject, not
+      // a silently-ignored duplicate. (Also matching on the composite head+input
+      // would find the one head match and declare success while a second owned
+      // summary comment that publication rejects still existed on the PR.)
       owned = resolveOwnedUnique(
         comments,
-        (c) =>
-          c.author === viewerLogin &&
-          c.body.includes(marker) &&
-          c.body.includes(h) &&
-          c.body.includes(i),
+        (c) => c.author === viewerLogin && c.body.includes(marker),
         (count) =>
           `found ${count} Otto summary comments carrying ${marker} on ` +
           `${repository}#${pullRequest}; refusing to guess which to update — ` +
@@ -1201,6 +1202,11 @@ export async function runPullRequestReview(opts: {
       return recoveryPermanentFailure(err);
     }
     if (!owned) return null;
+    // The SINGLE owned comment proves THIS composite identity is published only
+    // when it carries the current head AND input markers. A stale-head/older-input
+    // owned comment does NOT prove it — fall through to the normal analysis path
+    // (which UPDATES that same comment in place) rather than declaring success.
+    if (!owned.body.includes(h) || !owned.body.includes(i)) return null;
 
     // Recovery may declare full success ONLY when every configured remote output
     // is provably complete. With --github-review, a crash after the comment but
@@ -1245,18 +1251,33 @@ export async function runPullRequestReview(opts: {
       recoveredReviewId = ownedReview.id;
     }
 
-    // Persist the already-resolved exact input + the remote body as the
-    // recovered run's local artifacts, then reconstruct succeeded state.
+    // Persist the already-resolved exact input as the recovered run's local
+    // review-input artifact BEFORE the finalized manifest references it, and
+    // round-trip verify it (matching runFreshReview's write+verify guarantee) so
+    // the manifest never points at a missing/corrupt artifact. If the run dir
+    // cannot durably persist the input, do NOT record a false success on a
+    // dangling reference — fall through to the normal path (which fails loudly if
+    // the dir is unwritable).
     try {
       deps.writeReviewInput({ workspaceDir, runId, input: reviewInput });
+      const roundTrip = deps.readReviewInput({
+        workspaceDir,
+        runId,
+        expectedFingerprint: inputFingerprint,
+      });
+      if (roundTrip == null || roundTrip.content !== reviewInput.content) {
+        return null;
+      }
     } catch {
-      /* best-effort: the remote comment is authoritative proof either way */
+      return null;
     }
     const written = writeCanonicalReview({
       workspaceDir,
       runId,
       markdown: owned.body,
     });
+    // Emit the run report (consistent with finishPublication) so otto-explain and
+    // evidence tooling work for a recovered run.
     writeRunReport(workspaceDir, runId, owned.body);
     const outputs: PullRequestReviewOutputState = {
       comment: { status: "succeeded", commentId: owned.id },
@@ -1324,15 +1345,22 @@ export async function runPullRequestReview(opts: {
   // Wire the caller's shutdown `signal` into the run-scoped abort: the analysis
   // is cancelled and every remote-write path bails (see the fences in
   // finishPublication and the abort guard below).
+  // The forward listener MUST be detached in `finally` on EVERY exit (success,
+  // abort, or throw): the caller's `signal` is a long-lived daemon signal reused
+  // across every watch iteration, so a per-run listener that never fired
+  // ({ once } only removes itself when abort actually fires) would otherwise
+  // accumulate on it — unbounded memory growth + an eventual MaxListeners
+  // warning. `removeEventListener` is idempotent, so if `{ once: true }` already
+  // removed the listener (abort fired) the finally detach is a harmless no-op.
+  let detachCallerAbort: (() => void) | undefined;
   if (signal?.aborted) runAbort.abort();
-  else {
-    signal?.addEventListener(
-      "abort",
-      () => {
-        if (!runAbort.signal.aborted) runAbort.abort();
-      },
-      { once: true }
-    );
+  else if (signal) {
+    const onCallerAbort = (): void => {
+      if (!runAbort.signal.aborted) runAbort.abort();
+    };
+    signal.addEventListener("abort", onCallerAbort, { once: true });
+    detachCallerAbort = () =>
+      signal.removeEventListener("abort", onCallerAbort);
   }
 
   try {
@@ -1349,6 +1377,9 @@ export async function runPullRequestReview(opts: {
 
     return await runFreshReview();
   } finally {
+    // Detach the caller-signal forward listener so it never accumulates on the
+    // long-lived daemon signal across watch iterations (Defect #7).
+    detachCallerAbort?.();
     lease.release();
     if (worktree) worktree.cleanup();
   }

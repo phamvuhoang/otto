@@ -20,6 +20,9 @@ import {
   acquireReviewLease,
   isStateRunnable,
   _resolveFlockSync,
+  _setFlockSyncForTest,
+  ReviewLeaseError,
+  type FlockSyncFn,
   type ReviewLease,
   type PullRequestReviewState,
 } from "../pr-review-state.js";
@@ -342,6 +345,92 @@ describe("acquireReviewLease", () => {
 
   it("rejects a bad runId before touching disk", () => {
     expect(() => acquireReviewLease(leaseOpts({ runId: "bad id!" }))).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Real (non-busy) flock CALL failures — must be wrapped in an actionable error
+//
+// `getFlockSync()` only gives an actionable error when `fs-ext` itself is
+// MISSING. A real `flockSync` call failure — `ENOTSUP`/`ENOSYS` (advisory
+// locks unsupported, e.g. some network filesystems), a malformed/partial
+// native export, etc. — must NOT be rethrown raw: it must be wrapped in a
+// `ReviewLeaseError` naming the lock path, the original code, and the
+// local-filesystem/fs-ext guidance. The busy path (`EAGAIN`/`EWOULDBLOCK`)
+// must remain completely unaffected.
+// ---------------------------------------------------------------------------
+
+describe("acquireReviewLease — non-busy flock failures are wrapped, not raw", () => {
+  afterEach(() => {
+    // Always restore the real native flockSync so later tests (in this file,
+    // and any other lease acquisitions) are unaffected by the injected fake.
+    _setFlockSyncForTest(undefined);
+  });
+
+  it("wraps a real ENOTSUP flockSync failure in an actionable ReviewLeaseError, not busy", () => {
+    const notsup: FlockSyncFn = () => {
+      const err = new Error(
+        "flock: operation not supported on socket"
+      ) as NodeJS.ErrnoException;
+      err.code = "ENOTSUP";
+      throw err;
+    };
+    _setFlockSyncForTest(notsup);
+
+    let thrown: unknown;
+    try {
+      acquireReviewLease(leaseOpts({ runId: "notsup-run" }));
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown).toBeInstanceOf(ReviewLeaseError);
+    const err = thrown as ReviewLeaseError;
+    expect(err.code).toBe("ENOTSUP");
+    expect(err.message).toContain(lockFile());
+    expect(err.message).toContain("ENOTSUP");
+    expect(err.message.toLowerCase()).toContain("local filesystem");
+    expect(err.message).toContain("fs-ext");
+    expect((err.cause as NodeJS.ErrnoException)?.code).toBe("ENOTSUP");
+  });
+
+  it("throws the actionable error (not the raw error) when the resolved flockSync export is not callable", () => {
+    _setFlockSyncForTest(
+      123 as unknown as FlockSyncFn // simulates a malformed/partial fs-ext export
+    );
+
+    let thrown: unknown;
+    try {
+      acquireReviewLease(leaseOpts({ runId: "not-callable-run" }));
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown).toBeInstanceOf(ReviewLeaseError);
+    const err = thrown as ReviewLeaseError;
+    expect(err.message).toContain(lockFile());
+    expect(err.message).toContain("fs-ext");
+  });
+
+  it("the genuine busy path (EAGAIN) still returns { acquired: false, reason: 'busy' }, unaffected", () => {
+    const eagain: FlockSyncFn = (fd, op) => {
+      if (op === "exnb") {
+        const err = new Error("resource busy") as NodeJS.ErrnoException;
+        err.code = "EAGAIN";
+        throw err;
+      }
+    };
+    _setFlockSyncForTest(eagain);
+
+    const res = acquireReviewLease(leaseOpts({ runId: "busy-run" }));
+    expect(res.acquired).toBe(false);
+    if (!res.acquired) expect(res.reason).toBe("busy");
+  });
+
+  it("a normal acquire still works once the real flockSync is restored", () => {
+    _setFlockSyncForTest(undefined);
+    const res = acquire({ runId: "still-works" });
+    expect(res.acquired).toBe(true);
   });
 });
 

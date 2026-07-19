@@ -69,7 +69,7 @@ import { parseReviewInputFingerprint } from "./pr-review-input.js";
  * lock); `un` releases.
  */
 type FlockOp = "sh" | "ex" | "shnb" | "exnb" | "un";
-type FlockSyncFn = (fd: number, op: FlockOp) => void;
+export type FlockSyncFn = (fd: number, op: FlockOp) => void;
 
 const requireCjs = createRequire(import.meta.url);
 
@@ -113,6 +113,18 @@ function getFlockSync(): FlockSyncFn {
     flockSyncImpl = _resolveFlockSync();
   }
   return flockSyncImpl;
+}
+
+/**
+ * Test-only seam: override (or, passed `undefined`, reset) the CACHED native
+ * `flockSync` consulted by {@link getFlockSync}. This lets tests exercise a
+ * genuine `flockSync` CALL failure (e.g. `ENOTSUP`) or a malformed/partial
+ * `fs-ext` export (a non-function value) without needing an actually broken
+ * native install — {@link _resolveFlockSync} alone can't simulate either,
+ * since it only covers the `require("fs-ext")` step. Not for production use.
+ */
+export function _setFlockSyncForTest(fn: FlockSyncFn | undefined): void {
+  flockSyncImpl = fn;
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +447,49 @@ function isBusyFlockError(err: unknown): boolean {
 }
 
 /**
+ * A non-busy failure of the P32 file lock: a real `flockSync` CALL error
+ * (e.g. `ENOTSUP`/`ENOSYS` — advisory locks unsupported by the underlying
+ * filesystem — or `EBADF`), or a malformed/non-callable `fs-ext` export. This
+ * is distinct from "busy" (`EAGAIN`/`EWOULDBLOCK`, a live competing holder):
+ * it means the lock mechanism itself could not run, which {@link
+ * isBusyFlockError} must never mask as "busy".
+ */
+export class ReviewLeaseError extends Error {
+  /** The original errno code (e.g. `"ENOTSUP"`), or `"EFLOCK"` if unknown. */
+  readonly code: string;
+
+  constructor(message: string, options: { code: string; cause?: unknown }) {
+    super(message, { cause: options.cause });
+    this.name = "ReviewLeaseError";
+    this.code = options.code;
+  }
+}
+
+/**
+ * Wrap a non-busy flock failure at `lockPath` into an ACTIONABLE {@link
+ * ReviewLeaseError} — never rethrow the raw error. Includes the lock path,
+ * the original errno/code and message (also as `cause`), and guidance that
+ * the P32 file lock requires a LOCAL filesystem (advisory `flock` is
+ * unreliable or unsupported on some network filesystems, e.g. NFS) and a
+ * correctly built/installed native `fs-ext` addon.
+ */
+function wrapFlockError(err: unknown, lockPath: string): ReviewLeaseError {
+  const rawCode = (err as FlockErrno | undefined)?.code;
+  const code = typeof rawCode === "string" ? rawCode : "EFLOCK";
+  const detail =
+    err instanceof Error ? err.message : String((err as unknown) ?? "");
+  return new ReviewLeaseError(
+    `otto-review could not acquire its OS file lock at "${lockPath}" ` +
+      `(${code}): ${detail}. The P32 review lease requires flock() on a ` +
+      "LOCAL filesystem — advisory flock is unreliable or unsupported on " +
+      "some network filesystems (e.g. NFS) — and a correctly built/installed " +
+      "native 'fs-ext' addon. Move the workspace to local disk, or reinstall " +
+      "fs-ext (`pnpm add fs-ext`) and retry.",
+    { code, cause: err }
+  );
+}
+
+/**
  * Build the lease handle for a lock file whose exclusive flock we hold on `fd`.
  * While the fd holds the flock we are the sole owner (kernel-guaranteed), so
  * `ownsClaim` is simply `!released`. `release` is idempotent.
@@ -508,8 +563,25 @@ export function acquireReviewLease(opts: {
   // live process holds; the flock — not this open — arbitrates ownership.
   const fd = openSync(lockPath, "a");
 
+  const flock = getFlockSync();
+  if (typeof flock !== "function") {
+    // A malformed/partial `fs-ext` export — effectively a broken native
+    // module. Treat it the same as any other non-busy flock failure.
+    try {
+      closeSync(fd);
+    } catch {
+      /* best-effort */
+    }
+    throw wrapFlockError(
+      new Error(
+        `'fs-ext' resolved a flockSync export that is not callable (got ${typeof flock})`
+      ),
+      lockPath
+    );
+  }
+
   try {
-    getFlockSync()(fd, "exnb");
+    flock(fd, "exnb");
   } catch (err) {
     try {
       closeSync(fd);
@@ -517,7 +589,7 @@ export function acquireReviewLease(opts: {
       /* best-effort */
     }
     if (isBusyFlockError(err)) return { acquired: false, reason: "busy" };
-    throw err;
+    throw wrapFlockError(err, lockPath);
   }
 
   // The lock is ours. Record human-readable evidence best-effort (never gates

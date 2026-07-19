@@ -2138,9 +2138,12 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
       deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
     });
     expect(res.status).toBe("skipped");
-    // Interrupted (caller-abort), NOT busy ("another process").
-    expect(res.skipReason).toBe("interrupted");
+    // Aborted-before-work (caller-abort pre-analysis), NOT busy ("another
+    // process") and NOT the after-analysis "interrupted" reason — no analysis
+    // ran and no resumable state was persisted here.
+    expect(res.skipReason).toBe("aborted-before-work");
     expect(res.skipReason).not.toBe("busy");
+    expect(res.skipReason).not.toBe("interrupted");
     // Evidence finalized (manifest written, referenced input present — no dangling).
     const m = readManifest(fx.workspaceDir, res.runId);
     expect(m.exitReason).toBe("aborted");

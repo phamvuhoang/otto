@@ -440,6 +440,26 @@ describe("runReview", () => {
       expect(err.join("")).not.toMatch(/already.*reviewing/i);
       expect(err.join("")).not.toMatch(/no work was done/i);
     });
+
+    it("skipped aborted-before-work states no analysis/state was saved (accurate, distinct from interrupted and busy), exits 1", async () => {
+      const { deps } = makeDeps({
+        runOne: vi.fn(async () =>
+          okResult({
+            status: "skipped",
+            skipReason: "aborted-before-work",
+            costUsd: 0,
+          })
+        ) as never,
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(exitCode).toBe(1);
+      // Must NOT falsely claim analysis completed or state was saved.
+      expect(err.join("")).not.toMatch(/analysis (completed|ran)/i);
+      expect(err.join("")).not.toMatch(/state was saved/i);
+      // Must NOT be mistaken for the busy message either.
+      expect(err.join("")).not.toMatch(/already.*reviewing/i);
+      expect(err.join("")).toMatch(/re-run/i);
+    });
   });
 
   describe("one-shot PR eligibility gate", () => {

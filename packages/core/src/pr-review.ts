@@ -226,11 +226,17 @@ export type PullRequestReviewRunResult = {
    * discriminator between the two skip producers — never inferred from
    * `costUsd` (Codex stages always report `costUsd: 0`, so a cost heuristic
    * misclassifies an interrupted Codex run as busy).
-   *   - `"busy"`        another process already owns the lease; NO work happened.
-   *   - `"interrupted"` paid analysis completed and a resumable state was
-   *                     persisted, but publication did not finish.
+   *   - `"busy"`               another process already owns the lease; NO
+   *                            work happened.
+   *   - `"interrupted"`        paid analysis completed and a resumable state
+   *                            was persisted, but publication did not finish.
+   *   - `"aborted-before-work"` the lease WAS acquired but the caller signal
+   *                            was already aborted before any analysis ran —
+   *                            NO analysis completed and NO resumable state
+   *                            was persisted (distinct from `"interrupted"`,
+   *                            which happens strictly after paid analysis).
    */
-  skipReason?: "busy" | "interrupted";
+  skipReason?: "busy" | "interrupted" | "aborted-before-work";
   error?: string;
 };
 
@@ -696,7 +702,7 @@ export async function runPullRequestReview(opts: {
     finalizeManifest("aborted", buildEvidence(), artifactList());
     return {
       status: "skipped",
-      skipReason: "interrupted",
+      skipReason: "aborted-before-work",
       runId,
       repository,
       pullRequest,

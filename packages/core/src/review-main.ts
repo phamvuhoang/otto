@@ -351,6 +351,14 @@ export async function runReview(
   //                                       publication did NOT finish — a script
   //                                       must see this as a failure so a missing
   //                                       publication is never read as success.
+  //                       "aborted-before-work" -> 1: the caller signal was
+  //                                       already aborted right after the
+  //                                       lease was acquired, BEFORE any
+  //                                       analysis ran — no analysis completed
+  //                                       and no resumable state was
+  //                                       persisted. The requested review was
+  //                                       still not delivered, so a script
+  //                                       must see this as a failure too.
   if (result.status === "publish-failed") {
     const delivered: string[] = [];
     if (result.commentId != null) {
@@ -414,6 +422,16 @@ export async function runReview(
       // publication as success; re-running resumes from the saved analysis.
       deps.stderr(
         `review skipped: analysis completed but publication was interrupted — run state was saved; re-run to resume\n`
+      );
+      return deps.exit(1);
+    }
+    if (result.skipReason === "aborted-before-work") {
+      // The lease was acquired but the caller shut down BEFORE any analysis
+      // ran — unlike "interrupted", no analysis completed and no resumable
+      // state was persisted, so the message must not claim either. Exit
+      // NONZERO: the requested review was still not delivered.
+      deps.stderr(
+        `review skipped: aborted before any work started — re-run to review\n`
       );
       return deps.exit(1);
     }

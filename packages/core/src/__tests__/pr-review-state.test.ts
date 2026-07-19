@@ -12,7 +12,20 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { flockSync } from "fs-ext";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Wrap the real node:fs open/close with pass-through spies so a test can prove
+// acquireReviewLease never leaks the lock fd. Everything else in node:fs is the
+// untouched real module, so all other tests behave identically. (ESM forbids
+// vi.spyOn on a module namespace, hence this module mock.)
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    openSync: vi.fn(actual.openSync),
+    closeSync: vi.fn(actual.closeSync),
+  };
+});
 import {
   reviewStatePath,
   readReviewState,
@@ -21,6 +34,7 @@ import {
   isStateRunnable,
   _resolveFlockSync,
   _setFlockSyncForTest,
+  _setFlockLoaderForTest,
   ReviewLeaseError,
   type FlockSyncFn,
   type ReviewLease,
@@ -431,6 +445,47 @@ describe("acquireReviewLease — non-busy flock failures are wrapped, not raw", 
     _setFlockSyncForTest(undefined);
     const res = acquire({ runId: "still-works" });
     expect(res.acquired).toBe(true);
+  });
+});
+
+describe("acquireReviewLease — fd is closed when flock module resolution fails", () => {
+  afterEach(() => {
+    _setFlockLoaderForTest(undefined);
+  });
+
+  it("closes the opened lock fd (no leak) and rethrows an actionable error when getFlockSync() resolution throws", () => {
+    // A missing/unbuildable `fs-ext`: getFlockSync() → _resolveFlockSync()
+    // throws DIRECTLY, before any flock call. The fd opened for the lock file
+    // must still be closed — otherwise watch mode leaks one fd per poll, since
+    // a failed resolution is never cached and is retried on every acquire.
+    _setFlockLoaderForTest(() => {
+      throw new Error("Cannot find module 'fs-ext'");
+    });
+
+    const openMock = vi.mocked(openSync);
+    const closeMock = vi.mocked(closeSync);
+    openMock.mockClear();
+    closeMock.mockClear();
+
+    let thrown: unknown;
+    try {
+      acquireReviewLease(leaseOpts({ runId: "resolve-fail" }));
+    } catch (e) {
+      thrown = e;
+    }
+
+    // It throws (not swallowed) with an actionable message…
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("fs-ext");
+
+    // …and every fd openSync handed out during the call was closed — no leak.
+    const openedFds = openMock.mock.results
+      .filter((r) => r.type === "return")
+      .map((r) => r.value as number);
+    expect(openedFds.length).toBeGreaterThan(0);
+    for (const fd of openedFds) {
+      expect(closeMock).toHaveBeenCalledWith(fd);
+    }
   });
 });
 

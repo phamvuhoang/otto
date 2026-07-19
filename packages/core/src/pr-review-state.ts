@@ -108,9 +108,12 @@ export function _resolveFlockSync(req: RequireLike = requireCjs): FlockSyncFn {
  */
 let flockSyncImpl: FlockSyncFn | undefined;
 
+/** The `require`-like loader {@link getFlockSync} uses; overridable for tests. */
+let flockLoader: RequireLike = requireCjs;
+
 function getFlockSync(): FlockSyncFn {
   if (flockSyncImpl === undefined) {
-    flockSyncImpl = _resolveFlockSync();
+    flockSyncImpl = _resolveFlockSync(flockLoader);
   }
   return flockSyncImpl;
 }
@@ -125,6 +128,18 @@ function getFlockSync(): FlockSyncFn {
  */
 export function _setFlockSyncForTest(fn: FlockSyncFn | undefined): void {
   flockSyncImpl = fn;
+}
+
+/**
+ * Test-only seam: force the LAZY module resolution done by {@link getFlockSync}
+ * to run through `req` (e.g. one that throws to simulate a missing/unbuildable
+ * `fs-ext`), or reset to the real `require` when passed `undefined`. Also
+ * clears the resolution cache so the next acquire re-resolves. Not for
+ * production use.
+ */
+export function _setFlockLoaderForTest(req: RequireLike | undefined): void {
+  flockLoader = req ?? requireCjs;
+  flockSyncImpl = undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -563,24 +578,23 @@ export function acquireReviewLease(opts: {
   // live process holds; the flock — not this open — arbitrates ownership.
   const fd = openSync(lockPath, "a");
 
-  const flock = getFlockSync();
-  if (typeof flock !== "function") {
-    // A malformed/partial `fs-ext` export — effectively a broken native
-    // module. Treat it the same as any other non-busy flock failure.
-    try {
-      closeSync(fd);
-    } catch {
-      /* best-effort */
-    }
-    throw wrapFlockError(
-      new Error(
-        `'fs-ext' resolved a flockSync export that is not callable (got ${typeof flock})`
-      ),
-      lockPath
-    );
-  }
-
+  // Resolve the native flock AND call it inside one try so that EVERY failure
+  // out of this block — a missing/unbuildable `fs-ext` (getFlockSync throws), a
+  // malformed/non-callable export, or a real flockSync CALL error (ENOTSUP/
+  // EBADF/…) — closes the fd we opened just above before rethrowing. Doing the
+  // resolution above this try would leak that fd on a resolution failure (and,
+  // since a failed resolution is not cached, leak one fd per poll in watch mode).
   try {
+    const flock = getFlockSync();
+    if (typeof flock !== "function") {
+      // A malformed/partial `fs-ext` export — effectively a broken native module.
+      throw wrapFlockError(
+        new Error(
+          `'fs-ext' resolved a flockSync export that is not callable (got ${typeof flock})`
+        ),
+        lockPath
+      );
+    }
     flock(fd, "exnb");
   } catch (err) {
     try {
@@ -589,6 +603,10 @@ export function acquireReviewLease(opts: {
       /* best-effort */
     }
     if (isBusyFlockError(err)) return { acquired: false, reason: "busy" };
+    // Already-actionable errors (the non-callable guard above) pass through
+    // unchanged; everything else — including a module-resolution failure — is
+    // wrapped so the caller always gets the lock path + remediation guidance.
+    if (err instanceof ReviewLeaseError) throw err;
     throw wrapFlockError(err, lockPath);
   }
 

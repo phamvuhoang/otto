@@ -66,6 +66,31 @@ export class ReviewWriteAbortedError extends Error {
   }
 }
 
+/**
+ * Thrown by an {@link upsertSummaryComment}/{@link publishFormalReview}
+ * `ensureAuthorized` callback when a FRESH re-query at the write boundary finds
+ * the PR is no longer publishable — its head advanced during the helper's
+ * viewer/list reconciliation reads, or it went closed/draft/label-lost. Unlike
+ * {@link ReviewWriteAbortedError} (an abort/ownership loss → resumable), this
+ * withholds the write and drives the run to the terminal `superseded`/`cancelled`
+ * path while any already-succeeded receipt is preserved. It carries the
+ * non-publishable {@link reconcilePublication} verdict so the pipeline can record
+ * the exact status/reason/new-head without re-querying.
+ */
+export class ReviewWriteSupersededError extends Error {
+  readonly reconcile: Extract<
+    PublicationReconciliation,
+    { publishable: false }
+  >;
+  constructor(
+    reconcile: Extract<PublicationReconciliation, { publishable: false }>
+  ) {
+    super(`review write withheld at the boundary: ${reconcile.reason}`);
+    this.name = "ReviewWriteSupersededError";
+    this.reconcile = reconcile;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Reconciliation
 // ---------------------------------------------------------------------------
@@ -202,8 +227,10 @@ export function upsertSummaryComment(opts: {
    * Write-boundary fence, invoked IMMEDIATELY before the create/update write
    * (after the viewer/list reconciliation). Throws {@link ReviewWriteAbortedError}
    * if the run may no longer write — so a caller shutdown that fires during the
-   * reconciliation reads publishes nothing. A no-op `reuse` performs no write and
-   * is not fenced.
+   * reconciliation reads publishes nothing — or {@link ReviewWriteSupersededError}
+   * if a FRESH re-query finds the PR head advanced (or eligibility was lost)
+   * during those reads, so a write against a now-stale revision never happens. A
+   * no-op `reuse` performs no write and is not fenced.
    */
   ensureAuthorized?: () => void;
 }): SummaryCommentReceipt {
@@ -301,7 +328,9 @@ export function publishFormalReview(opts: {
   /**
    * Write-boundary fence, invoked IMMEDIATELY before `createReview` (after the
    * viewer/list reconciliation). Throws {@link ReviewWriteAbortedError} if the
-   * run may no longer write. A no-op `reuse` performs no write and is not fenced.
+   * run may no longer write, or {@link ReviewWriteSupersededError} if a FRESH
+   * re-query finds the PR head advanced (or eligibility was lost) during those
+   * reads. A no-op `reuse` performs no write and is not fenced.
    */
   ensureAuthorized?: () => void;
 }): FormalReviewReceipt {

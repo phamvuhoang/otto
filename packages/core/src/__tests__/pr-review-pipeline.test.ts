@@ -835,6 +835,46 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
     expect(readFileSync(join(runDir, "review.md"), "utf8")).toMatch(/stale/i);
   });
 
+  it("(S-race) a head that advances DURING listIssueComments is superseded at the write boundary and writes NO comment", async () => {
+    // The outer reconcile sees the ORIGINAL head (publishable); the head then
+    // advances while upsertSummaryComment is reading listIssueComments, so the
+    // write-boundary re-query must catch it and withhold the comment.
+    const moved = "a".repeat(40);
+    let advanced = false;
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const gh = makeCommentGithub({
+      current: () =>
+        advanced ? { ...fx.revision, headSha: moved } : fx.revision,
+    });
+    const origList = gh.github.listIssueComments;
+    gh.github.listIssueComments = () => {
+      // Advance the head only on the WRITE-PATH list read (after the outer
+      // reconcile's getPullRequest), never on recovery's earlier list read — so
+      // the OUTER reconcile still sees the original head and only the write
+      // boundary can catch the move.
+      if (gh.calls.getPr > 0) advanced = true;
+      return origList();
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("superseded");
+    expect(gh.calls.create).toBe(0);
+    expect(gh.calls.update).toBe(0);
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(readFileSync(join(runDir, "review.md"), "utf8")).toMatch(/stale/i);
+    expect(
+      (
+        readManifest(fx.workspaceDir, res.runId).pullRequestReview as {
+          supersededBy?: string;
+        }
+      ).supersededBy
+    ).toBe(moved);
+  });
+
   it("(S3) a busy composite claim returns skipped without analysis", async () => {
     // Another daemon already holds the LIVE lease for this identity.
     const acq = await acquireReviewLease({
@@ -1371,6 +1411,55 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
     expect(gh.calls.createReview).toHaveLength(0);
   });
 
+  it("(G-race) a head that advances DURING listReviews is superseded at the write boundary; the review is withheld and the already-published comment receipt is preserved", async () => {
+    // comment + githubReview: the summary comment publishes first (its own gate
+    // sees the ORIGINAL head), then the head advances while publishFormalReview
+    // reads listReviews, so the formal-review write boundary must catch it and
+    // withhold the review WITHOUT discarding the comment receipt.
+    const moved = "a".repeat(40);
+    let advanced = false;
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const gh = makeReviewGithub({
+      current: () =>
+        advanced ? { ...fx.revision, headSha: moved } : fx.revision,
+    });
+    const origListReviews = gh.github.listReviews;
+    gh.github.listReviews = () => {
+      advanced = true; // the head moves during the formal review's list read
+      return origListReviews();
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("superseded");
+    // The formal review was withheld at its write boundary.
+    expect(gh.calls.createReview).toHaveLength(0);
+    // The earlier summary comment DID publish and its receipt is preserved.
+    expect(gh.calls.createComment).toBe(1);
+    expect(typeof res.commentId).toBe("number");
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.comment?.commentId).toBe(res.commentId);
+    expect(st?.outputs.githubReview).toBeUndefined();
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(
+      (m.pullRequestReview as { supersededBy?: string }).supersededBy
+    ).toBe(moved);
+    expect((m.pullRequestReview as { commentId?: number }).commentId).toBe(
+      res.commentId
+    );
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(readFileSync(join(runDir, "review.md"), "utf8")).toMatch(/stale/i);
+  });
+
   it("(G4) GitHub refusing self-approval is a permanent publish-failed", async () => {
     const fake = makeFakeAnalyze({ confirmed: [] }); // clean → APPROVE
     const gh = makeReviewGithub({
@@ -1482,11 +1571,19 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
       confirmed: [finding({ file: "src/app.ts", line: "1" })],
     });
     const moved = "f".repeat(40);
-    let queries = 0;
+    let commentWritten = false;
     const gh = makeReviewGithub({
       current: () =>
-        ++queries === 1 ? fx.revision : { ...fx.revision, headSha: moved },
+        commentWritten ? { ...fx.revision, headSha: moved } : fx.revision,
     });
+    // The head advances the moment the comment is written — i.e. AFTER the
+    // comment's own fresh gate passed but BEFORE the formal review's gate.
+    const origCreateComment = gh.github.createIssueComment;
+    gh.github.createIssueComment = (r: string, n: number, b: string) => {
+      const c = origCreateComment(r, n, b);
+      commentWritten = true;
+      return c;
+    };
     const res = await runPullRequestReview({
       ...baseArgs(fx),
       reviewInput: resolvedInput(fx),

@@ -51,6 +51,8 @@ import {
   nextPublicationRetryAt,
   resolveOwnedUnique,
   ReviewWriteAbortedError,
+  ReviewWriteSupersededError,
+  type PublicationReconciliation,
 } from "./pr-review-publish.js";
 import { mapFindingsToDiff } from "./pr-review-diff.js";
 import {
@@ -833,6 +835,36 @@ export async function runPullRequestReview(opts: {
     });
     writeRunReport(workspaceDir, runId, canonicalMarkdown);
 
+    /**
+     * Apply a write-boundary (or formal-review pre-write) reconcile miss: the PR
+     * moved on / lost eligibility AFTER the cheap outer reconcile but BEFORE this
+     * remote write, so the write is withheld and the run becomes
+     * superseded/cancelled (NOT the aborted/resumable path). Re-render the LOCAL
+     * canonical copy as stale; any already-succeeded receipt from an earlier write
+     * in this run is preserved by the caller (it only touches status/stale
+     * fields). Mirrors the outer supersession at the publication boundary.
+     */
+    const applyWriteSupersession = (
+      rec: Extract<PublicationReconciliation, { publishable: false }>
+    ): void => {
+      status = rec.status;
+      staleReason = `${rec.status}: ${rec.reason}`;
+      supersededBy =
+        rec.status === "superseded" ? rec.current.headSha : undefined;
+      const staleMarkdown = renderCanonicalReview({
+        ...canonical,
+        staleReason,
+      });
+      writeCanonicalReview({
+        workspaceDir,
+        runId,
+        markdown: staleMarkdown,
+        outputFile:
+          requestedOutput === "markdown" ? config.outputFile : undefined,
+      });
+      writeRunReport(workspaceDir, runId, staleMarkdown);
+    };
+
     const outputs: PullRequestReviewOutputState = { ...startingOutputs };
     let commentId: number | undefined = outputs.comment?.commentId;
     const finalArtifacts = artifactList([
@@ -878,10 +910,24 @@ export async function runPullRequestReview(opts: {
               inputFingerprint,
               body: canonicalMarkdown,
               // Re-check at the write boundary: a caller shutdown that fires
-              // DURING the helper's viewer/list reads still withholds the write.
+              // DURING the helper's viewer/list reads still withholds the write,
+              // AND a FRESH re-query catches a head that advanced (or eligibility
+              // lost) during those reads so no stale analysis is published.
               ensureAuthorized: () => {
                 if (runAbort.signal.aborted || !lease.ownsClaim()) {
                   throw new ReviewWriteAbortedError();
+                }
+                const fresh = deps.github.getPullRequest(
+                  repository,
+                  pullRequest
+                );
+                const freshRec = reconcilePublication({
+                  expected: revision,
+                  current: fresh,
+                  label: config.label,
+                });
+                if (!freshRec.publishable) {
+                  throw new ReviewWriteSupersededError(freshRec);
                 }
               },
             });
@@ -897,54 +943,67 @@ export async function runPullRequestReview(opts: {
             if (err instanceof ReviewWriteAbortedError) {
               return abortedResumable(outputs);
             }
-            const gerr =
-              err instanceof GitHubPrError
-                ? err
-                : new GitHubPrError(
-                    `summary comment publication failed: ${(err as Error).message}`,
-                    "unknown",
-                    false
-                  );
-            const retryable = gerr.retryable;
-            const nextRetryAt = retryable
-              ? nextPublicationRetryAt(attempts, deps.now())
-              : undefined;
-            persistState({
-              status: "publish-failed",
-              analysisArtifact: analysisArtifactRel,
-              outputs,
-              attempts,
-              retryable,
-              ...(nextRetryAt ? { nextRetryAt } : {}),
-              error: gerr.message,
-            });
-            finalizeManifest(
-              "publish-failed",
-              buildEvidence({
+            // A FRESH re-query at the write boundary found the PR moved on /
+            // ineligible: withhold this comment and drive the run to
+            // superseded/cancelled (no comment receipt is recorded for it).
+            if (err instanceof ReviewWriteSupersededError) {
+              applyWriteSupersession(err.reconcile);
+            } else {
+              const gerr =
+                err instanceof GitHubPrError
+                  ? err
+                  : new GitHubPrError(
+                      `summary comment publication failed: ${(err as Error).message}`,
+                      "unknown",
+                      false
+                    );
+              const retryable = gerr.retryable;
+              const nextRetryAt = retryable
+                ? nextPublicationRetryAt(attempts, deps.now())
+                : undefined;
+              persistState({
+                status: "publish-failed",
+                analysisArtifact: analysisArtifactRel,
+                outputs,
+                attempts,
+                retryable,
+                ...(nextRetryAt ? { nextRetryAt } : {}),
+                error: gerr.message,
+              });
+              finalizeManifest(
+                "publish-failed",
+                buildEvidence({
+                  outcome,
+                  confirmed: published.length,
+                  rejected: art.rejected.length,
+                }),
+                finalArtifacts
+              );
+              deps.stdout(renderReviewText(canonical));
+              return {
+                status: "publish-failed",
+                runId,
+                repository,
+                pullRequest,
+                headSha,
+                inputFingerprint,
+                costUsd: manifestCost,
                 outcome,
-                confirmed: published.length,
-                rejected: art.rejected.length,
-              }),
-              finalArtifacts
-            );
-            deps.stdout(renderReviewText(canonical));
-            return {
-              status: "publish-failed",
-              runId,
-              repository,
-              pullRequest,
-              headSha,
-              inputFingerprint,
-              costUsd: manifestCost,
-              outcome,
-              reviewArtifact: written.artifactPath,
-              retryable,
-              ...(nextRetryAt ? { nextRetryAt } : {}),
-              error: gerr.message,
-            };
+                reviewArtifact: written.artifactPath,
+                retryable,
+                ...(nextRetryAt ? { nextRetryAt } : {}),
+                error: gerr.message,
+              };
+            }
           }
         }
-        deps.stdout(renderReviewText(canonical));
+        // On a write-boundary supersession the comment was withheld and status is
+        // no longer "succeeded": surface the STALE copy instead of the fresh one.
+        deps.stdout(
+          renderReviewText(
+            status === "succeeded" ? canonical : { ...canonical, staleReason }
+          )
+        );
       }
     } else {
       // Superseded/cancelled: emit NO remote output; surface the stale copy.
@@ -977,25 +1036,11 @@ export async function runPullRequestReview(opts: {
         label: config.label,
       });
       if (!rec2.publishable) {
-        status = rec2.status;
-        staleReason = `${rec2.status}: ${rec2.reason}`;
-        supersededBy =
-          rec2.status === "superseded" ? preReview.headSha : undefined;
-        // Re-render the LOCAL canonical copy to record that the formal review was
-        // withheld due to the head/eligibility change (the already-published
-        // summary comment, valid under its own gate, is left untouched remotely).
-        const staleMarkdown = renderCanonicalReview({
-          ...canonical,
-          staleReason,
-        });
-        writeCanonicalReview({
-          workspaceDir,
-          runId,
-          markdown: staleMarkdown,
-          outputFile:
-            requestedOutput === "markdown" ? config.outputFile : undefined,
-        });
-        writeRunReport(workspaceDir, runId, staleMarkdown);
+        // Cheap pre-write reconcile miss: withhold the formal review and re-render
+        // the LOCAL canonical copy as stale. The already-published summary comment,
+        // valid under its own gate, is left untouched remotely and its receipt is
+        // preserved (applyWriteSupersession only touches status/stale fields).
+        applyWriteSupersession(rec2);
       } else {
         const github = reviewClient();
         try {
@@ -1016,10 +1061,21 @@ export async function runPullRequestReview(opts: {
             github,
             review: canonical,
             // Re-check at the write boundary: a caller shutdown during the
-            // helper's viewer/list reads withholds the review write.
+            // helper's viewer/list reads withholds the review write, AND a FRESH
+            // re-query catches a head that advanced (or eligibility lost) DURING
+            // listReviews so no stale review is posted.
             ensureAuthorized: () => {
               if (runAbort.signal.aborted || !lease.ownsClaim()) {
                 throw new ReviewWriteAbortedError();
+              }
+              const fresh = deps.github.getPullRequest(repository, pullRequest);
+              const freshRec = reconcilePublication({
+                expected: revision,
+                current: fresh,
+                label: config.label,
+              });
+              if (!freshRec.publishable) {
+                throw new ReviewWriteSupersededError(freshRec);
               }
             },
           });
@@ -1034,53 +1090,61 @@ export async function runPullRequestReview(opts: {
           if (err instanceof ReviewWriteAbortedError) {
             return abortedResumable(outputs, commentId);
           }
-          const gerr =
-            err instanceof GitHubPrError
-              ? err
-              : new GitHubPrError(
-                  `formal review publication failed: ${(err as Error).message}`,
-                  "unknown",
-                  false
-                );
-          const retryable = gerr.retryable;
-          const nextRetryAt = retryable
-            ? nextPublicationRetryAt(attempts, deps.now())
-            : undefined;
-          persistState({
-            status: "publish-failed",
-            analysisArtifact: analysisArtifactRel,
-            outputs,
-            attempts,
-            retryable,
-            ...(nextRetryAt ? { nextRetryAt } : {}),
-            error: gerr.message,
-          });
-          finalizeManifest(
-            "publish-failed",
-            buildEvidence({
+          // A FRESH re-query during listReviews found the PR moved on / ineligible
+          // AFTER the comment already published: withhold the review and drive the
+          // run to superseded/cancelled, preserving the comment receipt (commentId
+          // remains set and flows into the final state/evidence/result).
+          if (err instanceof ReviewWriteSupersededError) {
+            applyWriteSupersession(err.reconcile);
+          } else {
+            const gerr =
+              err instanceof GitHubPrError
+                ? err
+                : new GitHubPrError(
+                    `formal review publication failed: ${(err as Error).message}`,
+                    "unknown",
+                    false
+                  );
+            const retryable = gerr.retryable;
+            const nextRetryAt = retryable
+              ? nextPublicationRetryAt(attempts, deps.now())
+              : undefined;
+            persistState({
+              status: "publish-failed",
+              analysisArtifact: analysisArtifactRel,
+              outputs,
+              attempts,
+              retryable,
+              ...(nextRetryAt ? { nextRetryAt } : {}),
+              error: gerr.message,
+            });
+            finalizeManifest(
+              "publish-failed",
+              buildEvidence({
+                outcome,
+                confirmed: published.length,
+                rejected: art.rejected.length,
+                githubReview: false,
+                ...(commentId !== undefined ? { commentId } : {}),
+              }),
+              finalArtifacts
+            );
+            return {
+              status: "publish-failed",
+              runId,
+              repository,
+              pullRequest,
+              headSha,
+              inputFingerprint,
+              costUsd: manifestCost,
               outcome,
-              confirmed: published.length,
-              rejected: art.rejected.length,
-              githubReview: false,
+              reviewArtifact: written.artifactPath,
               ...(commentId !== undefined ? { commentId } : {}),
-            }),
-            finalArtifacts
-          );
-          return {
-            status: "publish-failed",
-            runId,
-            repository,
-            pullRequest,
-            headSha,
-            inputFingerprint,
-            costUsd: manifestCost,
-            outcome,
-            reviewArtifact: written.artifactPath,
-            ...(commentId !== undefined ? { commentId } : {}),
-            retryable,
-            ...(nextRetryAt ? { nextRetryAt } : {}),
-            error: gerr.message,
-          };
+              retryable,
+              ...(nextRetryAt ? { nextRetryAt } : {}),
+              error: gerr.message,
+            };
+          }
         }
       }
     }

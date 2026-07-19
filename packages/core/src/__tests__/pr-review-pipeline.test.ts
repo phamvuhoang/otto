@@ -31,7 +31,11 @@ import {
 } from "../pr-review-input.js";
 import type { PullRequestRevision } from "../pr-review.js";
 import { runPullRequestReview } from "../pr-review.js";
-import { acquireReviewLease, readReviewState } from "../pr-review-state.js";
+import {
+  acquireReviewLease,
+  readReviewState,
+  writeReviewState,
+} from "../pr-review-state.js";
 import {
   headMarker,
   inputMarker,
@@ -470,6 +474,8 @@ describe("runPullRequestReview", () => {
     });
     expect(watchRetry.status).toBe("analysis-failed");
     expect(watchRetry.costUsd).toBe(0);
+    expect(watchRetry.reviewArtifact).toBeUndefined();
+    expect(existsSync(join(runDir, "review.md"))).toBe(false);
     expect(fake.invocationCount()).toBe(1);
 
     // After the operator fixes the contract issue, an explicit one-shot rerun
@@ -529,6 +535,28 @@ describe("runPullRequestReview", () => {
       retryable: true,
       nextRetryAt: res.nextRetryAt,
     });
+
+    const blocked = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", watch: true }),
+      deps: {
+        analyze: analyze as never,
+        github: makeCommentGithub({ current: () => fx.revision }).github,
+        stdout,
+        now,
+      },
+    });
+    expect(blocked).toMatchObject({
+      status: "analysis-failed",
+      costUsd: 0,
+      nextRetryAt: res.nextRetryAt,
+    });
+    expect(blocked.reviewArtifact).toBeUndefined();
+    expect(
+      existsSync(join(fx.workspaceDir, ".otto", "runs", res.runId, "review.md"))
+    ).toBe(false);
+    expect(analyze).toHaveBeenCalledTimes(1);
   });
 
   it("(5a) a moved head after analysis is superseded with supersededBy and stale evidence", async () => {
@@ -1058,6 +1086,103 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
     expect(st?.analysisArtifact).toBe(`.otto/runs/${res.runId}/analysis.json`);
   });
 
+  it("a missing prior analysis artifact does not suppress fresh transient failure state", async () => {
+    const priorRunId = "prior-missing-analysis";
+    writeReviewState(fx.workspaceDir, {
+      repository: "acme/widget",
+      pullRequest: 7,
+      headSha: fx.headSha,
+      inputFingerprint: fp(),
+      status: "publish-failed",
+      runId: priorRunId,
+      analysisArtifact: `.otto/runs/${priorRunId}/analysis.json`,
+      outputs: {},
+      attempts: 2,
+      retryable: true,
+      nextRetryAt: "2026-07-18T11:00:00.000Z",
+      error: "prior publication failure",
+      updatedAt: "2026-07-18T11:00:00.000Z",
+    });
+    const analyze = vi.fn(async () => {
+      throw new Error("fresh model transport failure");
+    });
+
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: analyze as never,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+      },
+    });
+
+    expect(res).toMatchObject({ status: "analysis-failed", retryable: true });
+    expect(res.runId).not.toBe(priorRunId);
+    expect(
+      readReviewState(fx.workspaceDir, "acme/widget", 7, fx.headSha, fp())
+    ).toMatchObject({
+      status: "analysis-failed",
+      runId: res.runId,
+      attempts: 3,
+      retryable: true,
+      nextRetryAt: res.nextRetryAt,
+      error: "review analysis failed: fresh model transport failure",
+    });
+  });
+
+  it.each(["cancelled", "superseded"] as const)(
+    "a runnable %s state with an old analysis pointer does not suppress fresh transient failure state",
+    async (status) => {
+      const priorRunId = `prior-${status}`;
+      writeReviewState(fx.workspaceDir, {
+        repository: "acme/widget",
+        pullRequest: 7,
+        headSha: fx.headSha,
+        inputFingerprint: fp(),
+        status,
+        runId: priorRunId,
+        analysisArtifact: `.otto/runs/${priorRunId}/analysis.json`,
+        outputs: {},
+        attempts: 4,
+        updatedAt: "2026-07-18T11:00:00.000Z",
+      });
+      const analyze = vi.fn(async () => {
+        throw new Error(`fresh failure after ${status}`);
+      });
+
+      const res = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "text" }),
+        deps: {
+          analyze: analyze as never,
+          github: { getPullRequest: () => fx.revision },
+          stdout,
+          now,
+        },
+      });
+
+      expect(res).toMatchObject({
+        status: "analysis-failed",
+        retryable: true,
+      });
+      expect(res.runId).not.toBe(priorRunId);
+      expect(
+        readReviewState(fx.workspaceDir, "acme/widget", 7, fx.headSha, fp())
+      ).toMatchObject({
+        status: "analysis-failed",
+        runId: res.runId,
+        attempts: 5,
+        retryable: true,
+        nextRetryAt: res.nextRetryAt,
+        error: `review analysis failed: fresh failure after ${status}`,
+      });
+    }
+  );
+
   it("(S4) a transient comment error is publish-failed with retryable + nextRetryAt", async () => {
     const fake = makeFakeAnalyze({});
     const gh = makeCommentGithub({
@@ -1090,7 +1215,7 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
     expect(st?.analysisArtifact).toBe(`.otto/runs/${res.runId}/analysis.json`);
   });
 
-  it("does not overwrite a durable publication receipt when a later unexpected failure reaches the analysis failure helper", async () => {
+  it("turns an unexpected local failure after a durable comment receipt into coherent retryable publication state", async () => {
     const fake = makeFakeAnalyze({});
     const gh = makeCommentGithub({ current: () => fx.revision });
     const res = await runPullRequestReview({
@@ -1107,18 +1232,68 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
       },
     });
 
-    expect(res.status).toBe("analysis-failed");
+    expect(res).toMatchObject({
+      status: "publish-failed",
+      retryable: true,
+      commentId: gh.store[0].id,
+    });
+    expect(res.nextRetryAt).toBeTruthy();
+    expect(res.costUsd).toBeCloseTo(0.7, 5);
+    expect(res.error).toMatch(/local stdout write failed after publication/);
     expect(gh.calls.create).toBe(1);
+    expect(res.reviewArtifact).toBe(`.otto/runs/${res.runId}/review.md`);
     expect(
       readReviewState(fx.workspaceDir, "acme/widget", 7, fx.headSha, fp())
     ).toMatchObject({
-      status: "running",
+      status: "publish-failed",
       analysisArtifact: `.otto/runs/${res.runId}/analysis.json`,
       outputs: {
         comment: { status: "succeeded", commentId: gh.store[0].id },
       },
       attempts: 1,
+      retryable: true,
+      nextRetryAt: res.nextRetryAt,
+      error: expect.stringMatching(
+        /local stdout write failed after publication/
+      ),
     });
+
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    const manifest = readManifest(fx.workspaceDir, res.runId);
+    expect(manifest.exitReason).toBe("publish-failed");
+    expect(manifest.costUsd).toBeCloseTo(0.7, 5);
+    expect(
+      (manifest.artifacts as RunArtifact[]).map((artifact) => artifact.kind)
+    ).toEqual(
+      expect.arrayContaining(["review-input", "diff", "analysis", "review"])
+    );
+    expect(manifest.pullRequestReview).toMatchObject({
+      outcome: "approved",
+      confirmed: 0,
+      rejected: 0,
+      githubReview: false,
+      commentId: gh.store[0].id,
+    });
+    expect(readFileSync(join(runDir, "report.md"), "utf8").trim()).toBe(
+      readFileSync(join(runDir, "review.md"), "utf8").trim()
+    );
+
+    const blocked = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", watch: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(blocked).toMatchObject({
+      status: "publish-failed",
+      costUsd: 0,
+      retryable: true,
+      nextRetryAt: res.nextRetryAt,
+      commentId: gh.store[0].id,
+      reviewArtifact: res.reviewArtifact,
+    });
+    expect(fake.invocationCount()).toBe(1);
+    expect(gh.calls.create).toBe(1);
   });
 
   it("(S5) an auth/validation comment error is a permanent publish-failed", async () => {

@@ -6,7 +6,13 @@
  * canonical output together. Slice 1 renders text/markdown only — it holds NO
  * GitHub write capability (its `deps.github` is `getPullRequest`-only).
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { Finding } from "./review-severity.js";
@@ -450,6 +456,7 @@ export async function runPullRequestReview(opts: {
     !isStateRunnable(priorState, deps.now()) &&
     !oneShotPermanentAnalysisRetry
   ) {
+    const reviewArtifact = `.otto/runs/${priorState.runId}/review.md`;
     return {
       status: priorState.status as PullRequestReviewRunStatus,
       runId: priorState.runId,
@@ -458,7 +465,9 @@ export async function runPullRequestReview(opts: {
       headSha,
       inputFingerprint,
       costUsd: 0,
-      reviewArtifact: `.otto/runs/${priorState.runId}/review.md`,
+      ...(existsSync(join(workspaceDir, reviewArtifact))
+        ? { reviewArtifact }
+        : {}),
       ...(priorState.outputs.comment
         ? { commentId: priorState.outputs.comment.commentId }
         : {}),
@@ -504,6 +513,12 @@ export async function runPullRequestReview(opts: {
   }
   const priorOutputs: PullRequestReviewOutputState = priorState?.outputs ?? {};
   const priorAttempts = priorState?.attempts ?? 0;
+  // These track only analysis that was validated and ACTUALLY resumed in this
+  // invocation (or freshly persisted below). An old state's mere pointer is not
+  // authority to suppress a new failure record.
+  let durableAnalysisForInvocation = resumedAnalysis;
+  let durableAnalysisOutputs: PullRequestReviewOutputState | null =
+    resumedAnalysis ? { ...priorOutputs } : null;
 
   const startedAt = deps.now().toISOString();
   const runDir = runReportDir(workspaceDir, runId);
@@ -628,11 +643,6 @@ export async function runPullRequestReview(opts: {
     ...over,
   ];
 
-  // Once paid analysis + its outputs are durable, an unexpected exception from
-  // the publication path must not let the generic analysis failure helper erase
-  // the resume pointer or any already-proven remote receipt.
-  let hasDurableAnalysisState = priorState?.analysisArtifact !== undefined;
-
   const fail = (
     error: string,
     nextAction: string,
@@ -642,16 +652,14 @@ export async function runPullRequestReview(opts: {
     const nextRetryAt = retryable
       ? nextPublicationRetryAt(attempts, deps.now())
       : undefined;
-    if (!hasDurableAnalysisState) {
-      persistState({
-        status: "analysis-failed",
-        outputs: priorOutputs,
-        attempts,
-        retryable,
-        ...(nextRetryAt ? { nextRetryAt } : {}),
-        error,
-      });
-    }
+    persistState({
+      status: "analysis-failed",
+      outputs: priorOutputs,
+      attempts,
+      retryable,
+      ...(nextRetryAt ? { nextRetryAt } : {}),
+      error,
+    });
     // Harness-authored failure report naming the exact identity + next action.
     const report =
       `# Otto review — analysis failed\n\n` +
@@ -799,7 +807,9 @@ export async function runPullRequestReview(opts: {
         updatedAt: deps.now().toISOString(),
         ...over,
       });
-      hasDurableAnalysisState = over.analysisArtifact !== undefined;
+      if (over.analysisArtifact !== undefined) {
+        durableAnalysisOutputs = { ...over.outputs };
+      }
     } catch {
       // A state-write hiccup must not crash the run; idempotency degrades to the
       // remote marker reconciliation, which is still single-comment safe.
@@ -1429,6 +1439,82 @@ export async function runPullRequestReview(opts: {
   };
 
   /**
+   * An unexpected LOCAL exception after analysis became durable is a
+   * publication/resume failure, never a fresh analysis failure. Preserve the
+   * analysis pointer and latest durably written receipts, use the same bounded
+   * retry clock as ordinary publication failures, and finalize the full analysis
+   * evidence without replacing an already-written canonical report.
+   */
+  const unexpectedPublicationFailure = (
+    art: PullRequestReviewAnalysisArtifact,
+    err: unknown
+  ): PullRequestReviewRunResult => {
+    const outputs = durableAnalysisOutputs ?? {};
+    const attempts = priorAttempts + 1;
+    const retryable = true;
+    const nextRetryAt = nextPublicationRetryAt(attempts, deps.now());
+    const error = `publication failed after analysis: ${(err as Error).message}`;
+    const reviewArtifact = `.otto/runs/${runId}/review.md`;
+    const hasReviewArtifact = existsSync(join(workspaceDir, reviewArtifact));
+    const reportPath = join(runDir, "report.md");
+    const commentId = outputs.comment?.commentId;
+    const reviewId = outputs.githubReview?.reviewId;
+
+    persistState({
+      status: "publish-failed",
+      analysisArtifact: analysisArtifactRel,
+      outputs,
+      attempts,
+      retryable,
+      nextRetryAt,
+      error,
+    });
+    if (!existsSync(reportPath)) {
+      writeRunReport(
+        workspaceDir,
+        runId,
+        `# Otto review — publication failed\n\n` +
+          `The analysis completed, but local publication finalization failed: ${error}\n\n` +
+          `Re-run after ${nextRetryAt}; the durable analysis will be reused.\n`
+      );
+    }
+    finalizeManifest(
+      "publish-failed",
+      buildEvidence({
+        outcome: art.outcome,
+        confirmed: art.confirmed.length,
+        rejected: art.rejected.length,
+        githubReview: outputs.githubReview !== undefined,
+        ...(commentId !== undefined ? { commentId } : {}),
+        ...(reviewId !== undefined ? { reviewId } : {}),
+      }),
+      artifactList([
+        { kind: "diff", path: art.diffArtifact },
+        { kind: "analysis", path: analysisArtifactRel },
+        ...(hasReviewArtifact
+          ? [{ kind: "review", path: reviewArtifact } as RunArtifact]
+          : []),
+      ])
+    );
+    return {
+      status: "publish-failed",
+      runId,
+      repository,
+      pullRequest,
+      headSha,
+      inputFingerprint,
+      costUsd: manifestCost,
+      outcome: art.outcome,
+      ...(hasReviewArtifact ? { reviewArtifact } : {}),
+      ...(commentId !== undefined ? { commentId } : {}),
+      ...(reviewId !== undefined ? { reviewId } : {}),
+      retryable,
+      nextRetryAt,
+      error,
+    };
+  };
+
+  /**
    * Comment-mode remote-proof recovery. If the viewer already owns a summary
    * comment carrying THIS composite identity's current head + input markers,
    * the review is already published: reconstruct a succeeded state from the
@@ -1743,7 +1829,11 @@ export async function runPullRequestReview(opts: {
         }
         validateInputArtifact();
       }
-      return finishPublication(resumedAnalysis, priorOutputs);
+      try {
+        return finishPublication(resumedAnalysis, priorOutputs);
+      } catch (err) {
+        return unexpectedPublicationFailure(resumedAnalysis, err);
+      }
     }
     // FRESH run: the lease WAS acquired but the caller shut down before any work —
     // a caller-abort, NOT lock contention. Surface the interrupted semantics
@@ -2071,10 +2161,14 @@ export async function runPullRequestReview(opts: {
         outputs: {},
         attempts: priorAttempts + 1,
       });
+      durableAnalysisForInvocation = analysisArtifact;
 
       // 7. Publish (re-query → reconcile → output) from the persisted analysis.
       return finishPublication(analysisArtifact, {});
     } catch (err) {
+      if (durableAnalysisForInvocation) {
+        return unexpectedPublicationFailure(durableAnalysisForInvocation, err);
+      }
       return fail(
         `review failed: ${(err as Error).message}`,
         `re-run the review for ${repository}#${pullRequest}`,

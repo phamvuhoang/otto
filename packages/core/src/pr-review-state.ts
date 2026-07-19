@@ -15,8 +15,10 @@
  *
  *  - {@link acquireReviewLease}: a SYNCHRONOUS, ownership-fenced PID-liveness
  *    lease at the same composite path (`<claim-path>.claim`). Acquisition is a
- *    real exclusive create (`openSync(path, "wx")`), never a read-then-write
- *    race, so two daemons on the SAME workspace cannot both review one identity.
+ *    real atomic exclusive create-with-content (a fully-written temp file
+ *    `linkSync`'d into place — EEXIST if already held), never a read-then-write
+ *    race nor an empty-then-fill window, so two daemons on the SAME workspace
+ *    cannot both review one identity.
  *    The claim records the holder's `pid`; a LIVE holder is NEVER dispossessed
  *    ({@link isPidAlive}). Only a claim whose recorded pid is DEAD (or an
  *    unparseable claim) is stale and takeable — recovery is arbitrated by
@@ -41,6 +43,7 @@
 import {
   closeSync,
   fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -122,8 +125,11 @@ export type ReviewLeaseResult =
   | { acquired: false; reason: "busy" };
 
 /**
- * Nominal cadence hints retained for callers/telemetry. PID-liveness needs no
- * mtime refresh, so these no longer gate acquisition or staleness.
+ * VESTIGIAL cadence hints. The lease is pure PID-liveness (no mtime refresh, no
+ * heartbeat), so these constants NO LONGER gate acquisition, staleness, or
+ * anything else in this module. They are retained ONLY because they are
+ * re-exported via `index.ts` and asserted by a test; nothing reads them to make
+ * a decision. Do not reintroduce time-based staleness on top of them.
  */
 export const REVIEW_LEASE_HEARTBEAT_MS = 60_000;
 export const REVIEW_LEASE_STALE_MS = 15 * 60_000;
@@ -255,21 +261,45 @@ function atomicWriteFile(path: string, body: string, suffix: string): void {
   renameSync(tmpPath, path);
 }
 
-/** Exclusive create (`wx`): fails with EEXIST if the file already exists. */
+/** Monotonic per-process suffix so concurrent creates never share a temp name. */
+let exclusiveCreateSeq = 0;
+
+/**
+ * Atomic exclusive-create-WITH-content. `path` appears in place ALREADY holding
+ * its full body, so a concurrent reader sees either NO file or a COMPLETE one —
+ * never the empty/partial file that `openSync(path,"wx")`+`writeSync` briefly
+ * exposed between the 0-byte create and the write.
+ *
+ * The content is first written+fsync'd+closed into a unique same-directory temp
+ * file, then `linkSync(temp, path)` atomically publishes it: the link SUCCEEDS
+ * only if `path` did not exist and throws `EEXIST` otherwise — the exact
+ * exclusive-create GATE the old `wx` open provided. Returns `true` on create,
+ * `false` on EEXIST (path already held). The temp file is always unlinked.
+ */
 function exclusiveWriteFile(path: string, body: string): boolean {
   mkdirSync(dirname(path), { recursive: true });
-  let fd: number;
-  try {
-    fd = openSync(path, "wx");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
-    throw err;
-  }
+  const tmpPath = `${path}.create-${process.pid}-${++exclusiveCreateSeq}`;
+  // Write the FULL content durably to the temp file first.
+  const fd = openSync(tmpPath, "w");
   try {
     writeSync(fd, body);
     fsyncSync(fd);
   } finally {
     closeSync(fd);
+  }
+  try {
+    // Atomic exclusive publish: EEXIST if `path` is already held.
+    linkSync(tmpPath, path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw err;
+  } finally {
+    // The linked content survives at `path`; drop the temp name.
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      /* best-effort */
+    }
   }
   return true;
 }
@@ -410,13 +440,15 @@ function parseClaim(path: string): PullRequestReviewClaim | null {
   }
   if (typeof raw !== "object" || raw === null) return null;
   const c = raw as PullRequestReviewClaim;
+  // A claim's validity hinges ONLY on its identity/liveness fields. `heartbeatAt`
+  // is retained as evidence but the lease no longer heartbeats, so its presence
+  // must NOT gate validity (a missing/legacy heartbeat is not "stale").
   if (
     typeof c.runId !== "string" ||
     c.runId === "" ||
     typeof c.pid !== "number" ||
     !Number.isFinite(c.pid) ||
-    typeof c.acquiredAt !== "string" ||
-    typeof c.heartbeatAt !== "string"
+    typeof c.acquiredAt !== "string"
   ) {
     return null;
   }
@@ -465,8 +497,9 @@ function makeLease(claimPath: string, runId: string): ReviewLease {
 /**
  * Acquire the ownership-fenced PID-liveness lease for a composite identity.
  *
- * The claim resource is `<claim-path>.claim`. Acquisition is a real exclusive
- * create (`openSync(path, "wx")`); there is no read-then-write window. Returns:
+ * The claim resource is `<claim-path>.claim`. Acquisition is an atomic exclusive
+ * create-with-content (a fully-written temp file `linkSync`'d into place); there
+ * is no read-then-write window and no empty-file window. Returns:
  *
  *  - `{ acquired: true, lease }` — the claim is now ours. `lease.release()` is
  *    ownership-fenced + idempotent and `lease.ownsClaim()` re-reads ownership for
@@ -518,7 +551,17 @@ export function acquireReviewLease(opts: {
     return { acquired: true, lease: makeLease(claimPath, opts.runId) };
   }
 
-  // Someone holds it. It is STALE and takeable ONLY IF unparseable or its pid is
+  // Someone holds it. Defense-in-depth: a claim file that EXISTS but is
+  // byte-EMPTY is a create still in progress (or a stray truncated file) — a
+  // live create must never be stolen, so treat empty as BUSY, not stale. (After
+  // the link-based create above an empty claim should never be observable; this
+  // keeps the reader robust regardless.)
+  const existingStat = statFile(claimPath);
+  if (existingStat !== null && existingStat.size === 0) {
+    return { acquired: false, reason: "busy" };
+  }
+
+  // It is STALE and takeable ONLY IF unparseable or its pid is
   // dead. A live holder is never dispossessed.
   const existing = parseClaim(claimPath);
   if (existing !== null && isPidAlive(existing.pid)) {

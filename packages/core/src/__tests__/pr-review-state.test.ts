@@ -324,6 +324,38 @@ describe("acquireReviewLease", () => {
     expect(() => acquireReviewLease(leaseOpts({ runId: "bad id!" }))).toThrow();
   });
 
+  it("treats a byte-EMPTY claim file as BUSY (mid-create), never stolen", () => {
+    // A concurrent create-in-progress could momentarily expose an empty claim
+    // file. A second acquirer must NOT read it as unparseable-and-stale and
+    // steal it — that would reintroduce a transient double-hold. It is BUSY.
+    mkdirSync(join(claimFile(), ".."), { recursive: true });
+    writeFileSync(claimFile(), "");
+    const res = acquireReviewLease(
+      leaseOpts({ runId: "racer", isPidAlive: onlySelfAlive })
+    );
+    expect(res.acquired).toBe(false);
+    if (!res.acquired) expect(res.reason).toBe("busy");
+  });
+
+  it("link-based exclusive create: complete claim, no temp leftover, busy when held", () => {
+    const free = acquire();
+    expect(free.acquired).toBe(true);
+
+    // The claim file appears already containing its FULL content — a reader sees
+    // a COMPLETE parseable claim, never an empty/partial intermediate.
+    const parsed = JSON.parse(readFileSync(claimFile(), "utf8"));
+    expect(parsed.runId).toBe(RUN);
+    expect(parsed.pid).toBe(process.pid);
+
+    // The link-based create leaves no temp file behind.
+    expect(readdirSync(join(claimFile(), ".."))).toEqual([`${FP}.claim`]);
+
+    // Still held by a live claim → a second acquire is busy (EEXIST gate).
+    const busy = acquireReviewLease(leaseOpts({ runId: "other" }));
+    expect(busy.acquired).toBe(false);
+    if (!busy.acquired) expect(busy.reason).toBe("busy");
+  });
+
   it("B recovers A's DEAD claim; A's stale release NEVER deletes B's claim; C is busy", () => {
     // A acquires normally.
     const a = acquireReviewLease(leaseOpts({ runId: "A" }));

@@ -473,6 +473,31 @@ describe("runPullRequestReviewWatch", () => {
     expect(log).toMatch(/idle/);
   });
 
+  it("a permanent analysis failure is not selected again", async () => {
+    const controller = new AbortController();
+    const listPullRequests = vi.fn(() => [rev(1)]);
+    const readState = vi.fn(
+      (): PullRequestReviewState => ({
+        ...succeededState(rev(1), FP_A),
+        status: "analysis-failed",
+        retryable: false,
+        error: "review analysis contract broken",
+      })
+    );
+    const h = harness(
+      {
+        listPullRequests: listPullRequests as never,
+        readState: readState as never,
+      },
+      controller
+    );
+
+    await runPullRequestReviewWatch(baseOpts(h.deps, controller.signal));
+
+    expect(h.runRevision).not.toHaveBeenCalled();
+    expect(h.sleep).toHaveBeenCalledTimes(1);
+  });
+
   it("a thrown revision is caught as a bounded failure and does not kill the daemon", async () => {
     const controller = new AbortController();
     const listPullRequests = vi.fn(() => [rev(1)]);

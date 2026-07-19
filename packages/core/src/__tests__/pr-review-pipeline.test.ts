@@ -444,6 +444,91 @@ describe("runPullRequestReview", () => {
     expect(readManifest(fx.workspaceDir, res.runId).exitReason).toBe(
       "analysis-failed"
     );
+
+    const fingerprint = resolvedInput(fx).fingerprint;
+    expect(
+      readReviewState(
+        fx.workspaceDir,
+        "acme/widget",
+        7,
+        fx.headSha,
+        fingerprint
+      )
+    ).toMatchObject({
+      status: "analysis-failed",
+      attempts: 1,
+      retryable: false,
+    });
+
+    // A watch invocation of the same permanently-failed identity is terminal:
+    // it must not pay for another analysis on every daemon poll.
+    const watchRetry = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ watch: true }),
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(watchRetry.status).toBe("analysis-failed");
+    expect(watchRetry.costUsd).toBe(0);
+    expect(fake.invocationCount()).toBe(1);
+
+    // After the operator fixes the contract issue, an explicit one-shot rerun
+    // remains available for the exact same identity.
+    const fixed = makeFakeAnalyze({});
+    const oneShotRetry = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ watch: false }),
+      deps: {
+        analyze: fixed.fn,
+        github,
+        stdout,
+        now: () => new Date("2026-07-18T12:30:00.000Z"),
+      },
+    });
+    expect(oneShotRetry.status).toBe("succeeded");
+    expect(fixed.invocationCount()).toBe(1);
+    expect(
+      readReviewState(
+        fx.workspaceDir,
+        "acme/widget",
+        7,
+        fx.headSha,
+        fingerprint
+      )
+    ).toMatchObject({ status: "succeeded", attempts: 2 });
+  });
+
+  it("persists transient analysis failures with bounded retry metadata", async () => {
+    const analyze = vi.fn(async () => {
+      throw new Error("temporary model transport failure");
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: analyze as never,
+        github: makeCommentGithub({ current: () => fx.revision }).github,
+        stdout,
+        now,
+      },
+    });
+    expect(res).toMatchObject({ status: "analysis-failed", retryable: true });
+    expect(res.nextRetryAt).toBeTruthy();
+    expect(
+      readReviewState(
+        fx.workspaceDir,
+        "acme/widget",
+        7,
+        fx.headSha,
+        resolvedInput(fx).fingerprint
+      )
+    ).toMatchObject({
+      status: "analysis-failed",
+      retryable: true,
+      nextRetryAt: res.nextRetryAt,
+    });
   });
 
   it("(5a) a moved head after analysis is superseded with supersededBy and stale evidence", async () => {
@@ -1003,6 +1088,37 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
     expect(st?.status).toBe("publish-failed");
     expect(st?.retryable).toBe(true);
     expect(st?.analysisArtifact).toBe(`.otto/runs/${res.runId}/analysis.json`);
+  });
+
+  it("does not overwrite a durable publication receipt when a later unexpected failure reaches the analysis failure helper", async () => {
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: fake.fn,
+        github: gh.github,
+        stdout: () => {
+          throw new Error("local stdout write failed after publication");
+        },
+        now,
+      },
+    });
+
+    expect(res.status).toBe("analysis-failed");
+    expect(gh.calls.create).toBe(1);
+    expect(
+      readReviewState(fx.workspaceDir, "acme/widget", 7, fx.headSha, fp())
+    ).toMatchObject({
+      status: "running",
+      analysisArtifact: `.otto/runs/${res.runId}/analysis.json`,
+      outputs: {
+        comment: { status: "succeeded", commentId: gh.store[0].id },
+      },
+      attempts: 1,
+    });
   });
 
   it("(S5) an auth/validation comment error is a permanent publish-failed", async () => {

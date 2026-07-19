@@ -217,9 +217,9 @@ export type PullRequestReviewRunResult = {
   commentId?: number;
   /** The published formal GitHub review id (--github-review only). */
   reviewId?: number;
-  /** For a `publish-failed` result: whether a bounded retry may recover. */
+  /** For an analysis/publication failure: whether a bounded retry may recover. */
   retryable?: boolean;
-  /** For a retryable `publish-failed` result: the next-eligible timestamp. */
+  /** For a retryable analysis/publication failure: next-eligible timestamp. */
   nextRetryAt?: string;
   /**
    * For a `skipped` result: WHY it was skipped. This is the EXPLICIT
@@ -430,9 +430,10 @@ export async function runPullRequestReview(opts: {
   const requestedOutput = config.output;
 
   // --- Stateful dedup (Slice 2): a terminal composite identity short-circuits.
-  //     `succeeded` is done; a permanent (or not-yet-eligible back-off) failure
-  //     is likewise not re-run. A prior `running`/`publish-failed` run with a
-  //     persisted analysis is RESUMED from `analysis.json` (no re-payment).
+  //     `succeeded` is done; watch mode also blocks permanent/not-yet-eligible
+  //     failures, while an explicit one-shot may retry a permanent analysis
+  //     failure after an operator fix. A prior `running`/`publish-failed` run
+  //     with persisted analysis is RESUMED from `analysis.json` (no re-payment).
   const priorState = readReviewState(
     workspaceDir,
     repository,
@@ -440,7 +441,15 @@ export async function runPullRequestReview(opts: {
     headSha,
     inputFingerprint
   );
-  if (priorState && !isStateRunnable(priorState, deps.now())) {
+  const oneShotPermanentAnalysisRetry =
+    !config.watch &&
+    priorState?.status === "analysis-failed" &&
+    priorState.retryable !== true;
+  if (
+    priorState &&
+    !isStateRunnable(priorState, deps.now()) &&
+    !oneShotPermanentAnalysisRetry
+  ) {
     return {
       status: priorState.status as PullRequestReviewRunStatus,
       runId: priorState.runId,
@@ -619,10 +628,30 @@ export async function runPullRequestReview(opts: {
     ...over,
   ];
 
+  // Once paid analysis + its outputs are durable, an unexpected exception from
+  // the publication path must not let the generic analysis failure helper erase
+  // the resume pointer or any already-proven remote receipt.
+  let hasDurableAnalysisState = priorState?.analysisArtifact !== undefined;
+
   const fail = (
     error: string,
-    nextAction: string
+    nextAction: string,
+    retryable = false
   ): PullRequestReviewRunResult => {
+    const attempts = priorAttempts + 1;
+    const nextRetryAt = retryable
+      ? nextPublicationRetryAt(attempts, deps.now())
+      : undefined;
+    if (!hasDurableAnalysisState) {
+      persistState({
+        status: "analysis-failed",
+        outputs: priorOutputs,
+        attempts,
+        retryable,
+        ...(nextRetryAt ? { nextRetryAt } : {}),
+        error,
+      });
+    }
     // Harness-authored failure report naming the exact identity + next action.
     const report =
       `# Otto review — analysis failed\n\n` +
@@ -642,6 +671,8 @@ export async function runPullRequestReview(opts: {
       headSha: revision.headSha,
       inputFingerprint,
       costUsd: manifestCost,
+      retryable,
+      ...(nextRetryAt ? { nextRetryAt } : {}),
       error,
     };
   };
@@ -768,6 +799,7 @@ export async function runPullRequestReview(opts: {
         updatedAt: deps.now().toISOString(),
         ...over,
       });
+      hasDurableAnalysisState = over.analysisArtifact !== undefined;
     } catch {
       // A state-write hiccup must not crash the run; idempotency degrades to the
       // remote marker reconciliation, which is still single-comment safe.
@@ -1768,14 +1800,16 @@ export async function runPullRequestReview(opts: {
       if (!inputArtifactDurable) {
         return fail(
           "review-input artifact failed round-trip validation",
-          "re-run the review; the run directory could not persist the exact review input"
+          "re-run the review; the run directory could not persist the exact review input",
+          false
         );
       }
       snapshot = roundTrip!;
     } catch (err) {
       return fail(
         `review-input artifact write failed: ${(err as Error).message}`,
-        "check that the run directory is writable, then re-run the review"
+        "check that the run directory is writable, then re-run the review",
+        false
       );
     }
 
@@ -1792,7 +1826,8 @@ export async function runPullRequestReview(opts: {
       if (err instanceof ReviewSkillError) {
         return fail(
           `review skill selection failed: ${err.message}`,
-          `choose a valid --review-skill (or omit it to use the built-in) for ${repository}#${pullRequest}`
+          `choose a valid --review-skill (or omit it to use the built-in) for ${repository}#${pullRequest}`,
+          false
         );
       }
       throw err;
@@ -1812,7 +1847,8 @@ export async function runPullRequestReview(opts: {
     } catch (err) {
       return fail(
         `worktree creation failed: ${(err as Error).message}`,
-        `verify the git remote can fetch ${repository}#${pullRequest}, then re-run the review`
+        `verify the git remote can fetch ${repository}#${pullRequest}, then re-run the review`,
+        true
       );
     }
 
@@ -1827,7 +1863,8 @@ export async function runPullRequestReview(opts: {
       if (wt.reviewInputText !== runInputBytes) {
         return fail(
           "worktree review-input copy is not byte-identical to the run artifact",
-          "re-run the review; the isolated worktree did not preserve the exact review input"
+          "re-run the review; the isolated worktree did not preserve the exact review input",
+          false
         );
       }
 
@@ -1957,7 +1994,8 @@ export async function runPullRequestReview(opts: {
             }
             return fail(
               `review analysis contract broken: ${err.result.contractErrors.join("; ") || "unknown"}`,
-              `inspect .otto/runs/${runId}/ evidence, then re-run the review for ${repository}#${pullRequest}`
+              `inspect .otto/runs/${runId}/ evidence, then re-run the review for ${repository}#${pullRequest}`,
+              false
             );
           }
           if (
@@ -1977,7 +2015,8 @@ export async function runPullRequestReview(opts: {
           }
           return fail(
             `review analysis failed: ${(err as Error).message}`,
-            `re-run the review for ${repository}#${pullRequest}`
+            `re-run the review for ${repository}#${pullRequest}`,
+            true
           );
         }
       }
@@ -1986,7 +2025,8 @@ export async function runPullRequestReview(opts: {
       if (budgetExhausted) {
         return fail(
           "review budget exhausted before verification completed",
-          `raise --budget or narrow the review, then re-run for ${repository}#${pullRequest}`
+          `raise --budget or narrow the review, then re-run for ${repository}#${pullRequest}`,
+          true
         );
       }
 
@@ -2037,7 +2077,8 @@ export async function runPullRequestReview(opts: {
     } catch (err) {
       return fail(
         `review failed: ${(err as Error).message}`,
-        `re-run the review for ${repository}#${pullRequest}`
+        `re-run the review for ${repository}#${pullRequest}`,
+        true
       );
     }
   }

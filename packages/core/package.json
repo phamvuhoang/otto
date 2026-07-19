@@ -61,11 +61,8 @@
   "publishConfig": {
     "access": "public"
   },
-  "dependencies": {
-    "proper-lockfile": "^4.1.2"
-  },
+  "dependencies": {},
   "devDependencies": {
-    "@types/proper-lockfile": "^4.1.4",
     "vitest": "^4.1.9"
   }
 }

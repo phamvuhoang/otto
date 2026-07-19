@@ -38,12 +38,18 @@ import {
   type ReviewAnalysisResult,
   type ReviewSeverityCounts,
 } from "./panel.js";
-import { GitHubPrError, type GitHubPrClient } from "./github-pr.js";
+import {
+  GitHubPrError,
+  type GitHubPrClient,
+  type GitHubComment,
+  type GitHubReview,
+} from "./github-pr.js";
 import {
   reconcilePublication,
   upsertSummaryComment,
   publishFormalReview,
   nextPublicationRetryAt,
+  resolveOwnedUnique,
 } from "./pr-review-publish.js";
 import { mapFindingsToDiff } from "./pr-review-diff.js";
 import {
@@ -594,13 +600,16 @@ export async function runPullRequestReview(opts: {
 
   const analysisArtifactRel = `.otto/runs/${runId}/analysis.json`;
 
-  // Run-scoped abort: fed by the caller's `signal` AND a stolen-lock compromise
-  // (wired once the lease is acquired, below). Passed to the analysis pass and
-  // checked before any remote write so a compromised run publishes nothing.
+  // Run-scoped abort: fed ONLY by the caller's shutdown `signal`. Passed to the
+  // analysis pass and checked before any remote write so an aborted run stops.
   const runAbort = new AbortController();
 
-  /** No lease held (busy) or lost (compromised): produce NO analysis/output. */
-  const leaseLostResult = (): PullRequestReviewRunResult => ({
+  /**
+   * BUSY before any work (the lease was not acquired): NO run happened, so
+   * nothing is finalized and the cost is genuinely zero. Distinct from the
+   * aborted-after-analysis path, which finalizes with the real accumulated cost.
+   */
+  const busySkippedResult = (): PullRequestReviewRunResult => ({
     status: "skipped",
     runId,
     repository,
@@ -683,14 +692,62 @@ export async function runPullRequestReview(opts: {
     art: PullRequestReviewAnalysisArtifact,
     startingOutputs: PullRequestReviewOutputState
   ): PullRequestReviewRunResult => {
-    // The lock was stolen (another process stale-recovered this identity) or the
-    // run was aborted: publish NOTHING so the identity is never double-reviewed.
-    if (runAbort.signal.aborted) return leaseLostResult();
-
     const outcome = art.outcome;
     const published = art.confirmed;
     const diffArtifactRel = art.diffArtifact;
     const attempts = priorAttempts + 1;
+
+    /**
+     * Aborted/lost AFTER acquisition and PAID analysis (caller shutdown at the
+     * publication boundary, or a per-write ownership loss): publish nothing
+     * further, but PRESERVE the spend. Finalize the manifest with the real
+     * accumulated cost and persist a RESUMABLE `running` state that retains the
+     * analysis artifact so a later run reuses the paid analysis. This is a
+     * DISTINCT terminal path from the busy skip (which does nothing at cost 0).
+     */
+    const abortedResumable = (
+      outputs: PullRequestReviewOutputState,
+      commentId?: number,
+      reviewId?: number
+    ): PullRequestReviewRunResult => {
+      persistState({
+        status: "running",
+        analysisArtifact: analysisArtifactRel,
+        outputs,
+        attempts,
+      });
+      finalizeManifest(
+        "aborted",
+        buildEvidence({
+          outcome,
+          confirmed: published.length,
+          rejected: art.rejected.length,
+          githubReview: outputs.githubReview !== undefined,
+          ...(commentId !== undefined ? { commentId } : {}),
+          ...(reviewId !== undefined ? { reviewId } : {}),
+        }),
+        artifactList([
+          { kind: "diff", path: diffArtifactRel },
+          { kind: "analysis", path: analysisArtifactRel },
+        ])
+      );
+      return {
+        status: "skipped",
+        runId,
+        repository,
+        pullRequest,
+        headSha,
+        inputFingerprint,
+        // The real accumulated cost — NEVER 0 — so the daemon's budget counts it.
+        costUsd: manifestCost,
+        outcome,
+        ...(commentId !== undefined ? { commentId } : {}),
+        ...(reviewId !== undefined ? { reviewId } : {}),
+      };
+    };
+
+    // Caller shutdown detected at the publication boundary: preserve the spend.
+    if (runAbort.signal.aborted) return abortedResumable(startingOutputs);
 
     // Re-query the PR immediately before any remote write.
     const current = deps.github.getPullRequest(repository, pullRequest);
@@ -768,6 +825,12 @@ export async function runPullRequestReview(opts: {
                 "permission",
                 false
               );
+            }
+            // Per-write ownership fence: revalidate ownership + abort immediately
+            // before this remote write. If shutdown fired or we no longer own the
+            // claim, publish nothing further and take the aborted/resumable path.
+            if (runAbort.signal.aborted || !lease.ownsClaim()) {
+              return abortedResumable(outputs);
             }
             const receipt = upsertSummaryComment({
               github,
@@ -892,6 +955,12 @@ export async function runPullRequestReview(opts: {
               false
             );
           }
+          // Per-write ownership fence immediately before this INDEPENDENT remote
+          // write: an abort or an ownership loss between the comment and the
+          // formal review withholds the review while preserving the comment.
+          if (runAbort.signal.aborted || !lease.ownsClaim()) {
+            return abortedResumable(outputs, commentId);
+          }
           const receipt = publishFormalReview({ github, review: canonical });
           outputs.githubReview = {
             status: "succeeded",
@@ -991,29 +1060,79 @@ export async function runPullRequestReview(opts: {
    * remote body WITHOUT paying for a fresh model analysis. Any adapter hiccup
    * falls through to the normal analysis path.
    */
+  /**
+   * A permanent reconciliation error surfaced DURING recovery (a `>1` owned
+   * marker): treat it exactly like a permanent publish error — persist a
+   * non-retryable `publish-failed` and return it, NEVER a silent success.
+   */
+  const recoveryPermanentFailure = (
+    err: unknown
+  ): PullRequestReviewRunResult => {
+    const gerr =
+      err instanceof GitHubPrError
+        ? err
+        : new GitHubPrError(
+            `recovery reconciliation failed: ${(err as Error).message}`,
+            "unknown",
+            false
+          );
+    const attempts = priorAttempts + 1;
+    persistState({
+      status: "publish-failed",
+      outputs: {},
+      attempts,
+      retryable: gerr.retryable,
+      error: gerr.message,
+    });
+    finalizeManifest("publish-failed", buildEvidence(), artifactList());
+    return {
+      status: "publish-failed",
+      runId,
+      repository,
+      pullRequest,
+      headSha,
+      inputFingerprint,
+      costUsd: manifestCost,
+      retryable: gerr.retryable,
+      error: gerr.message,
+    };
+  };
+
   const tryRemoteRecovery = (): PullRequestReviewRunResult | null => {
-    // A stolen/aborted lease must never reuse-and-republish a remote comment.
+    // An aborted run must never reuse-and-republish a remote comment.
     if (runAbort.signal.aborted) return null;
     if (requestedOutput !== "comment") return null;
     const github = commentClient();
     if (!github) return null;
-    let owned;
+    let viewerLogin: string;
+    let comments: GitHubComment[];
     try {
-      const viewer = github.viewer();
-      const marker = summaryMarker(repository, pullRequest);
-      const h = headMarker(headSha);
-      const i = inputMarker(inputFingerprint);
-      owned = github
-        .listIssueComments(repository, pullRequest)
-        .find(
-          (c) =>
-            c.author === viewer.login &&
-            c.body.includes(marker) &&
-            c.body.includes(h) &&
-            c.body.includes(i)
-        );
+      viewerLogin = github.viewer().login;
+      comments = github.listIssueComments(repository, pullRequest);
     } catch {
       return null;
+    }
+    const marker = summaryMarker(repository, pullRequest);
+    const h = headMarker(headSha);
+    const i = inputMarker(inputFingerprint);
+    let owned: GitHubComment | null;
+    try {
+      // Zero/one/many reconciliation (shared with the publish helpers): a `>1`
+      // owned comment is a permanent error, never a silent first-match success.
+      owned = resolveOwnedUnique(
+        comments,
+        (c) =>
+          c.author === viewerLogin &&
+          c.body.includes(marker) &&
+          c.body.includes(h) &&
+          c.body.includes(i),
+        (count) =>
+          `found ${count} Otto summary comments carrying ${marker} on ` +
+          `${repository}#${pullRequest}; refusing to guess which to update — ` +
+          `remove the duplicates so a single owned comment remains`
+      );
+    } catch (err) {
+      return recoveryPermanentFailure(err);
     }
     if (!owned) return null;
 
@@ -1027,20 +1146,32 @@ export async function runPullRequestReview(opts: {
     if (config.githubReview) {
       const reviews = reviewClient();
       if (!reviews) return null;
-      let ownedReview;
+      let reviewViewer: string;
+      let reviewList: GitHubReview[];
       try {
-        const viewer = reviews.viewer();
-        const marker = reviewMarker(
-          repository,
-          pullRequest,
-          headSha,
-          inputFingerprint
-        );
-        ownedReview = reviews
-          .listReviews(repository, pullRequest)
-          .find((r) => r.author === viewer.login && r.body.includes(marker));
+        reviewViewer = reviews.viewer().login;
+        reviewList = reviews.listReviews(repository, pullRequest);
       } catch {
         return null;
+      }
+      const rmarker = reviewMarker(
+        repository,
+        pullRequest,
+        headSha,
+        inputFingerprint
+      );
+      let ownedReview: GitHubReview | null;
+      try {
+        ownedReview = resolveOwnedUnique(
+          reviewList,
+          (r) => r.author === reviewViewer && r.body.includes(rmarker),
+          (count) =>
+            `found ${count} Otto formal reviews carrying ${rmarker} on ` +
+            `${repository}#${pullRequest}; refusing to guess which represents ` +
+            `this review — remove the duplicates so a single owned review remains`
+        );
+      } catch (err) {
+        return recoveryPermanentFailure(err);
       }
       // Comment present but the owned formal review is absent: do NOT declare
       // success. Fall through so the normal analysis path completes the review.
@@ -1104,13 +1235,12 @@ export async function runPullRequestReview(opts: {
     };
   };
 
-  // --- Acquire the ownership-atomic composite lease BEFORE writing run/input
-  //     artifacts or a worktree. A busy (LIVE) lock returns `skipped` with no
-  //     analysis. proper-lockfile auto-refreshes the lock (no manual heartbeat);
-  //     `lease.compromised` fires if another process stale-recovers this
-  //     identity, in which case this run ABORTS and publishes nothing rather
-  //     than double-review. The lease is released in `finally`.
-  const leaseResult = await acquireReviewLease({
+  // --- Acquire the ownership-fenced PID-liveness composite lease BEFORE writing
+  //     run/input artifacts or a worktree. A busy (LIVE) holder returns `skipped`
+  //     with no analysis — a live holder is never dispossessed. A stale claim
+  //     (dead pid) is taken over race-free. The lease is released (ownership-
+  //     fenced) in `finally`, and its `ownsClaim()` fences every remote write.
+  const leaseResult = acquireReviewLease({
     workspaceDir,
     repository,
     pullRequest,
@@ -1119,23 +1249,28 @@ export async function runPullRequestReview(opts: {
     runId,
   });
   if (!leaseResult.acquired) {
-    return leaseLostResult();
+    return busySkippedResult();
   }
   const lease: ReviewLease = leaseResult.lease;
 
-  // Wire the caller's abort AND a stolen-lock (compromise) into one run-scoped
-  // signal: the analysis is cancelled and every remote-write path bails (see the
-  // guards at the top of finishPublication/tryRemoteRecovery).
-  if (signal?.aborted || lease.compromised.aborted) runAbort.abort();
+  // Wire the caller's shutdown `signal` into the run-scoped abort: the analysis
+  // is cancelled and every remote-write path bails (see the fences in
+  // finishPublication and the abort guard below).
+  if (signal?.aborted) runAbort.abort();
   else {
-    const onSourceAbort = () => {
-      if (!runAbort.signal.aborted) runAbort.abort();
-    };
-    signal?.addEventListener("abort", onSourceAbort, { once: true });
-    lease.compromised.addEventListener("abort", onSourceAbort, { once: true });
+    signal?.addEventListener(
+      "abort",
+      () => {
+        if (!runAbort.signal.aborted) runAbort.abort();
+      },
+      { once: true }
+    );
   }
 
   try {
+    // Caller shutdown already fired before any work happened: skip cheaply with
+    // no analysis and no finalize (the busy-skip semantics), cost 0.
+    if (runAbort.signal.aborted) return busySkippedResult();
     // Resume a crashed/failed run from persisted analysis — never re-analyze.
     if (resumedAnalysis) {
       return finishPublication(resumedAnalysis, priorOutputs);
@@ -1146,7 +1281,7 @@ export async function runPullRequestReview(opts: {
 
     return await runFreshReview();
   } finally {
-    await lease.release();
+    lease.release();
     if (worktree) worktree.cleanup();
   }
 

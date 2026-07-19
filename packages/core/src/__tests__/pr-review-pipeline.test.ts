@@ -863,20 +863,24 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
     }
   });
 
-  it("(S3b) a run whose lease is compromised mid-review publishes nothing (skipped)", async () => {
-    // Model proper-lockfile's onCompromised firing while the review is in
-    // flight: the run-scoped abort trips, so publication MUST be withheld — the
-    // recoverer that stole the lease is the one allowed to review this identity.
+  it("(S3b/#4) caller shutdown AFTER paid analysis withholds publication but PRESERVES the spend and finalizes a resumable run", async () => {
+    // The caller's shutdown signal trips while the review is in flight (after the
+    // paid analysis). Publication MUST be withheld — but the run already SPENT, so
+    // it must NOT report cost 0: it finalizes with the real accumulated cost and
+    // persists a RESUMABLE `running` state (retaining analysis) so a later run
+    // reuses the paid analysis. This is distinct from a busy skip (cost 0).
     const controller = new AbortController();
     const base = makeFakeAnalyze({
       confirmed: [finding()],
       severity: { ...EMPTY_SEVERITY, major: 1 },
+      lensCost: 0.1,
+      verifyCost: 0.2,
     });
     let analyzed = 0;
     const analyze: typeof base.fn = async (opts) => {
       const out = await base.fn(opts);
       analyzed++;
-      controller.abort(); // lease stolen: the shared signal aborts.
+      controller.abort(); // caller shutdown: the shared signal aborts.
       return out;
     };
     const gh = makeCommentGithub({ current: () => fx.revision });
@@ -888,9 +892,15 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
       deps: { analyze, github: gh.github, stdout, now },
     });
     expect(analyzed).toBe(1);
-    expect(res.status).toBe("skipped");
-    // The decisive guarantee: NO remote review was published (no double-review).
+    // The decisive guarantee: NO remote comment was published (no double-review).
     expect(gh.calls.create).toBe(0);
+    // Cost is the REAL accumulated spend (5 lenses × 0.1 + verify 0.2 = 0.7), not 0.
+    expect(res.costUsd).toBeCloseTo(0.7, 5);
+    // The manifest is finalized with that same real cost.
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(m.finishedAt).toBeTruthy();
+    expect(m.costUsd).toBeCloseTo(0.7, 5);
+    // The persisted state is RESUMABLE: `running`, retaining the analysis artifact.
     const st = readReviewState(
       fx.workspaceDir,
       "acme/widget",
@@ -898,7 +908,8 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
       fx.headSha,
       fp()
     );
-    expect(st?.status).not.toBe("succeeded");
+    expect(st?.status).toBe("running");
+    expect(st?.analysisArtifact).toBe(`.otto/runs/${res.runId}/analysis.json`);
   });
 
   it("(S4) a transient comment error is publish-failed with retryable + nextRetryAt", async () => {
@@ -1562,6 +1573,143 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
     expect(res.costUsd).toBe(0);
     expect(res.commentId).toBe(4242);
     expect(gh.calls.createReview).toHaveLength(0);
+  });
+
+  it("(#2) ownership lost between the comment write and the formal-review write: comment written, review WITHHELD, resumable", async () => {
+    // Per-write ownership fence. `lease.ownsClaim()` is true before the comment
+    // write, then the comment write side-effect removes the on-disk claim so the
+    // fence before the formal-review write sees ownsClaim()===false → the review
+    // is NOT written, publication stops, and the comment receipt is preserved.
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const origCreate = gh.github.createIssueComment;
+    gh.github.createIssueComment = (r: string, n: number, b: string) => {
+      const c = origCreate(r, n, b);
+      // The claim vanishes right after the comment lands: a stand-in for another
+      // process taking over — ownsClaim() will read no owned claim and be false.
+      rmSync(join(fx.workspaceDir, ".otto", "review-state"), {
+        recursive: true,
+        force: true,
+      });
+      return c;
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    // The comment WAS written (fence passed while ownership held)…
+    expect(gh.calls.createComment).toBe(1);
+    // …but the formal review was WITHHELD (fence failed after ownership loss).
+    expect(gh.calls.createReview).toHaveLength(0);
+    // The comment receipt survives and the run persists RESUMABLE `running`.
+    expect(res.commentId).toBeDefined();
+    expect(res.reviewId).toBeUndefined();
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("running");
+    expect(st?.outputs.comment?.status).toBe("succeeded");
+    expect(st?.outputs.githubReview).toBeUndefined();
+  });
+
+  it("(#3a) recovery with >1 owned summary comment is a permanent publish-failed, NOT a silent success", async () => {
+    // Two comments carry the exact composite (marker + head + input) for the
+    // viewer. Recovery must NOT silently accept the first — the shared zero/one/
+    // many reconciliation raises the same permanent validation error the publish
+    // helpers do, surfaced as a non-retryable publish-failed.
+    const dup = (id: number): GitHubComment => ({
+      id,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: `https://github.com/acme/widget/issues/7#comment-${id}`,
+    });
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when recovery hits a >1 conflict"
+        );
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [dup(4242), dup(4243)],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(false);
+    expect(gh.calls.createComment).toBe(0);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    expect(st?.retryable).toBe(false);
+  });
+
+  it("(#3b) recovery with >1 owned formal review is a permanent publish-failed, NOT a silent success", async () => {
+    const existingComment: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const rmark = reviewMarker("acme/widget", 7, fx.headSha, fp());
+    const dupReview = (id: number): GitHubReview => ({
+      id,
+      body: [rmark, "", "formal review body"].join("\n"),
+      author: "otto-bot",
+      commitId: fx.headSha,
+      state: "CHANGES_REQUESTED",
+    });
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when recovery hits a >1 conflict"
+        );
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [existingComment],
+      reviews: [dupReview(6161), dupReview(6162)],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(false);
+    expect(gh.calls.createReview).toHaveLength(0);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
   });
 });
 

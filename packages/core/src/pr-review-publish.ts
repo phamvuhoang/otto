@@ -113,6 +113,34 @@ export function reconcilePublication(opts: {
 }
 
 // ---------------------------------------------------------------------------
+// Zero / one / many owned-marker reconciliation
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the SINGLE owned item from a list under an ownership predicate:
+ *
+ *  - zero owned → `null`;
+ *  - exactly one owned → that item;
+ *  - more than one owned → a permanent {@link GitHubPrError} (`"validation"`,
+ *    non-retryable) built from `onConflict(count)` — refusing to arbitrarily
+ *    pick one.
+ *
+ * The publish helpers AND remote-proof recovery all reconcile owned markers
+ * through this one helper so a `>1` marker is never silently accepted anywhere.
+ */
+export function resolveOwnedUnique<T>(
+  items: readonly T[],
+  isOwned: (item: T) => boolean,
+  onConflict: (count: number) => string
+): T | null {
+  const owned = items.filter(isOwned);
+  if (owned.length > 1) {
+    throw new GitHubPrError(onConflict(owned.length), "validation", false);
+  }
+  return owned.length === 1 ? owned[0] : null;
+}
+
+// ---------------------------------------------------------------------------
 // Idempotent summary-comment upsert
 // ---------------------------------------------------------------------------
 
@@ -159,26 +187,20 @@ export function upsertSummaryComment(opts: {
   const viewer = github.viewer();
   const comments = github.listIssueComments(repository, pullRequest);
 
-  const owned: GitHubComment[] = comments.filter(
-    (c) => c.author === viewer.login && c.body.includes(marker)
+  const existing: GitHubComment | null = resolveOwnedUnique(
+    comments,
+    (c) => c.author === viewer.login && c.body.includes(marker),
+    (count) =>
+      `found ${count} Otto summary comments carrying ${marker} on ` +
+      `${repository}#${pullRequest}; refusing to guess which to update — ` +
+      `remove the duplicates so a single owned comment remains`
   );
 
-  if (owned.length > 1) {
-    throw new GitHubPrError(
-      `found ${owned.length} Otto summary comments carrying ${marker} on ` +
-        `${repository}#${pullRequest}; refusing to guess which to update — ` +
-        `remove the duplicates so a single owned comment remains`,
-      "validation",
-      false
-    );
-  }
-
-  if (owned.length === 0) {
+  if (existing === null) {
     const created = github.createIssueComment(repository, pullRequest, body);
     return { commentId: created.id, action: "created", body };
   }
 
-  const existing = owned[0];
   const currentHead = headMarker(headSha);
   const currentInput = inputMarker(inputFingerprint);
   if (
@@ -259,22 +281,17 @@ export function publishFormalReview(opts: {
   const viewer = github.viewer();
   const reviews = github.listReviews(repository, pullRequest);
 
-  const owned: GitHubReview[] = reviews.filter(
-    (r) => r.author === viewer.login && r.body.includes(marker)
+  const owned: GitHubReview | null = resolveOwnedUnique(
+    reviews,
+    (r) => r.author === viewer.login && r.body.includes(marker),
+    (count) =>
+      `found ${count} Otto formal reviews carrying ${marker} on ` +
+      `${repository}#${pullRequest}; refusing to guess which represents this ` +
+      `review — remove the duplicates so a single owned review remains`
   );
 
-  if (owned.length > 1) {
-    throw new GitHubPrError(
-      `found ${owned.length} Otto formal reviews carrying ${marker} on ` +
-        `${repository}#${pullRequest}; refusing to guess which represents this ` +
-        `review — remove the duplicates so a single owned review remains`,
-      "validation",
-      false
-    );
-  }
-
-  if (owned.length === 1) {
-    return { reviewId: owned[0].id, action: "reused", body: owned[0].body };
+  if (owned !== null) {
+    return { reviewId: owned.id, action: "reused", body: owned.body };
   }
 
   const body = renderFormalReviewBody(review);

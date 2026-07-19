@@ -1,10 +1,10 @@
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   rmSync,
-  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -186,7 +186,7 @@ describe("writeReviewState / readReviewState", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Ownership-atomic advisory lease (proper-lockfile)
+// Ownership-fenced PID-liveness lease
 // ---------------------------------------------------------------------------
 
 const leaseOpts = (over: Record<string, unknown> = {}) => ({
@@ -199,125 +199,163 @@ const leaseOpts = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-/** The lock directory proper-lockfile creates for a composite identity. */
-function lockDir(repository = REPO, pr = PR, head = HEAD, fp = FP): string {
-  return (
-    reviewStatePath(ws, repository, pr, head, fp).replace(/\.json$/, ".claim") +
-    ".lock"
+/** The on-disk claim file path for a composite identity. */
+function claimFile(repository = REPO, pr = PR, head = HEAD, fp = FP): string {
+  return reviewStatePath(ws, repository, pr, head, fp).replace(
+    /\.json$/,
+    ".claim"
   );
 }
 
-/** Resolve once the signal aborts, or reject if it does not within `ms`. */
-function awaitAbort(signal: AbortSignal, ms: number): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("signal did not abort in time")),
-      ms
-    );
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true }
-    );
-  });
-}
+/** A pid that our injected `isPidAlive` will treat as DEAD (never our own). */
+const DEAD_PID = 999_999_999;
+/** Real liveness: only THIS process is alive; any other recorded pid is dead. */
+const onlySelfAlive = (pid: number) => pid === process.pid;
 
-// Track leases acquired in a test so update timers are always torn down.
 let held: ReviewLease[] = [];
-afterEach(async () => {
-  for (const lease of held) await lease.release();
+afterEach(() => {
+  for (const lease of held) lease.release();
   held = [];
 });
-async function acquire(over: Record<string, unknown> = {}) {
-  const res = await acquireReviewLease(leaseOpts(over));
+function acquire(over: Record<string, unknown> = {}) {
+  const res = acquireReviewLease(leaseOpts(over));
   if (res.acquired) held.push(res.lease);
   return res;
 }
 
 describe("acquireReviewLease", () => {
-  it("acquires a free identity and creates its lock directory", async () => {
-    const res = await acquire();
+  it("acquires a free identity and writes its claim file", () => {
+    const res = acquire();
     expect(res.acquired).toBe(true);
     if (res.acquired) {
       expect(typeof res.lease.release).toBe("function");
-      expect(res.lease.compromised).toBeInstanceOf(AbortSignal);
-      expect(res.lease.compromised.aborted).toBe(false);
+      expect(typeof res.lease.ownsClaim).toBe("function");
+      expect(res.lease.ownsClaim()).toBe(true);
     }
-    expect(readdirSync(join(lockDir(), ".."))).toContain(`${FP}.claim.lock`);
+    expect(existsSync(claimFile())).toBe(true);
+    expect(readdirSync(join(claimFile(), ".."))).toContain(`${FP}.claim`);
   });
 
-  it("a second concurrent acquire on a LIVE lock is rejected as busy", async () => {
-    const first = await acquire();
+  it("a second acquire while the holder's pid is ALIVE is rejected as busy", () => {
+    const first = acquire();
     expect(first.acquired).toBe(true);
 
-    const second = await acquireReviewLease(leaseOpts({ runId: "run-other" }));
+    // The holder's recorded pid is our own (alive) → a live holder is never
+    // dispossessed.
+    const second = acquireReviewLease(leaseOpts({ runId: "run-other" }));
     expect(second.acquired).toBe(false);
     if (!second.acquired) expect(second.reason).toBe("busy");
   });
 
-  it("acquires independently for two fingerprints on the same head SHA", async () => {
-    const a = await acquire();
-    const b = await acquire({
-      inputFingerprint: "f".repeat(64),
-      runId: "run-2",
-    });
+  it("acquires independently for two fingerprints on the same head SHA", () => {
+    const a = acquire();
+    const b = acquire({ inputFingerprint: "f".repeat(64), runId: "run-2" });
     expect(a.acquired).toBe(true);
     expect(b.acquired).toBe(true);
   });
 
-  it("recovers a STALE lock (crashed holder, no active refresh)", async () => {
-    // Simulate a crashed holder: a lock directory whose mtime is far in the
-    // past with nothing refreshing it (no in-memory updater).
-    mkdirSync(join(lockDir(), ".."), { recursive: true });
-    mkdirSync(lockDir());
-    const old = new Date(Date.now() - 60_000);
-    utimesSync(lockDir(), old, old);
-
-    const recovered = await acquire({ runId: "recoverer", staleMs: 2000 });
+  it("a claim whose recorded pid is DEAD is recoverable by exactly one taker", () => {
+    // Write a stale claim carrying a dead pid (a crashed holder).
+    mkdirSync(join(claimFile(), ".."), { recursive: true });
+    writeFileSync(
+      claimFile(),
+      JSON.stringify({
+        repository: REPO,
+        pullRequest: PR,
+        headSha: HEAD,
+        inputFingerprint: FP,
+        runId: "crashed",
+        pid: DEAD_PID,
+        acquiredAt: T0.toISOString(),
+        heartbeatAt: T0.toISOString(),
+      })
+    );
+    const recovered = acquire({
+      runId: "recoverer",
+      isPidAlive: onlySelfAlive,
+    });
     expect(recovered.acquired).toBe(true);
+    if (recovered.acquired) expect(recovered.lease.ownsClaim()).toBe(true);
   });
 
-  it("releasing frees the identity for the next acquirer", async () => {
-    const first = await acquireReviewLease(leaseOpts());
+  it("two racing recoverers of a DEAD claim: exactly one wins (rename arbitration)", () => {
+    mkdirSync(join(claimFile(), ".."), { recursive: true });
+    writeFileSync(
+      claimFile(),
+      JSON.stringify({
+        repository: REPO,
+        pullRequest: PR,
+        headSha: HEAD,
+        inputFingerprint: FP,
+        runId: "crashed",
+        pid: DEAD_PID,
+        acquiredAt: T0.toISOString(),
+        heartbeatAt: T0.toISOString(),
+      })
+    );
+    // A recovers the dead claim and writes a fresh LIVE claim; B then sees A's
+    // live claim and is busy.
+    const a = acquire({ runId: "A", isPidAlive: onlySelfAlive });
+    const b = acquireReviewLease(
+      leaseOpts({ runId: "B", isPidAlive: onlySelfAlive })
+    );
+    expect(a.acquired).toBe(true);
+    expect(b.acquired).toBe(false);
+  });
+
+  it("release is ownership-fenced + idempotent", () => {
+    const first = acquireReviewLease(leaseOpts());
     expect(first.acquired).toBe(true);
     if (!first.acquired) throw new Error("expected acquire");
 
-    // While held it is busy.
-    const busy = await acquireReviewLease(leaseOpts({ runId: "x" }));
+    const busy = acquireReviewLease(leaseOpts({ runId: "x" }));
     expect(busy.acquired).toBe(false);
 
-    await first.lease.release();
-    // release is idempotent (safe to call again in a finally).
-    await first.lease.release();
+    first.lease.release();
+    // Idempotent: safe to call again in a finally.
+    first.lease.release();
+    expect(existsSync(claimFile())).toBe(false);
 
-    const again = await acquire({ runId: "x" });
+    const again = acquire({ runId: "x" });
     expect(again.acquired).toBe(true);
   });
 
-  it("rejects a bad runId before touching disk", async () => {
-    await expect(
-      acquireReviewLease(leaseOpts({ runId: "bad id!" }))
-    ).rejects.toThrow();
+  it("rejects a bad runId before touching disk", () => {
+    expect(() => acquireReviewLease(leaseOpts({ runId: "bad id!" }))).toThrow();
   });
 
-  it("signals `compromised` when the lock is stolen out from under a holder", async () => {
-    // Hold the lock with a fast refresh so the theft is detected quickly.
-    const res = await acquire({ staleMs: 2000, updateMs: 1000 });
-    expect(res.acquired).toBe(true);
-    if (!res.acquired) throw new Error("expected acquire");
-    expect(res.lease.compromised.aborted).toBe(false);
+  it("B recovers A's DEAD claim; A's stale release NEVER deletes B's claim; C is busy", () => {
+    // A acquires normally.
+    const a = acquireReviewLease(leaseOpts({ runId: "A" }));
+    expect(a.acquired).toBe(true);
+    if (!a.acquired) throw new Error("expected A to acquire");
 
-    // Another process stale-recovers us: the lock directory disappears.
-    rmSync(lockDir(), { recursive: true, force: true });
+    // A's process dies: rewrite A's claim to carry a DEAD pid (same runId "A", so
+    // A's in-hand lease handle still believes it owns the claim).
+    const aClaim = JSON.parse(readFileSync(claimFile(), "utf8"));
+    writeFileSync(claimFile(), JSON.stringify({ ...aClaim, pid: DEAD_PID }));
 
-    // The auto-refresh notices (ENOENT) and fires the compromise signal — this
-    // is how a slow holder learns it must ABORT instead of clobbering.
-    await awaitAbort(res.lease.compromised, 4000);
-    expect(res.lease.compromised.aborted).toBe(true);
+    // B recovers A's dead claim (A's pid is dead; B's own pid is alive).
+    const b = acquireReviewLease(
+      leaseOpts({ runId: "B", isPidAlive: onlySelfAlive })
+    );
+    expect(b.acquired).toBe(true);
+    if (!b.acquired) throw new Error("expected B to recover");
+    held.push(b.lease);
+
+    // A, holding its STALE lease handle, calls release() — the ownership fence
+    // MUST NOT delete B's claim.
+    a.lease.release();
+    const after = JSON.parse(readFileSync(claimFile(), "utf8"));
+    expect(after.runId).toBe("B");
+    expect(b.lease.ownsClaim()).toBe(true);
+
+    // C therefore sees B's LIVE claim and is BUSY — no double-holder.
+    const c = acquireReviewLease(
+      leaseOpts({ runId: "C", isPidAlive: onlySelfAlive })
+    );
+    expect(c.acquired).toBe(false);
+    if (!c.acquired) expect(c.reason).toBe("busy");
   });
 });
 

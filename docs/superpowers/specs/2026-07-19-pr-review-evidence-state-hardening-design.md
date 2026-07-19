@@ -1,7 +1,9 @@
 # P32 Review Evidence and State Hardening Design
 
-**Status:** Approved  
-**Date:** 2026-07-19  
+**Status:** Approved
+
+**Date:** 2026-07-19
+
 **Scope:** Close the three remaining PR #213 review findings without changing the public review workflow or the OS-flock lease decision.
 
 ## Goal

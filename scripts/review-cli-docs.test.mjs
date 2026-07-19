@@ -20,6 +20,26 @@ const readme = readDoc("README.md");
 const cli = readDoc("docs", "CLI.md");
 const architecture = readDoc("docs", "ARCHITECTURE.md");
 const roadmap = readDoc("docs", "HARNESS_ROADMAP_PHASE6.md");
+const p32Spec = readFileSync(
+  join(
+    root,
+    "docs",
+    "superpowers",
+    "specs",
+    "2026-07-18-automated-pr-code-review-design.md"
+  ),
+  "utf8"
+);
+const p32Plan = readFileSync(
+  join(
+    root,
+    "docs",
+    "superpowers",
+    "plans",
+    "2026-07-18-automated-pr-code-review.md"
+  ),
+  "utf8"
+);
 
 // Everything otto-review-specific in one combined haystack, for assertions
 // that don't care which particular doc carries the fact.
@@ -464,4 +484,12 @@ test("HARNESS_ROADMAP_PHASE6.md 'Last updated' is bumped to 2026-07-18", () => {
     roadmap.includes("Last updated: 2026-07-18"),
     "roadmap 'Last updated' line was not bumped to 2026-07-18"
   );
+});
+
+test("P32 source documents use the shipped OS-flock lease contract", () => {
+  assert.doesNotMatch(p32Spec, /atomically claim the|atomic claims/);
+  assert.doesNotMatch(p32Plan, /state, claims, evidence/);
+  assert.match(p32Spec, /artifactPath: string \| null/);
+  assert.doesNotMatch(p32Plan, /````ts/);
+  assert.match(p32Plan, /```ts\nexport type PullRequestReviewOutputState/);
 });

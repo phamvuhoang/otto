@@ -17,7 +17,7 @@
 - Existing bins stay byte-for-byte inert unless their shared read-only runner or panel seam is exercised; all existing regression tests must stay green.
 - The exact diff is never compressed. Only taint-fenced PR title/body metadata may use the existing reversible `issue-body` compressor category.
 - Zero or exactly one of `--spec-issue`, `--spec-file`, and `--prompt` is accepted. These per-invocation inputs have no env/config equivalents.
-- The exact review-input artifact is never compressed. Its SHA-256 fingerprint participates in state, claims, evidence, summary recovery, and formal-review idempotency.
+- The exact review-input artifact is never compressed. Its SHA-256 fingerprint participates in state, lease identity, evidence, summary recovery, and formal-review idempotency.
 - Every `gh` and `git` call uses `execFileSync` or an injected literal-argv runner; never a shell.
 - The P32 model stage is OS-enforced read-only. Claude receives only `Read,Glob,Grep` tools with an empty strict MCP config; Codex uses `--sandbox read-only --ephemeral --ignore-user-config`.
 - The child environment removes `GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, `GIT_ASKPASS`, and credential helpers while preserving the selected model provider's own auth.
@@ -1275,7 +1275,7 @@ export type PullRequestReviewEvidence = {
     kind: ReviewInputRequest["kind"];
     source: string;
     fingerprint: string;
-    artifactPath: string;
+    artifactPath: string | null;
   };
   outcome?: PullRequestReviewOutcome;
   confirmed: number;
@@ -1287,6 +1287,8 @@ export type PullRequestReviewEvidence = {
   supersededBy?: string;
 };
 ```
+
+`reviewInput.artifactPath` names the durable exact-input artifact when it was successfully materialized. `null` means the exact artifact could not be durably materialized and is therefore unavailable for retry or recovery.
 
 Add `pullRequestReview?: PullRequestReviewEvidence` to `RunManifest`. No P32-only field goes on ordinary manifests.
 
@@ -1571,7 +1573,7 @@ Expected: Slice 1 tests PASS; help exits 0; existing panel/runner regressions PA
 
 **Interfaces:**
 
-````ts
+```ts
 export type PullRequestReviewOutputState = {
   text?: { status: "succeeded" };
   markdown?: { status: "succeeded"; path: string };
@@ -1600,6 +1602,7 @@ export type PullRequestReviewState = {
   error?: string;
   updatedAt: string;
 };
+```
 
 **Superseded:** this task originally specified a `PullRequestReviewClaim` file
 (`pid`/`acquiredAt`/`heartbeatAt` fields), `REVIEW_LEASE_HEARTBEAT_MS` (60s),
@@ -1632,7 +1635,7 @@ export function acquireReviewLease(opts: {
   inputFingerprint: string;
   runId: string;
 }): ReviewLeaseResult;
-````
+```
 
 Acquisition opens the lock file and takes a non-blocking exclusive flock; a
 competing acquirer gets `EAGAIN`/`EWOULDBLOCK` and receives `{ acquired: false,

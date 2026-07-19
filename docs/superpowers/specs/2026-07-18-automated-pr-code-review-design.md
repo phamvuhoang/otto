@@ -427,8 +427,8 @@ line.
 For each eligible revision:
 
 1. Resolve and validate the selected review-input source without a model call.
-2. Compute its fingerprint and atomically claim the
-   repository/PR/head-SHA/input-fingerprint identity.
+2. Compute its fingerprint and acquire the
+   repository/PR/head-SHA/input-fingerprint identity's OS-flock lease.
 3. Allocate a run ID, write the exact input artifact, and initialize evidence.
 4. Resolve and validate the exact review skill.
 5. Fetch the exact base/head objects and create the detached worktree.
@@ -602,8 +602,8 @@ creates a new input fingerprint rather than invalidating a completed analysis.
   skill stops before a model call.
 - **Review input:** cross-repository/missing/malformed issue, file escape,
   symlink/special file, unsupported extension, invalid UTF-8, missing file, or
-  empty input fails before a claim or paid model call. Watch reports resolution
-  failure distinctly and retries on a later poll.
+  empty input fails before lease acquisition or a paid model call. Watch reports
+  resolution failure distinctly and retries on a later poll.
 - **Polling:** empty queue and poll failure are distinct. Auth/permission errors
   are actionable; rate limits and transient transport failures use existing
   bounded backoff and never mark a revision processed.
@@ -617,7 +617,7 @@ creates a new input fingerprint rather than invalidating a completed analysis.
 - **Cleanup:** cleanup failure is recorded and surfaced but does not reverse a
   successfully published review.
 - **Shutdown:** the active run receives the abort signal, finalizes evidence,
-  releases its claim, and the daemon releases keep-alive resources.
+  releases its lease, and the daemon releases keep-alive resources.
 
 ## Evidence model
 
@@ -635,7 +635,7 @@ export type PullRequestReviewEvidence = {
     kind: ReviewInputRequest["kind"];
     source: string;
     fingerprint: string;
-    artifactPath: string;
+    artifactPath: string | null;
   };
   outcome?: PullRequestReviewOutcome;
   confirmed: number;
@@ -647,6 +647,10 @@ export type PullRequestReviewEvidence = {
   supersededBy?: string;
 };
 ```
+
+`reviewInput.artifactPath` names the durable exact-input artifact when it was
+successfully materialized. `null` means the exact artifact could not be durably
+materialized and is therefore unavailable for retry or recovery.
 
 Existing stage records carry lens/verifier results, model routing, token/cost,
 skill usage, safety events, and artifacts. `otto-inspect` and `otto-explain`
@@ -739,8 +743,8 @@ live GitHub write.
 ### Slice 2: Watch and idempotent summary comment
 
 - Labelled PR polling.
-- Per-poll review-input resolution plus composite-identity state, atomic claims,
-  retry scheduling, and supersession.
+- Per-poll review-input resolution plus composite-identity state, atomic
+  OS-flock leases, retry scheduling, and supersession.
 - Marker-owned comment create/update.
 - Partial-output recovery and daemon controls.
 
@@ -802,7 +806,7 @@ is approved. The intended boundaries are:
 | `packages/core/src/review-cli.ts`                  | P32 flags, config resolution, help, print-config             |
 | `packages/core/src/github-pr.ts`                   | Typed `gh` PR/issue intake and publication adapter           |
 | `packages/core/src/pr-review-input.ts`             | Review-input validation, snapshot, fingerprint, artifact     |
-| `packages/core/src/pr-review-state.ts`             | Claims, state transitions, retry metadata                    |
+| `packages/core/src/pr-review-state.ts`             | Lease identity, state transitions, retry metadata            |
 | `packages/core/src/pr-review-worktree.ts`          | Exact fetch, disposable worktree, mutation checks            |
 | `packages/core/src/pr-review.ts`                   | Review identity, eligibility, outcome, pipeline              |
 | `packages/core/src/pr-review-output.ts`            | Canonical Markdown, text, markers, diff-line mapping         |

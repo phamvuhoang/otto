@@ -57,6 +57,7 @@ import {
   type PullRequestReviewEvidence,
   type RunArtifact,
   type RunManifest,
+  type ToolUsage,
 } from "../run-report.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -2721,22 +2722,40 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
     const priorCommentId = res1.commentId;
     const m1 = readManifest(fx.workspaceDir, res1.runId);
     expect(m1.costUsd).toBeCloseTo(0.7, 5);
+    const analysisPath = `.otto/runs/${res1.runId}/analysis.json`;
+    const reviewPath = `.otto/runs/${res1.runId}/review.md`;
+    const priorAnalysisIndex = 1;
+    const exactToolUsage: ToolUsage = {
+      name: "headroom",
+      kind: "sdk",
+      stage: "pr-review",
+      tokensSaved: 123,
+      reasons: ["compress PR body"],
+    };
+    const distinctToolUsage: ToolUsage = {
+      ...exactToolUsage,
+      tokensSaved: 456,
+    };
     const seeded: RunManifest = {
       ...m1,
       runtime: { id: "claude", displayName: "Claude" },
       startedAt: "2026-07-18T00:00:00.000Z",
       toolsUsed: [
-        {
-          name: "headroom",
-          kind: "sdk",
-          stage: "pr-review",
-          tokensSaved: 123,
-          reasons: ["compress PR body"],
-        },
+        exactToolUsage,
+        { ...exactToolUsage, reasons: [...(exactToolUsage.reasons ?? [])] },
+        distinctToolUsage,
       ],
       artifacts: [
-        ...(m1.artifacts ?? []),
-        { kind: "review", path: `.otto/runs/${res1.runId}/review.md` },
+        { kind: "review", path: reviewPath },
+        {
+          kind: "analysis",
+          path: analysisPath,
+          description: "prior analysis payload",
+        },
+        ...m1.artifacts.filter(
+          (artifact) =>
+            !(artifact.kind === "analysis" && artifact.path === analysisPath)
+        ),
       ],
     };
     writeManifest(fx.workspaceDir, seeded);
@@ -2783,15 +2802,21 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
     const m2 = readManifest(fx.workspaceDir, res2.runId);
     expect(m2.startedAt).toBe(seeded.startedAt);
     expect(m2.runtime).toEqual(seeded.runtime);
-    expect(m2.toolsUsed).toEqual(seeded.toolsUsed);
+    // Full-record tool identity: only the JSON-identical duplicate collapses;
+    // a materially distinct invocation remains in stable prior order.
+    expect(m2.toolsUsed).toEqual([exactToolUsage, distinctToolUsage]);
     expect(m2.artifacts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "review",
-          path: `.otto/runs/${res1.runId}/review.md`,
-        }),
-      ])
+      expect.arrayContaining([{ kind: "review", path: reviewPath }])
     );
+    // Artifact identity is (kind, path): the current analysis payload replaces
+    // the distinguishable prior payload exactly once without moving the prior
+    // key's insertion position.
+    const analysisEntries = m2.artifacts.filter(
+      (artifact) =>
+        artifact.kind === "analysis" && artifact.path === analysisPath
+    );
+    expect(analysisEntries).toEqual([{ kind: "analysis", path: analysisPath }]);
+    expect(m2.artifacts[priorAnalysisIndex]).toEqual(analysisEntries[0]);
     expect(m2.costUsd).toBe(seeded.costUsd);
     expect(m2.tokenUsage).toEqual(seeded.tokenUsage);
     expect(res2.costUsd).toBe(0);

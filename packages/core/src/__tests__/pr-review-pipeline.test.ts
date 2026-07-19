@@ -25,6 +25,7 @@ import { RateLimitError } from "../rate-limit.js";
 import { STAGES } from "../stages.js";
 import { emptyTokenUsage } from "../tokens.js";
 import {
+  renderReviewInputArtifact,
   resolveReviewInput,
   type ResolvedReviewInput,
 } from "../pr-review-input.js";
@@ -326,9 +327,10 @@ describe("runPullRequestReview", () => {
       severity: { ...EMPTY_SEVERITY, major: 1 },
     });
     const github = { getPullRequest: () => fx.revision };
+    const reviewInput = resolvedInput(fx);
     const res = await runPullRequestReview({
       ...baseArgs(fx),
-      reviewInput: resolvedInput(fx),
+      reviewInput,
       config: makeConfig(),
       deps: { analyze: fake.fn, github, stdout, now },
     });
@@ -352,6 +354,17 @@ describe("runPullRequestReview", () => {
       "changes-requested"
     );
     expect((m.pullRequestReview as { confirmed: number }).confirmed).toBe(1);
+    const expectedInputPath = `.otto/runs/${res.runId}/review-input.md`;
+    const evidence = m.pullRequestReview as PullRequestReviewEvidence;
+    const inputArtifact = (m.artifacts as RunArtifact[]).find(
+      (artifact) => artifact.kind === "review-input"
+    );
+    expect(evidence.reviewInput.artifactPath).not.toBeNull();
+    expect(evidence.reviewInput.artifactPath).toBe(expectedInputPath);
+    expect(inputArtifact?.path).toBe(evidence.reviewInput.artifactPath);
+    expect(readFileSync(join(fx.workspaceDir, expectedInputPath), "utf8")).toBe(
+      renderReviewInputArtifact(reviewInput)
+    );
     // analysis.json is schema-valid and identity-matched.
     const a = JSON.parse(readFileSync(join(runDir, "analysis.json"), "utf8"));
     expect(a.schemaVersion).toBe(1);
@@ -1060,6 +1073,68 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
     expect(res2.runId).toBe(res1.runId); // same run bundle, resumed
     expect(gh2.calls.create).toBe(1);
     expect(res2.commentId).toBe(gh2.store[0].id);
+  });
+
+  it("a resume with a missing input and failed rematerialization emits neither input reference", async () => {
+    const fake1 = makeFakeAnalyze({});
+    const gh1 = makeCommentGithub({
+      current: () => fx.revision,
+      createError: new GitHubPrError(
+        "rate limited (HTTP 429)",
+        "rate-limit",
+        true,
+        429
+      ),
+    });
+    const res1 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake1.fn, github: gh1.github, stdout, now },
+    });
+    expect(res1.status).toBe("publish-failed");
+
+    const expectedInputPath = `.otto/runs/${res1.runId}/review-input.md`;
+    rmSync(join(fx.workspaceDir, expectedInputPath));
+    let rematerializeAttempts = 0;
+    const fake2 = {
+      fn: async () => {
+        throw new Error("analysis must not run on resume");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh2 = makeCommentGithub({ current: () => fx.revision });
+    const res2 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: fake2.fn as never,
+        github: gh2.github,
+        stdout,
+        now: later,
+        writeReviewInput: () => {
+          rematerializeAttempts++;
+          throw new Error("run dir is unwritable");
+        },
+      },
+    });
+    expect(res2.status).toBe("succeeded");
+    expect(res2.runId).toBe(res1.runId);
+    const manifest = readManifest(fx.workspaceDir, res2.runId);
+    expect(
+      (manifest.pullRequestReview as PullRequestReviewEvidence).reviewInput
+        .artifactPath
+    ).toBeNull();
+    expect(
+      (manifest.artifacts as RunArtifact[]).some(
+        (artifact) => artifact.kind === "review-input"
+      )
+    ).toBe(false);
+    expect(JSON.stringify(manifest)).not.toContain(expectedInputPath);
+    expect(existsSync(join(fx.workspaceDir, expectedInputPath))).toBe(false);
+    expect(rematerializeAttempts).toBe(1);
   });
 
   it("(S6b/#5) a resumed publication PRESERVES the prior invocation's cost/token evidence in the finalized manifest (not overwritten to zero)", async () => {

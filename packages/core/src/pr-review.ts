@@ -499,7 +499,7 @@ export async function runPullRequestReview(opts: {
   const startedAt = deps.now().toISOString();
   const runDir = runReportDir(workspaceDir, runId);
   const expectedInputPath = `.otto/runs/${runId}/review-input.md`;
-  let inputArtifactDurable = resumedAnalysis !== null;
+  let inputArtifactDurable = false;
 
   let activeAgentId: AgentRuntimeId = opts.agentId;
   let worktree: ReturnType<typeof createPullRequestWorktree> | undefined;
@@ -704,6 +704,21 @@ export async function runPullRequestReview(opts: {
       writeRunReport(workspaceDir, runId, report);
     } catch {
       // Best-effort.
+    }
+    return inputArtifactDurable;
+  };
+
+  const validateInputArtifact = (): boolean => {
+    try {
+      const roundTrip = deps.readReviewInput({
+        workspaceDir,
+        runId,
+        expectedFingerprint: inputFingerprint,
+      });
+      inputArtifactDurable =
+        roundTrip != null && roundTrip.content === reviewInput.content;
+    } catch {
+      inputArtifactDurable = false;
     }
     return inputArtifactDurable;
   };
@@ -1687,6 +1702,15 @@ export async function runPullRequestReview(opts: {
     // pre-write abort check (abortedResumable) preserves the resumed spend +
     // receipts and keeps the run resumable; the lease still releases in `finally`.
     if (resumedAnalysis) {
+      if (!validateInputArtifact()) {
+        try {
+          deps.writeReviewInput({ workspaceDir, runId, input: reviewInput });
+        } catch {
+          // Publication can still resume from valid analysis, but its finalized
+          // evidence must explicitly omit an unavailable input artifact.
+        }
+        validateInputArtifact();
+      }
       return finishPublication(resumedAnalysis, priorOutputs);
     }
     // FRESH run: the lease WAS acquired but the caller shut down before any work —

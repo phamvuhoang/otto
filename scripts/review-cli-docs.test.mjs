@@ -54,6 +54,48 @@ function assertAllInclude(haystack, needles, context) {
   }
 }
 
+function sectionBetween(document, startMarker, endMarker) {
+  const start = document.indexOf(startMarker);
+  const end = document.indexOf(endMarker, start + startMarker.length);
+  assert.notEqual(
+    start,
+    -1,
+    `missing section start ${JSON.stringify(startMarker)}`
+  );
+  assert.notEqual(end, -1, `missing section end ${JSON.stringify(endMarker)}`);
+  return document.slice(start, end);
+}
+
+function typeBlock(document, typeName) {
+  const match = document.match(
+    new RegExp(`export type ${typeName}[^\\n]*\\{[\\s\\S]*?\\n\\};`)
+  );
+  assert.ok(match, `missing ${typeName} declaration`);
+  return match[0];
+}
+
+function countBalancedTypeScriptFences(markdown, context) {
+  let openFence = null;
+  let typeScriptFences = 0;
+
+  for (const line of markdown.split("\n")) {
+    const fence = line.match(/^```([a-z0-9_-]*)$/i);
+    if (!fence) continue;
+
+    if (openFence === null) {
+      openFence = fence[1];
+      if (openFence === "ts") typeScriptFences += 1;
+      continue;
+    }
+
+    assert.equal(line, "```", `${context} opens a fence before closing one`);
+    openFence = null;
+  }
+
+  assert.equal(openFence, null, `${context} has an unclosed Markdown fence`);
+  return typeScriptFences;
+}
+
 // ---------------------------------------------------------------------------
 // README: quick-start recipes
 // ---------------------------------------------------------------------------
@@ -486,10 +528,106 @@ test("HARNESS_ROADMAP_PHASE6.md 'Last updated' is bumped to 2026-07-18", () => {
   );
 });
 
-test("P32 source documents use the shipped OS-flock lease contract", () => {
-  assert.doesNotMatch(p32Spec, /atomically claim the|atomic claims/);
-  assert.doesNotMatch(p32Plan, /state, claims, evidence/);
-  assert.match(p32Spec, /artifactPath: string \| null/);
-  assert.doesNotMatch(p32Plan, /````ts/);
-  assert.match(p32Plan, /```ts\nexport type PullRequestReviewOutputState/);
+test("P32 design allocates the run ID before acquiring the lease and writing artifacts", () => {
+  const dataFlow = sectionBetween(
+    p32Spec,
+    "## Data flow",
+    "## State, locking, and idempotency"
+  ).toLowerCase();
+  const runId = dataFlow.indexOf("allocate a run id");
+  const lease = dataFlow.indexOf("os-flock lease");
+  const artifact = dataFlow.indexOf("write the exact input artifact");
+
+  assert.notEqual(runId, -1, "P32 data flow never allocates a run ID");
+  assert.notEqual(lease, -1, "P32 data flow never acquires its OS-flock lease");
+  assert.notEqual(
+    artifact,
+    -1,
+    "P32 data flow never writes the exact input artifact"
+  );
+  assert.ok(runId < lease, "run ID allocation must precede lease acquisition");
+  assert.ok(
+    lease < artifact,
+    "lease acquisition must precede exact input-artifact writes"
+  );
+});
+
+test("P32 operative requirements use lease terminology while preserving superseded history", () => {
+  const operativeClaimPhrase =
+    /\b(?:before|release(?:s|d|ing)?)\b[^\n]*(?:\bclaim\b|claim\/|\/claim(?:\/|\b))/i;
+  const supersededHistories = [
+    sectionBetween(p32Spec, "**Superseded:**", "The summary comment"),
+    sectionBetween(
+      p32Plan,
+      "**Superseded:**",
+      "- [ ] **Step 1: Write failing state-machine tests**"
+    ),
+  ];
+  const operativeDocuments = [
+    p32Spec.replace(supersededHistories[0], ""),
+    p32Plan.replace(supersededHistories[1], ""),
+  ];
+
+  assert.doesNotMatch(
+    operativeDocuments[0],
+    /atomically claim the|atomic claims/
+  );
+  assert.doesNotMatch(operativeDocuments[1], /state, claims, evidence/);
+  for (const document of operativeDocuments) {
+    assert.doesNotMatch(document, operativeClaimPhrase);
+  }
+  for (const history of supersededHistories) {
+    assert.match(history, /PullRequestReviewClaim/);
+    assert.match(history, /heartbeat/i);
+    assert.match(history, /tombstone/i);
+  }
+});
+
+test("P32 evidence is durable-or-unavailable while successful snapshots retain artifact paths", () => {
+  const durableUnavailable =
+    /`reviewInput\.artifactPath`[\s\S]{0,250}\bdurable\b[\s\S]{0,250}`null`[\s\S]{0,250}durably\s+materialized[\s\S]{0,250}unavailable/i;
+
+  for (const document of [p32Spec, p32Plan]) {
+    assert.match(
+      typeBlock(document, "PullRequestReviewEvidence"),
+      /reviewInput: \{[\s\S]*artifactPath: string \| null;/
+    );
+    assert.match(document, durableUnavailable);
+
+    const snapshot = typeBlock(document, "ReviewInputSnapshot");
+    assert.match(snapshot, /artifactPath: string;/);
+    assert.doesNotMatch(snapshot, /artifactPath: string \| null;/);
+  }
+});
+
+test("P32 source documents pin every shipped OS-flock lease property", () => {
+  const leaseProperties = [
+    /OS advisory lock\s*\n?\(`flock`\)/,
+    /persistent per-composite-identity lock file[\s\S]{0,100}stable inode/,
+    /optional native `fs-ext`[\s\S]{0,100}loaded lazily/,
+    /requires a LOCAL filesystem/,
+    /one active daemon per\s+repository/,
+  ];
+
+  for (const document of [p32Spec, p32Plan]) {
+    for (const property of leaseProperties) assert.match(document, property);
+  }
+});
+
+test("P32 Task 11 has balanced fences with supersession rendered as prose", () => {
+  const task11 = sectionBetween(
+    p32Plan,
+    "## Task 11: Atomic composite-identity state and OS-flock lease",
+    "## Task 12: State-aware output recovery and idempotent summary comments"
+  );
+
+  assert.equal(countBalancedTypeScriptFences(task11, "P32 Task 11"), 3);
+  assert.match(
+    task11,
+    /export type PullRequestReviewState[\s\S]*?\n\};\n```\n\n\*\*Superseded:\*\*/
+  );
+  assert.match(
+    task11,
+    /\*\*Superseded:\*\*[\s\S]*?\n```ts\nexport type ReviewLease/
+  );
 });

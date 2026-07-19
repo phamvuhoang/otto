@@ -2154,7 +2154,7 @@ Use mocked GitHub/stage adapters and real temp Git repos. Cover:
 4. false positive rejected and never published;
 5. prompt injection in PR title/body and changed source remains inside taint/contract;
 6. no-input, same-repository open/closed issue, workspace Markdown/text, and direct prompt all produce exact deterministic artifacts consumed by lens/verifier;
-7. cross-repo issue, escaped/symlinked/binary/empty file, and whitespace prompt fail before claim/worktree/model;
+7. cross-repo issue, escaped/symlinked/binary/empty file, and whitespace prompt fail before lease acquisition, worktree creation, or model execution;
 8. issue/file content changes on the same head produce a new composite review while unchanged content skips;
 9. prompt injection in issue/file/direct input remains artifact data and cannot override read-only/publication rules;
 10. large multi-file diff and large review input are retained byte-for-byte and read by separate artifact paths without input compression;
@@ -2267,7 +2267,7 @@ Do not create a release commit or edit versions.
 - [x] Every approved spec component has an owning task and focused test.
 - [x] Every new public type has one declaration location and one export task.
 - [x] Every impure boundary has an injected test seam; CI never calls live GitHub or a paid model.
-- [x] Failure paths finalize evidence and release worktree/claim/keepalive resources.
+- [x] Failure paths finalize evidence and release worktree, lease, and keep-alive resources.
 - [x] Remote writes are harness-owned, composite-marker-reconciled, and preceded by fresh PR reconciliation.
 - [x] Existing panel synth behavior is covered while P32 analysis never invokes synth.
 - [x] The only new dependency is the optional native `fs-ext` (review lease `flock`, loaded lazily); no release-version edit is required.

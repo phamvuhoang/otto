@@ -427,19 +427,21 @@ line.
 For each eligible revision:
 
 1. Resolve and validate the selected review-input source without a model call.
-2. Compute its fingerprint and acquire the
-   repository/PR/head-SHA/input-fingerprint identity's OS-flock lease.
-3. Allocate a run ID, write the exact input artifact, and initialize evidence.
-4. Resolve and validate the exact review skill.
-5. Fetch the exact base/head objects and create the detached worktree.
-6. Build the taint-fenced PR context, exact diff, and byte-identical worktree
+2. Compute its fingerprint and allocate a run ID, restoring the persisted ID for
+   a resumed composite identity.
+3. Acquire the repository/PR/head-SHA/input-fingerprint identity's OS-flock lease
+   using that run ID.
+4. Write the exact input artifact and initialize evidence.
+5. Resolve and validate the exact review skill.
+6. Fetch the exact base/head objects and create the detached worktree.
+7. Build the taint-fenced PR context, exact diff, and byte-identical worktree
    copy of the review-input artifact.
-7. Run read-only lenses, deduplicate findings, and adversarially verify them.
-8. Persist the structured analysis and canonical Markdown before publication.
-9. Re-query GitHub for state, draft flag, label, and head SHA.
-10. If still eligible and unchanged, reconcile then publish configured outputs.
-11. Record output receipts and mark the composite identity successful.
-12. Finalize the run report and remove disposable worktree state.
+8. Run read-only lenses, deduplicate findings, and adversarially verify them.
+9. Persist the structured analysis and canonical Markdown before publication.
+10. Re-query GitHub for state, draft flag, label, and head SHA.
+11. If still eligible and unchanged, reconcile then publish configured outputs.
+12. Record output receipts and mark the composite identity successful.
+13. Finalize the run report and remove disposable worktree state.
 
 Watch mode handles one PR at a time. After a completed item it immediately
 re-polls until no eligible unseen revision remains, then sleeps for the
@@ -694,7 +696,8 @@ Temporary local repositories plus mocked GitHub/stage adapters prove:
 - automatic re-review on a new head SHA or changed input fingerprint;
 - no-input, same-repository issue, local file, and direct prompt snapshots reach
   every lens/verifier through the exact artifact path;
-- input resolution failure occurs before claim/worktree/model execution;
+- input resolution failure occurs before lease acquisition, worktree creation,
+  or model execution;
 - no stale publication after head, label, draft, or state changes;
 - invalid selected skill fails before model execution;
 - model mutations are detected and discarded;

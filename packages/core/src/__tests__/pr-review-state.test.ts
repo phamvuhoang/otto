@@ -19,6 +19,7 @@ import {
   writeReviewState,
   acquireReviewLease,
   isStateRunnable,
+  _resolveFlockSync,
   type ReviewLease,
   type PullRequestReviewState,
 } from "../pr-review-state.js";
@@ -341,6 +342,51 @@ describe("acquireReviewLease", () => {
 
   it("rejects a bad runId before touching disk", () => {
     expect(() => acquireReviewLease(leaseOpts({ runId: "bad id!" }))).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lazy, optional native `fs-ext` load (P32 — opt-in / inert-by-default)
+//
+// `fs-ext` is a NATIVE, OPTIONAL dependency. It must be loaded LAZILY — only
+// when an actual review acquires a lease — so that merely importing the barrel
+// or running a non-review path (`--help`, `--print-config`, any other bin)
+// never touches the native addon. A missing/unbuildable addon must fail with an
+// ACTIONABLE error (naming the module + how to install), not a raw MODULE_NOT
+// _FOUND. We inject a fake `require` so we never have to uninstall fs-ext.
+// ---------------------------------------------------------------------------
+
+describe("lazy fs-ext load (_resolveFlockSync)", () => {
+  it("throws an ACTIONABLE error naming fs-ext when the native load fails", () => {
+    const boom = () => {
+      throw new Error("Cannot find module 'fs-ext'");
+    };
+    let thrown: Error | undefined;
+    try {
+      _resolveFlockSync(boom);
+    } catch (e) {
+      thrown = e as Error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const msg = thrown?.message ?? "";
+    expect(msg).toContain("fs-ext");
+    expect(msg).toContain("otto-review");
+    expect(msg).toContain("build toolchain");
+    // The underlying failure is preserved for diagnosis.
+    expect(msg).toContain("Cannot find module 'fs-ext'");
+  });
+
+  it("resolves the real native flockSync when fs-ext is present (default require)", () => {
+    // No injected require → uses the module's own createRequire. fs-ext is an
+    // installed optionalDependency in the workspace, so this resolves a real fn.
+    const fn = _resolveFlockSync();
+    expect(typeof fn).toBe("function");
+  });
+
+  it("returns the injected module's flockSync unchanged on success", () => {
+    const fake = (() => {}) as unknown;
+    const fn = _resolveFlockSync(() => ({ flockSync: fake }));
+    expect(fn).toBe(fake);
   });
 });
 

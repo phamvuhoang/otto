@@ -13,11 +13,13 @@ import {
   chmodSync,
   readFileSync,
   existsSync,
+  cpSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, delimiter } from "node:path";
+import { join, delimiter, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 
 const repo = process.cwd();
 const work = mkdtempSync(join(tmpdir(), "otto-pack-install-"));
@@ -172,6 +174,25 @@ try {
     ],
     { cwd: work, stdio: "inherit" }
   );
+
+  // otto-core declares `fs-ext` (a NATIVE addon) as an OPTIONAL dependency,
+  // loaded LAZILY only when an otto-review acquires its file-lock lease. The
+  // offline `npm install --offline` above intentionally does NOT fetch or
+  // node-gyp-build it — that's the whole point: a missing/unbuildable native
+  // addon must never break install, `--help`, `--print-config`, or any other
+  // bin (all verified below WITHOUT fs-ext present). But the one-shot review
+  // (step 4e) exercises the REAL lease, which needs the native flock. So supply
+  // the workspace's already-built fs-ext into the install prefix — simulating a
+  // normal environment where the optional dep's native build succeeded — so the
+  // review runs offline without weakening its end-to-end assertions. fs-ext's
+  // runtime need is only its own compiled `.node`; `nan` is build-time only.
+  const workspaceRequire = createRequire(
+    join(repo, "packages", "core", "package.json")
+  );
+  const fsExtSrc = dirname(workspaceRequire.resolve("fs-ext"));
+  cpSync(fsExtSrc, join(installDir, "node_modules", "fs-ext"), {
+    recursive: true,
+  });
 
   // Invoke the installed entry with node (cross-platform; .bin shims differ by
   // OS). Running from installDir forces @phamvuhoang/otto-core to resolve from

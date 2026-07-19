@@ -30,7 +30,7 @@ importers:
         version: link:../../packages/core
 
   packages/core:
-    dependencies:
+    optionalDependencies:
       fs-ext:
         specifier: ^2.0.0
         version: 2.1.1
@@ -1105,6 +1105,7 @@ snapshots:
   fs-ext@2.1.1:
     dependencies:
       nan: 2.28.0
+    optional: true
 
   fsevents@2.3.3:
     optional: true
@@ -1197,7 +1198,8 @@ snapshots:
 
   mimic-function@5.0.1: {}
 
-  nan@2.28.0: {}
+  nan@2.28.0:
+    optional: true
 
   nanoid@3.3.15: {}
 

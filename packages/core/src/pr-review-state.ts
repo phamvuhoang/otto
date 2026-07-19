@@ -56,8 +56,64 @@ import {
   type Stats,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { flockSync } from "fs-ext";
+import { createRequire } from "node:module";
 import { parseReviewInputFingerprint } from "./pr-review-input.js";
+
+// ---------------------------------------------------------------------------
+// Lazy, optional native `fs-ext` load (P32 — opt-in / inert-by-default)
+// ---------------------------------------------------------------------------
+
+/**
+ * `flockSync` operation strings. `exnb` is exclusive non-blocking (throws
+ * `EAGAIN`/`EWOULDBLOCK` when another open file description already holds the
+ * lock); `un` releases.
+ */
+type FlockOp = "sh" | "ex" | "shnb" | "exnb" | "un";
+type FlockSyncFn = (fd: number, op: FlockOp) => void;
+
+const requireCjs = createRequire(import.meta.url);
+
+/** A CJS `require`-like resolver — the seam that lets tests inject a failure. */
+type RequireLike = (id: string) => unknown;
+
+/**
+ * Resolve the native `flockSync` from `fs-ext` using `req`, or throw an
+ * ACTIONABLE error naming the optional module and how to install it. Exported
+ * under an underscore for the unit test only (inject a `require` that throws to
+ * assert the guidance; inject the real one to assert a normal resolve).
+ */
+export function _resolveFlockSync(req: RequireLike = requireCjs): FlockSyncFn {
+  try {
+    return (req("fs-ext") as { flockSync: FlockSyncFn }).flockSync;
+  } catch (err) {
+    throw new Error(
+      "otto-review requires the optional native module 'fs-ext' for its file lock. " +
+        "Install it (a C/C++ build toolchain is required to build the native addon): " +
+        "`pnpm add fs-ext` in the workspace, or ensure prebuilt binaries are available. " +
+        "Original error: " +
+        (err && (err as Error).message ? (err as Error).message : String(err))
+    );
+  }
+}
+
+/**
+ * Cached native `flockSync`. `undefined` until first lease acquisition, after
+ * which it is the resolved function (fs-ext present) — or {@link getFlockSync}
+ * throws an actionable error on every call while the native module is absent.
+ *
+ * `fs-ext` is an OPTIONAL native dependency loaded LAZILY here so that merely
+ * importing the core barrel — or running any non-review command / `--help` /
+ * `--print-config` — never touches the native addon. The load happens ONLY when
+ * an actual `otto-review` review acquires a lease (see {@link acquireReviewLease}).
+ */
+let flockSyncImpl: FlockSyncFn | undefined;
+
+function getFlockSync(): FlockSyncFn {
+  if (flockSyncImpl === undefined) {
+    flockSyncImpl = _resolveFlockSync();
+  }
+  return flockSyncImpl;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -397,7 +453,7 @@ function makeLease(fd: number, lockPath: string): ReviewLease {
       // contends on the SAME kernel lock. On crash the kernel frees the lock and
       // the file survives for the next acquire to re-lock.
       try {
-        flockSync(fd, "un");
+        getFlockSync()(fd, "un");
       } catch {
         /* best-effort: closing the fd releases the lock regardless */
       }
@@ -453,7 +509,7 @@ export function acquireReviewLease(opts: {
   const fd = openSync(lockPath, "a");
 
   try {
-    flockSync(fd, "exnb");
+    getFlockSync()(fd, "exnb");
   } catch (err) {
     try {
       closeSync(fd);

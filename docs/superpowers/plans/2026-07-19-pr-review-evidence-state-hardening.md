@@ -224,12 +224,14 @@ expect(state).toMatchObject({
 });
 
 const second = await runPullRequestReview({
-  /* same identity */
+  /* same identity, watch mode */
 });
 expect(second.status).toBe("analysis-failed");
 expect(second.costUsd).toBe(0);
 expect(fake.invocationCount()).toBe(1);
 ```
+
+Also prove that an explicit one-shot invocation of the same permanently failed identity may retry after the operator fixes the cause. Watch mode must remain blocked, but one-shot mode must preserve the documented fix-and-rerun path.
 
 Add a generic model failure case:
 
@@ -318,6 +320,8 @@ Classify calls explicitly:
 
 Do not change publication-failure classification or the existing retry delay formula.
 
+Adjust the early terminal-state gate so a permanent `analysis-failed` record remains terminal for `config.watch`, while an explicit one-shot invocation may retry it. Other terminal states keep their current behavior.
+
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
 Run:
@@ -327,7 +331,7 @@ pnpm --filter @phamvuhoang/otto-core test -- pr-review-pipeline.test pr-review-w
 pnpm --filter @phamvuhoang/otto-core typecheck
 ```
 
-Expected: all named tests PASS; permanent failures are not runnable, and transient failures carry a future retry timestamp.
+Expected: all named tests PASS; permanent failures are not runnable in watch mode, explicit one-shot retry remains possible, and transient failures carry a future retry timestamp.
 
 - [ ] **Step 5: Commit Task 2**
 

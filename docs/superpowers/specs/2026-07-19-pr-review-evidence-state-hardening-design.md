@@ -40,7 +40,7 @@ Every `analysis-failed` result persists a state record before returning:
 - explicit `retryable` classification;
 - `nextRetryAt` for retryable failures, using the existing bounded retry schedule.
 
-Permanent failures include invalid review-skill selection, input persistence/validation failure, worktree input-integrity failure, and analysis contract violations. Transient failures include worktree creation/runtime failures, generic model execution failures, budget exhaustion, and unexpected analysis-path errors. Permanent failures are not selected again automatically; transient failures are selected only after their retry timestamp.
+Permanent failures include invalid review-skill selection, input persistence/validation failure, worktree input-integrity failure, and analysis contract violations. Transient failures include worktree creation/runtime failures, generic model execution failures, budget exhaustion, and unexpected analysis-path errors. Permanent failures are not selected again automatically by watch mode; transient failures are selected only after their retry timestamp. An explicit one-shot invocation may retry a permanent `analysis-failed` identity after the operator fixes its cause. This keeps unattended watch runs from hot-looping while preserving the documented fix-and-rerun recovery path.
 
 ### 3. Resume merges prior manifest provenance
 

@@ -1212,6 +1212,81 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
     expect(gh.calls.create).toBe(1);
     expect(gh.calls.update).toBe(0);
   });
+
+  it("(O1/#defect1) a terminal recovery path with an unwritable run dir does NOT finalize a manifest referencing a missing review-input.md", async () => {
+    // FRESH run, caller already shut down (pre-abort) → interruptedBeforeWorkResult,
+    // which materializes the referenced input then finalizes a manifest via
+    // artifactList. If writeReviewInput throws (run dir unwritable), the input was
+    // NEVER durably written: the finalized manifest must NOT reference it.
+    const controller = new AbortController();
+    controller.abort();
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      signal: controller.signal,
+      deps: {
+        analyze: fake.fn,
+        github: gh.github,
+        stdout,
+        now,
+        writeReviewInput: () => {
+          throw new Error("run dir is unwritable");
+        },
+      },
+    });
+    // The terminal outcome is STILL recorded (no crash, no masking).
+    expect(res.status).toBe("skipped");
+    expect(res.skipReason).toBe("aborted-before-work");
+    // The manifest is finalized...
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(m.finishedAt).toBeTruthy();
+    // ...but it must NOT reference the review-input.md that was never written.
+    const artifacts =
+      (m.artifacts as Array<{ kind: string; path: string }>) ?? [];
+    expect(artifacts.some((a) => a.kind === "review-input")).toBe(false);
+    // And the file genuinely does not exist on disk.
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(existsSync(join(runDir, "review-input.md"))).toBe(false);
+  });
+
+  it("(O3b/#defect3) a publication-phase getPullRequest failure on a fresh run whose analysis succeeded is publish-failed, NOT analysis-failed", async () => {
+    // Analysis succeeds; the INITIAL publication re-query (before any write)
+    // throws. That is a publication read failure — the completed analysis must be
+    // preserved and finalized as publish-failed, never misclassified as
+    // analysis-failed by the outer analysis catch.
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    gh.github.getPullRequest = () => {
+      // The FIRST getPullRequest is the outer publication re-query (:850). Throw a
+      // transient error there.
+      throw new GitHubPrError("upstream 503 (HTTP 503)", "network", true, 503);
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(true);
+    // The paid analysis is preserved (resumable state + analysis artifact).
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    expect(st?.analysisArtifact).toBe(`.otto/runs/${res.runId}/analysis.json`);
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(m.exitReason).toBe("publish-failed");
+    const artifacts = m.artifacts as Array<{ kind: string }>;
+    expect(artifacts.some((a) => a.kind === "analysis")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2213,6 +2288,154 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
         baseline
       );
     }
+  });
+
+  it("(O2/#defect2) a RESUMED run pre-aborted PRESERVES the prior paid evidence — it is NOT overwritten with zero-cost aborted-before-work", async () => {
+    const later = () => new Date("2026-07-18T12:30:00.000Z");
+    // First run: analysis PAYS, the summary comment publishes (receipt), then the
+    // formal review fails transiently → resumable publish-failed retaining the
+    // paid analysis + the comment receipt.
+    const fake1 = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+    });
+    const gh1 = makeReviewGithub({
+      current: () => fx.revision,
+      createReviewError: new GitHubPrError(
+        "rate limited (HTTP 429)",
+        "rate-limit",
+        true,
+        429
+      ),
+    });
+    const res1 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake1.fn, github: gh1.github, stdout, now },
+    });
+    expect(res1.status).toBe("publish-failed");
+    expect(res1.commentId).toBeTypeOf("number");
+    const priorCommentId = res1.commentId;
+    const m1 = readManifest(fx.workspaceDir, res1.runId);
+    expect(m1.costUsd).toBeCloseTo(0.7, 5);
+
+    // Second run: the caller has ALREADY shut down (pre-abort) BEFORE any work.
+    // Because a resumed run reuses the prior runId, finalizing "aborted-before-
+    // work" here would clobber the paid manifest. The resumed evidence must be
+    // preserved instead (interrupted/resumable), and NO publication re-attempted.
+    const controller = new AbortController();
+    controller.abort();
+    const fake2 = {
+      fn: async () => {
+        throw new Error("analysis must not run on a resumed pre-abort");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh2 = makeReviewGithub({ current: () => fx.revision });
+    const res2 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      signal: controller.signal,
+      deps: {
+        analyze: fake2.fn as never,
+        github: gh2.github,
+        stdout,
+        now: later,
+      },
+    });
+    // Same run bundle, resumed — NOT a zero-cost aborted-before-work skip.
+    expect(res2.runId).toBe(res1.runId);
+    expect(res2.status).toBe("skipped");
+    expect(res2.skipReason).toBe("interrupted");
+    expect(res2.skipReason).not.toBe("aborted-before-work");
+    // The prior comment receipt is carried into the result.
+    expect(res2.commentId).toBe(priorCommentId);
+    // No publication was re-attempted (pre-aborted before the write boundary).
+    expect(gh2.calls.createComment).toBe(0);
+    expect(gh2.calls.createReview).toHaveLength(0);
+    // The finalized manifest RETAINS the prior paid evidence (cost + receipt +
+    // analysis artifacts), not zeroed aborted-before-work evidence.
+    const m2 = readManifest(fx.workspaceDir, res2.runId);
+    expect(m2.costUsd).toBeCloseTo(0.7, 5);
+    const pr2 = m2.pullRequestReview as {
+      outcome?: string;
+      commentId?: number;
+    };
+    expect(pr2.outcome).toBe("changes-requested");
+    expect(pr2.commentId).toBe(priorCommentId);
+    const artifacts = m2.artifacts as Array<{ kind: string }>;
+    expect(artifacts.some((a) => a.kind === "analysis")).toBe(true);
+    // The persisted state stays resumable and retains the comment receipt.
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("running");
+    expect(st?.outputs.comment?.commentId).toBe(priorCommentId);
+  });
+
+  it("(O3a/#defect3) a pre-review getPullRequest failure AFTER the comment was written is publish-failed with the comment receipt PRESERVED (not lost, not analysis-failed)", async () => {
+    // Analysis succeeds; the summary comment publishes (proven receipt); then the
+    // pre-formal-review re-query (:1089) throws transiently. The comment receipt
+    // must be persisted + carried, and the run finalized publish-failed — never
+    // analysis-failed (analysis succeeded) and never an unfinalized escape.
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+    });
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const origGetPr = gh.github.getPullRequest;
+    let getPrCount = 0;
+    gh.github.getPullRequest = () => {
+      getPrCount++;
+      // Calls: 1 = outer reconcile (:850), 2 = comment write-boundary (:977),
+      // 3 = pre-formal-review re-query (:1089). Throw a transient error on #3,
+      // AFTER the comment has already been created.
+      if (getPrCount === 3) {
+        throw new GitHubPrError(
+          "rate limited (HTTP 429)",
+          "rate-limit",
+          true,
+          429
+        );
+      }
+      return origGetPr();
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    // Publication read failure — NOT analysis-failed.
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(true);
+    // The comment WAS written and its receipt survives in the result.
+    expect(gh.calls.createComment).toBe(1);
+    expect(res.commentId).toBeTypeOf("number");
+    // The receipt is persisted (immediately after the write) — not lost.
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    expect(st?.outputs.comment?.status).toBe("succeeded");
+    expect(st?.outputs.comment?.commentId).toBe(res.commentId);
+    // The manifest is finalized publish-failed and preserves the analysis.
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(m.exitReason).toBe("publish-failed");
+    expect((m.pullRequestReview as { commentId?: number }).commentId).toBe(
+      res.commentId
+    );
   });
 });
 

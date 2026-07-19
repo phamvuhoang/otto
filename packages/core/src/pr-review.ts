@@ -607,8 +607,16 @@ export async function runPullRequestReview(opts: {
     writeManifest(workspaceDir, manifest);
   };
 
-  const artifactList = (over: RunArtifact[] = []): RunArtifact[] => [
-    { kind: "review-input", path: expectedInputPath },
+  const artifactList = (
+    over: RunArtifact[] = [],
+    // Include the review-input artifact ONLY when it was durably written. A
+    // terminal path whose input write failed passes `false` so the finalized
+    // manifest never references a file that is not on disk (Defect #1).
+    includeInput = true
+  ): RunArtifact[] => [
+    ...(includeInput
+      ? ([{ kind: "review-input", path: expectedInputPath }] as RunArtifact[])
+      : []),
     ...over,
   ];
 
@@ -666,20 +674,38 @@ export async function runPullRequestReview(opts: {
    * would otherwise finalize a manifest referencing `review-input.md` (via
    * `artifactList`) without ever having written it, and with no report on disk.
    * Mirrors the recovery SUCCESS path + `finishPublication`: no dangling manifest
-   * reference, evidence retrievable via otto-explain. Best-effort — a run-dir
-   * write hiccup must not mask the terminal outcome being recorded.
+   * reference, evidence retrievable via otto-explain.
+   *
+   * DURABLE-OR-OMITTED: returns whether the input was durably written (a
+   * round-trip-verified fsync+rename, exactly as the recovery SUCCESS path
+   * requires). The caller MUST pass this through to `artifactList` and OMIT the
+   * `review-input` entry when it is `false`, so a run-dir write hiccup never
+   * leaves the finalized manifest pointing at a file that is not on disk. The
+   * write failure must NOT mask the terminal outcome — it is still finalized.
    */
-  const materializeReferencedInput = (report: string): void => {
+  const materializeReferencedInput = (report: string): boolean => {
+    let durable = false;
     try {
       deps.writeReviewInput({ workspaceDir, runId, input: reviewInput });
+      // Round-trip verify (as runFreshReview + recovery do) so a manifest that
+      // references review-input.md is never a dangling pointer.
+      const roundTrip = deps.readReviewInput({
+        workspaceDir,
+        runId,
+        expectedFingerprint: inputFingerprint,
+      });
+      durable = roundTrip != null && roundTrip.content === reviewInput.content;
     } catch {
-      // Best-effort: the run dir may be unwritable; still finalize the manifest.
+      // Best-effort: the run dir may be unwritable. The caller OMITS the
+      // review-input artifact from the finalized manifest (durable === false);
+      // the terminal outcome is still recorded below.
     }
     try {
       writeRunReport(workspaceDir, runId, report);
     } catch {
       // Best-effort.
     }
+    return durable;
   };
 
   /**
@@ -690,7 +716,7 @@ export async function runPullRequestReview(opts: {
    * let the outer `finally` release the acquired lease. No spend (cost 0).
    */
   const interruptedBeforeWorkResult = (): PullRequestReviewRunResult => {
-    materializeReferencedInput(
+    const inputDurable = materializeReferencedInput(
       `# Otto review — interrupted before analysis\n\n` +
         `- Repository: ${repository}\n` +
         `- Pull request: #${pullRequest}\n` +
@@ -699,7 +725,11 @@ export async function runPullRequestReview(opts: {
         `The run acquired its lease but the caller shut down before any ` +
         `analysis ran; no remote output was published. Re-run to complete it.\n`
     );
-    finalizeManifest("aborted", buildEvidence(), artifactList());
+    finalizeManifest(
+      "aborted",
+      buildEvidence(),
+      artifactList([], inputDurable)
+    );
     return {
       status: "skipped",
       skipReason: "aborted-before-work",
@@ -843,11 +873,100 @@ export async function runPullRequestReview(opts: {
       };
     };
 
-    // Caller shutdown detected at the publication boundary: preserve the spend.
-    if (runAbort.signal.aborted) return abortedResumable(startingOutputs);
+    /**
+     * A publication-phase metadata READ (getPullRequest → reconcile) failed
+     * AFTER the paid analysis succeeded. This is NOT an analysis failure and must
+     * never (a) be misclassified as `analysis-failed` by the outer analysis
+     * catch, nor (b) escape unfinalized on a resumed run. Route it through
+     * publish-failed, PRESERVING the completed analysis and any already-persisted
+     * receipts. Retryable-vs-permanent is classified from the error exactly like
+     * a remote-write `GitHubPrError` (Defect #3).
+     */
+    const publicationReadFailure = (
+      err: unknown,
+      outputs: PullRequestReviewOutputState,
+      reviewArtifactPath?: string
+    ): PullRequestReviewRunResult => {
+      const gerr =
+        err instanceof GitHubPrError
+          ? err
+          : new GitHubPrError(
+              `publication metadata read failed: ${(err as Error).message}`,
+              "unknown",
+              false
+            );
+      const retryable = gerr.retryable;
+      const nextRetryAt = retryable
+        ? nextPublicationRetryAt(attempts, deps.now())
+        : undefined;
+      const commentId = outputs.comment?.commentId;
+      const reviewId = outputs.githubReview?.reviewId;
+      persistState({
+        status: "publish-failed",
+        analysisArtifact: analysisArtifactRel,
+        outputs,
+        attempts,
+        retryable,
+        ...(nextRetryAt ? { nextRetryAt } : {}),
+        error: gerr.message,
+      });
+      finalizeManifest(
+        "publish-failed",
+        buildEvidence({
+          outcome,
+          confirmed: published.length,
+          rejected: art.rejected.length,
+          githubReview: outputs.githubReview !== undefined,
+          ...(commentId !== undefined ? { commentId } : {}),
+          ...(reviewId !== undefined ? { reviewId } : {}),
+        }),
+        artifactList([
+          { kind: "diff", path: diffArtifactRel },
+          { kind: "analysis", path: analysisArtifactRel },
+          ...(reviewArtifactPath
+            ? [{ kind: "review", path: reviewArtifactPath } as RunArtifact]
+            : []),
+        ])
+      );
+      return {
+        status: "publish-failed",
+        runId,
+        repository,
+        pullRequest,
+        headSha,
+        inputFingerprint,
+        costUsd: manifestCost,
+        outcome,
+        ...(reviewArtifactPath ? { reviewArtifact: reviewArtifactPath } : {}),
+        ...(commentId !== undefined ? { commentId } : {}),
+        ...(reviewId !== undefined ? { reviewId } : {}),
+        retryable,
+        ...(nextRetryAt ? { nextRetryAt } : {}),
+        error: gerr.message,
+      };
+    };
 
-    // Re-query the PR immediately before any remote write.
-    const current = deps.github.getPullRequest(repository, pullRequest);
+    // Caller shutdown detected at the publication boundary: preserve the spend
+    // AND any receipt already proven on a prior (resumed) invocation, so the
+    // finalized manifest/result reflect the retained comment/review receipts
+    // rather than dropping them (Defect #2).
+    if (runAbort.signal.aborted)
+      return abortedResumable(
+        startingOutputs,
+        startingOutputs.comment?.commentId,
+        startingOutputs.githubReview?.reviewId
+      );
+
+    // Re-query the PR immediately before any remote write. A metadata-read
+    // failure here is a PUBLICATION failure (analysis already succeeded), not an
+    // analysis failure — finalize it as publish-failed rather than letting it be
+    // caught by the outer analysis catch or escape unfinalized on a resume.
+    let current: PullRequestRevision;
+    try {
+      current = deps.github.getPullRequest(repository, pullRequest);
+    } catch (err) {
+      return publicationReadFailure(err, startingOutputs);
+    }
     const rec = reconcilePublication({
       expected: revision,
       current,
@@ -993,6 +1112,16 @@ export async function runPullRequestReview(opts: {
               commentId: receipt.commentId,
             };
             commentId = receipt.commentId;
+            // Persist the proven receipt IMMEDIATELY (status stays `running`
+            // until the full publication finalizes) so a later publication-phase
+            // read failure — e.g. the pre-formal-review getPullRequest below —
+            // can never lose this remote write locally (Defect #3).
+            persistState({
+              status: "running",
+              analysisArtifact: analysisArtifactRel,
+              outputs,
+              attempts,
+            });
           } catch (err) {
             // A write-boundary abort is NOT a publish failure: withhold the write
             // and take the aborted/resumable terminal path, preserving any prior
@@ -1086,7 +1215,15 @@ export async function runPullRequestReview(opts: {
       // remote write and needs its OWN fresh gate. A head that advanced (or an
       // eligibility loss) AFTER the comment but BEFORE the review must withhold
       // the review as superseded/cancelled while preserving the comment receipt.
-      const preReview = deps.github.getPullRequest(repository, pullRequest);
+      // A metadata-read FAILURE here (after the comment already published) is a
+      // publication failure, not an analysis failure: finalize publish-failed
+      // while preserving the persisted comment receipt (Defect #3).
+      let preReview: PullRequestRevision;
+      try {
+        preReview = deps.github.getPullRequest(repository, pullRequest);
+      } catch (err) {
+        return publicationReadFailure(err, outputs, written.artifactPath);
+      }
       const rec2 = reconcilePublication({
         expected: revision,
         current: preReview,
@@ -1141,6 +1278,14 @@ export async function runPullRequestReview(opts: {
             reviewId: receipt.reviewId,
           };
           reviewId = receipt.reviewId;
+          // Persist the proven formal-review receipt IMMEDIATELY (same discipline
+          // as the comment receipt) so a later throw cannot lose it (Defect #3).
+          persistState({
+            status: "running",
+            analysisArtifact: analysisArtifactRel,
+            outputs,
+            attempts,
+          });
         } catch (err) {
           // A write-boundary abort withholds the review while preserving the
           // already-succeeded comment receipt (resumable terminal path).
@@ -1273,7 +1418,7 @@ export async function runPullRequestReview(opts: {
     // finalized manifest references review-input.md via artifactList): no
     // dangling reference, evidence retrievable — same discipline as the recovery
     // SUCCESS path and finishPublication.
-    materializeReferencedInput(
+    const inputDurable = materializeReferencedInput(
       `# Otto review — recovery reconciliation failed\n\n` +
         `- Repository: ${repository}\n` +
         `- Pull request: #${pullRequest}\n` +
@@ -1314,7 +1459,7 @@ export async function runPullRequestReview(opts: {
           : {}),
         ...(proven.reviewId !== undefined ? { reviewId: proven.reviewId } : {}),
       }),
-      artifactList()
+      artifactList([], inputDurable)
     );
     return {
       status: "publish-failed",
@@ -1536,15 +1681,21 @@ export async function runPullRequestReview(opts: {
   }
 
   try {
-    // The lease WAS acquired but the caller shut down before any work: this is a
-    // caller-abort, NOT lock contention. Surface the interrupted semantics (never
-    // the "another process is already reviewing" busy result) and finalize
-    // retrievable evidence; the acquired lease is released in `finally`.
-    if (runAbort.signal.aborted) return interruptedBeforeWorkResult();
     // Resume a crashed/failed run from persisted analysis — never re-analyze.
+    // This MUST precede the fresh pre-abort branch below: a resumed run reuses
+    // the prior runId, so finalizing "aborted-before-work" here would OVERWRITE
+    // the paid manifest's cost/tokens/outputs/receipts with zero-cost evidence
+    // and hide the first (paying) invocation (Defect #2). finishPublication's own
+    // pre-write abort check (abortedResumable) preserves the resumed spend +
+    // receipts and keeps the run resumable; the lease still releases in `finally`.
     if (resumedAnalysis) {
       return finishPublication(resumedAnalysis, priorOutputs);
     }
+    // FRESH run: the lease WAS acquired but the caller shut down before any work —
+    // a caller-abort, NOT lock contention. Surface the interrupted semantics
+    // (never the "another process is already reviewing" busy result) and finalize
+    // retrievable evidence; the acquired lease is released in `finally`.
+    if (runAbort.signal.aborted) return interruptedBeforeWorkResult();
     // Comment-mode: reuse an already-published remote comment (lost local state).
     const recovered = tryRemoteRecovery();
     if (recovered) return recovered;

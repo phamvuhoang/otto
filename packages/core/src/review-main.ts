@@ -344,11 +344,26 @@ export async function runReview(
   //                     this revision; no analysis ran and no output was
   //                     published.
   if (result.status === "publish-failed") {
+    const delivered: string[] = [];
+    if (result.commentId != null) {
+      delivered.push(
+        `the summary comment was published (id ${result.commentId})`
+      );
+    }
+    if (result.reviewId != null) {
+      delivered.push(`the review was published (id ${result.reviewId})`);
+    }
+    const deliveredNote =
+      delivered.length > 0
+        ? ` — ${delivered.join(" and ")}, but the remaining output failed to publish`
+        : " — no remote output was delivered";
+    // One-shot mode has no automatic retry loop (only the watch daemon
+    // retries) — never promise a retry that will not happen on its own.
     const retryNote = result.retryable
-      ? ` (will be retried${result.nextRetryAt ? ` at ${result.nextRetryAt}` : ""})`
-      : "";
+      ? ` (retryable — re-run to retry${result.nextRetryAt ? `; eligible again at ${result.nextRetryAt}` : ""})`
+      : " (permanent failure — not retryable)";
     deps.stderr(
-      `publish failed: ${result.error ?? "unknown error"} — no remote output was delivered${retryNote}\n`
+      `publish failed: ${result.error ?? "unknown error"}${deliveredNote}${retryNote}\n`
     );
     return deps.exit(1);
   }
@@ -359,23 +374,42 @@ export async function runReview(
   }
 
   if (result.status === "superseded") {
+    const outputNote =
+      result.commentId != null
+        ? `the summary comment was already published (id ${result.commentId}); the review was withheld because the head changed`
+        : "no remote output was published";
     deps.stderr(
-      `review declined: the PR head changed during the run — no remote output was published\n`
+      `review declined: the PR head changed during the run — ${outputNote}\n`
     );
     return;
   }
 
   if (result.status === "cancelled") {
+    const outputNote =
+      result.commentId != null
+        ? `the summary comment was already published (id ${result.commentId}); the review was withheld because of the change`
+        : "no remote output was published";
     deps.stderr(
-      `review declined: the PR was closed, drafted, or unlabelled during the run — no remote output was published\n`
+      `review declined: the PR was closed, drafted, or unlabelled during the run — ${outputNote}\n`
     );
     return;
   }
 
   if (result.status === "skipped") {
-    deps.stderr(
-      `review skipped: another process is already reviewing this revision — no work was done\n`
-    );
+    // costUsd > 0 is the agreed discriminator: analysis is paid model work,
+    // so a nonzero cost means the run reached (and paid for) analysis before
+    // being interrupted, and its state was persisted for a resumable re-run.
+    // A zero cost means the run never started — another process already held
+    // the lease for this revision and no work happened at all.
+    if (result.costUsd > 0) {
+      deps.stderr(
+        `review skipped: analysis completed but publication was interrupted — run state was saved; re-run to resume\n`
+      );
+    } else {
+      deps.stderr(
+        `review skipped: another process is already reviewing this revision — no work was done\n`
+      );
+    }
     return;
   }
 }

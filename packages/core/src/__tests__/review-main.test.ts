@@ -273,7 +273,7 @@ describe("runReview", () => {
       expect(err.join("")).toContain("comment API 500");
     });
 
-    it("a retryable publish-failed says it will be retried", async () => {
+    it("a retryable publish-failed says it is retryable via re-run, not that it will be retried automatically", async () => {
       const { deps } = makeDeps({
         runOne: vi.fn(async () =>
           okResult({
@@ -286,8 +286,47 @@ describe("runReview", () => {
       });
       await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
       expect(exitCode).toBe(1);
-      expect(err.join("")).toMatch(/retr/i);
+      expect(err.join("")).toMatch(/retryable/i);
+      expect(err.join("")).toMatch(/re-run/i);
       expect(err.join("")).toContain("2026-01-01T00:05:00Z");
+      // one-shot mode has no automatic retry loop — never promise one.
+      expect(err.join("")).not.toMatch(/will be retried/i);
+    });
+
+    it("a non-retryable publish-failed says it is a permanent failure", async () => {
+      const { deps } = makeDeps({
+        runOne: vi.fn(async () =>
+          okResult({
+            status: "publish-failed",
+            error: "422 unprocessable",
+            retryable: false,
+          })
+        ) as never,
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(exitCode).toBe(1);
+      expect(err.join("")).toMatch(/permanent/i);
+      expect(err.join("")).not.toMatch(/will be retried/i);
+    });
+
+    it("a publish-failed with a published summary comment names it as delivered", async () => {
+      const { deps } = makeDeps({
+        runOne: vi.fn(async () =>
+          okResult({
+            status: "publish-failed",
+            error: "review submission failed",
+            commentId: 555,
+            retryable: true,
+            nextRetryAt: "2026-01-01T00:05:00Z",
+          })
+        ) as never,
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(exitCode).toBe(1);
+      expect(err.join("")).toMatch(/comment.*(published|delivered)/i);
+      expect(err.join("")).toMatch(/retryable/i);
+      expect(err.join("")).toMatch(/re-run/i);
+      expect(err.join("")).not.toMatch(/will be retried/i);
     });
 
     it("analysis-failed exits 1 with the existing message (unchanged)", async () => {
@@ -302,9 +341,11 @@ describe("runReview", () => {
       expect(err.join("")).toContain("model timed out");
     });
 
-    it("superseded exits 0 and states no remote output was published", async () => {
+    it("superseded with no remote output states nothing was published", async () => {
       const { deps } = makeDeps({
-        runOne: vi.fn(async () => okResult({ status: "superseded" })) as never,
+        runOne: vi.fn(async () =>
+          okResult({ status: "superseded", commentId: undefined })
+        ) as never,
       });
       await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
       expect(exitCode).toBeNull();
@@ -312,9 +353,26 @@ describe("runReview", () => {
       expect(err.join("")).toMatch(/no.*output.*published/i);
     });
 
-    it("cancelled exits 0 and states no remote output was published", async () => {
+    it("superseded with an already-published comment states the comment was delivered and only the review was withheld", async () => {
       const { deps } = makeDeps({
-        runOne: vi.fn(async () => okResult({ status: "cancelled" })) as never,
+        runOne: vi.fn(async () =>
+          okResult({ status: "superseded", commentId: 42 })
+        ) as never,
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(exitCode).toBeNull();
+      expect(err.join("")).toMatch(/head changed/i);
+      expect(err.join("")).toMatch(/comment.*(published|delivered)/i);
+      expect(err.join("")).toMatch(/review.*withheld|withheld.*review/i);
+      // must not claim nothing was delivered when a comment was actually published.
+      expect(err.join("")).not.toMatch(/no.*output.*(published|delivered)/i);
+    });
+
+    it("cancelled with no remote output states nothing was published", async () => {
+      const { deps } = makeDeps({
+        runOne: vi.fn(async () =>
+          okResult({ status: "cancelled", commentId: undefined })
+        ) as never,
       });
       await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
       expect(exitCode).toBeNull();
@@ -322,14 +380,43 @@ describe("runReview", () => {
       expect(err.join("")).toMatch(/no.*output.*published/i);
     });
 
-    it("skipped exits 0 and states another process is already reviewing", async () => {
+    it("cancelled with an already-published comment states the comment was delivered and only the review was withheld", async () => {
       const { deps } = makeDeps({
-        runOne: vi.fn(async () => okResult({ status: "skipped" })) as never,
+        runOne: vi.fn(async () =>
+          okResult({ status: "cancelled", commentId: 42 })
+        ) as never,
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(exitCode).toBeNull();
+      expect(err.join("")).toMatch(/closed|draft|unlabell?ed/i);
+      expect(err.join("")).toMatch(/comment.*(published|delivered)/i);
+      expect(err.join("")).toMatch(/review.*withheld|withheld.*review/i);
+      expect(err.join("")).not.toMatch(/no.*output.*(published|delivered)/i);
+    });
+
+    it("skipped with zero cost states another process is already reviewing and no work was done", async () => {
+      const { deps } = makeDeps({
+        runOne: vi.fn(async () =>
+          okResult({ status: "skipped", costUsd: 0 })
+        ) as never,
       });
       await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
       expect(exitCode).toBeNull();
       expect(err.join("")).toMatch(/already.*reviewing/i);
       expect(err.join("")).toMatch(/no work was done/i);
+    });
+
+    it("skipped with nonzero cost states analysis completed but publication was interrupted, and the run is resumable", async () => {
+      const { deps } = makeDeps({
+        runOne: vi.fn(async () =>
+          okResult({ status: "skipped", costUsd: 0.42 })
+        ) as never,
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(exitCode).toBeNull();
+      expect(err.join("")).toMatch(/analysis (completed|ran)/i);
+      expect(err.join("")).toMatch(/resum/i);
+      expect(err.join("")).not.toMatch(/no work was done/i);
     });
   });
 

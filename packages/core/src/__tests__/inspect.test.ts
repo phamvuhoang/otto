@@ -277,7 +277,7 @@ describe("formatRunReport", () => {
         pullRequestReview.reviewInput.fingerprint.slice(0, 12)
       );
       expect(out).not.toContain(pullRequestReview.reviewInput.fingerprint);
-      expect(out).toContain(pullRequestReview.reviewInput.artifactPath);
+      expect(out).toContain(pullRequestReview.reviewInput.artifactPath!);
 
       // Outcome, confirmed/rejected counts, output mode.
       expect(out).toContain("changes-requested");
@@ -293,6 +293,26 @@ describe("formatRunReport", () => {
       // The selected skill's checksum.
       expect(out).toContain("builtin:otto-code-review");
       expect(out).toContain("e".repeat(64));
+    });
+
+    it("renders explicitly unavailable review-input evidence", () => {
+      const unavailableInput: PullRequestReviewEvidence = {
+        ...pullRequestReview,
+        reviewInput: {
+          ...pullRequestReview.reviewInput,
+          artifactPath: null,
+        },
+      };
+      const out = formatRunReport(
+        {
+          ...finalized,
+          mode: "github-pr-review",
+          pullRequestReview: unavailableInput,
+        },
+        []
+      );
+      expect(out).toContain("artifact (unavailable)");
+      expect(out).not.toContain("artifact undefined");
     });
 
     it("omits the section entirely when no evidence is present (non-P32 manifest)", () => {

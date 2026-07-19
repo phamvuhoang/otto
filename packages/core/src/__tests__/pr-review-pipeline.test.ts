@@ -47,6 +47,7 @@ import type { PullRequestReviewConfig } from "../review-cli.js";
 import type { ReviewAnalysisResult, ReviewSeverityCounts } from "../panel.js";
 import type { Finding } from "../review-severity.js";
 import type { StageResult } from "../runner.js";
+import type { PullRequestReviewEvidence, RunArtifact } from "../run-report.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORE_DIR = join(HERE, "..", ".."); // packages/core (holds templates/)
@@ -1247,9 +1248,42 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
     const artifacts =
       (m.artifacts as Array<{ kind: string; path: string }>) ?? [];
     expect(artifacts.some((a) => a.kind === "review-input")).toBe(false);
+    const evidence = m.pullRequestReview as PullRequestReviewEvidence;
+    expect(evidence.reviewInput.artifactPath).toBeNull();
+    expect(JSON.stringify(m)).not.toContain(
+      `.otto/runs/${res.runId}/review-input.md`
+    );
     // And the file genuinely does not exist on disk.
     const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
     expect(existsSync(join(runDir, "review-input.md"))).toBe(false);
+  });
+
+  it("a fresh review-input write failure finalizes without either input reference", async () => {
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: makeFakeAnalyze({}).fn,
+        github: makeCommentGithub({ current: () => fx.revision }).github,
+        stdout,
+        now,
+        writeReviewInput: () => {
+          throw new Error("run dir is unwritable");
+        },
+      },
+    });
+    expect(res.status).toBe("analysis-failed");
+    const manifest = readManifest(fx.workspaceDir, res.runId);
+    expect(
+      (manifest.pullRequestReview as PullRequestReviewEvidence).reviewInput
+        .artifactPath
+    ).toBeNull();
+    expect(
+      (manifest.artifacts as RunArtifact[]).some(
+        (artifact) => artifact.kind === "review-input"
+      )
+    ).toBe(false);
   });
 
   it("(O3b/#defect3) a publication-phase getPullRequest failure on a fresh run whose analysis succeeded is publish-failed, NOT analysis-failed", async () => {

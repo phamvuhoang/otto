@@ -65,6 +65,7 @@ function formatPullRequestReviewSection(
   skillsUsed: SkillUsage[] | undefined
 ): string[] {
   const lines: string[] = [];
+  const inputArtifact = pr.reviewInput.artifactPath ?? "(unavailable)";
   lines.push("");
   lines.push("Pull request review:");
   lines.push(`  ${pr.repository}#${pr.pullRequest} (${pr.url})`);
@@ -75,7 +76,7 @@ function formatPullRequestReviewSection(
   lines.push(
     `  review input: ${pr.reviewInput.kind} (${pr.reviewInput.source}), ` +
       `fingerprint ${shortFingerprint(pr.reviewInput.fingerprint)}…, ` +
-      `artifact ${pr.reviewInput.artifactPath}`
+      `artifact ${inputArtifact}`
   );
   lines.push(`  outcome:      ${pr.outcome ?? "(not yet determined)"}`);
   lines.push(`  confirmed/rejected: ${pr.confirmed} / ${pr.rejected}`);

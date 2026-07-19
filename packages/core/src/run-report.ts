@@ -198,7 +198,8 @@ export type PullRequestReviewEvidence = {
     kind: ReviewInputRequest["kind"];
     source: string;
     fingerprint: string;
-    artifactPath: string;
+    /** Null only when the exact artifact could not be durably materialized. */
+    artifactPath: string | null;
   };
   /** Absent when the review has not yet produced a verdict. */
   outcome?: PullRequestReviewOutcome;

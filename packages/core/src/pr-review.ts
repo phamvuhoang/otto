@@ -499,6 +499,7 @@ export async function runPullRequestReview(opts: {
   const startedAt = deps.now().toISOString();
   const runDir = runReportDir(workspaceDir, runId);
   const expectedInputPath = `.otto/runs/${runId}/review-input.md`;
+  let inputArtifactDurable = resumedAnalysis !== null;
 
   let activeAgentId: AgentRuntimeId = opts.agentId;
   let worktree: ReturnType<typeof createPullRequestWorktree> | undefined;
@@ -558,7 +559,8 @@ export async function runPullRequestReview(opts: {
 
   // Composite P32 evidence, refined at each terminal state.
   const buildEvidence = (
-    over: Partial<PullRequestReviewEvidence> = {}
+    over: Partial<PullRequestReviewEvidence> = {},
+    includeInput = inputArtifactDurable
   ): PullRequestReviewEvidence => ({
     repository,
     pullRequest,
@@ -570,7 +572,7 @@ export async function runPullRequestReview(opts: {
       kind: reviewInput.kind,
       source: reviewInput.source,
       fingerprint: inputFingerprint,
-      artifactPath: expectedInputPath,
+      artifactPath: includeInput ? expectedInputPath : null,
     },
     confirmed: 0,
     rejected: 0,
@@ -609,13 +611,10 @@ export async function runPullRequestReview(opts: {
 
   const artifactList = (
     over: RunArtifact[] = [],
-    // Include the review-input artifact ONLY when it was durably written. A
-    // terminal path whose input write failed passes `false` so the finalized
-    // manifest never references a file that is not on disk (Defect #1).
-    includeInput = true
+    includeInput = inputArtifactDurable
   ): RunArtifact[] => [
     ...(includeInput
-      ? ([{ kind: "review-input", path: expectedInputPath }] as RunArtifact[])
+      ? [{ kind: "review-input", path: expectedInputPath } as RunArtifact]
       : []),
     ...over,
   ];
@@ -676,15 +675,15 @@ export async function runPullRequestReview(opts: {
    * Mirrors the recovery SUCCESS path + `finishPublication`: no dangling manifest
    * reference, evidence retrievable via otto-explain.
    *
-   * DURABLE-OR-OMITTED: returns whether the input was durably written (a
-   * round-trip-verified fsync+rename, exactly as the recovery SUCCESS path
-   * requires). The caller MUST pass this through to `artifactList` and OMIT the
-   * `review-input` entry when it is `false`, so a run-dir write hiccup never
-   * leaves the finalized manifest pointing at a file that is not on disk. The
-   * write failure must NOT mask the terminal outcome — it is still finalized.
+   * DURABLE-OR-OMITTED: records and returns whether the input was durably written
+   * (a round-trip-verified fsync+rename, exactly as the recovery SUCCESS path
+   * requires). Both evidence builders use that shared authority, so a run-dir
+   * write hiccup never leaves the finalized manifest pointing at a file that is
+   * not on disk. The write failure must NOT mask the terminal outcome — it is
+   * still finalized.
    */
   const materializeReferencedInput = (report: string): boolean => {
-    let durable = false;
+    inputArtifactDurable = false;
     try {
       deps.writeReviewInput({ workspaceDir, runId, input: reviewInput });
       // Round-trip verify (as runFreshReview + recovery do) so a manifest that
@@ -694,18 +693,19 @@ export async function runPullRequestReview(opts: {
         runId,
         expectedFingerprint: inputFingerprint,
       });
-      durable = roundTrip != null && roundTrip.content === reviewInput.content;
+      inputArtifactDurable =
+        roundTrip != null && roundTrip.content === reviewInput.content;
     } catch {
       // Best-effort: the run dir may be unwritable. The caller OMITS the
-      // review-input artifact from the finalized manifest (durable === false);
-      // the terminal outcome is still recorded below.
+      // review-input artifact from the finalized manifest; the terminal outcome
+      // is still recorded below.
     }
     try {
       writeRunReport(workspaceDir, runId, report);
     } catch {
       // Best-effort.
     }
-    return durable;
+    return inputArtifactDurable;
   };
 
   /**
@@ -716,7 +716,7 @@ export async function runPullRequestReview(opts: {
    * let the outer `finally` release the acquired lease. No spend (cost 0).
    */
   const interruptedBeforeWorkResult = (): PullRequestReviewRunResult => {
-    const inputDurable = materializeReferencedInput(
+    materializeReferencedInput(
       `# Otto review — interrupted before analysis\n\n` +
         `- Repository: ${repository}\n` +
         `- Pull request: #${pullRequest}\n` +
@@ -725,11 +725,7 @@ export async function runPullRequestReview(opts: {
         `The run acquired its lease but the caller shut down before any ` +
         `analysis ran; no remote output was published. Re-run to complete it.\n`
     );
-    finalizeManifest(
-      "aborted",
-      buildEvidence(),
-      artifactList([], inputDurable)
-    );
+    finalizeManifest("aborted", buildEvidence(), artifactList());
     return {
       status: "skipped",
       skipReason: "aborted-before-work",
@@ -1418,7 +1414,7 @@ export async function runPullRequestReview(opts: {
     // finalized manifest references review-input.md via artifactList): no
     // dangling reference, evidence retrievable — same discipline as the recovery
     // SUCCESS path and finishPublication.
-    const inputDurable = materializeReferencedInput(
+    materializeReferencedInput(
       `# Otto review — recovery reconciliation failed\n\n` +
         `- Repository: ${repository}\n` +
         `- Pull request: #${pullRequest}\n` +
@@ -1459,7 +1455,7 @@ export async function runPullRequestReview(opts: {
           : {}),
         ...(proven.reviewId !== undefined ? { reviewId: proven.reviewId } : {}),
       }),
-      artifactList([], inputDurable)
+      artifactList()
     );
     return {
       status: "publish-failed",
@@ -1582,7 +1578,9 @@ export async function runPullRequestReview(opts: {
         runId,
         expectedFingerprint: inputFingerprint,
       });
-      if (roundTrip == null || roundTrip.content !== reviewInput.content) {
+      inputArtifactDurable =
+        roundTrip != null && roundTrip.content === reviewInput.content;
+      if (!inputArtifactDurable) {
         return null;
       }
     } catch {
@@ -1713,8 +1711,8 @@ export async function runPullRequestReview(opts: {
   // Fresh analysis + publication (no resumable state, no remote proof).
   // -------------------------------------------------------------------------
   async function runFreshReview(): Promise<PullRequestReviewRunResult> {
-    // 1. Initial manifest (zero cost/tokens, composite evidence, expected input
-    //    artifact path) + the byte-exact, round-trip-validated input artifact.
+    // 1. Initial manifest (zero cost/tokens, no input reference until the exact
+    //    artifact has been durably written and round-trip validated).
     writeManifest(workspaceDir, {
       runId,
       bin: "otto-review",
@@ -1741,13 +1739,15 @@ export async function runPullRequestReview(opts: {
         runId,
         expectedFingerprint: inputFingerprint,
       });
-      if (roundTrip == null || roundTrip.content !== reviewInput.content) {
+      inputArtifactDurable =
+        roundTrip != null && roundTrip.content === reviewInput.content;
+      if (!inputArtifactDurable) {
         return fail(
           "review-input artifact failed round-trip validation",
           "re-run the review; the run directory could not persist the exact review input"
         );
       }
-      snapshot = roundTrip;
+      snapshot = roundTrip!;
     } catch (err) {
       return fail(
         `review-input artifact write failed: ${(err as Error).message}`,

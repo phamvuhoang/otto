@@ -272,6 +272,25 @@ describe("acquireReviewLease", () => {
     expect(again.acquired).toBe(true);
   });
 
+  it("release keeps the lock FILE on disk (never unlinks it) so exclusion survives", () => {
+    // Unlinking a flock'd lock file is the classic footgun: it decouples future
+    // acquirers onto a fresh inode (path→new inode via O_CREAT) whose flock is
+    // independent of any inode a prior acquirer still holds → double-acquire. The
+    // file MUST persist so every acquirer opens the same path → same inode →
+    // contends on the SAME kernel lock.
+    const first = acquireReviewLease(leaseOpts());
+    expect(first.acquired).toBe(true);
+    if (!first.acquired) throw new Error("expected acquire");
+
+    first.lease.release();
+
+    // The persistent lock file survives release…
+    expect(existsSync(lockFile())).toBe(true);
+    // …and a subsequent acquire re-locks that same inode at the same path.
+    const again = acquire({ runId: "next" });
+    expect(again.acquired).toBe(true);
+  });
+
   it("release is idempotent and ownsClaim is false afterwards", () => {
     const first = acquireReviewLease(leaseOpts());
     expect(first.acquired).toBe(true);

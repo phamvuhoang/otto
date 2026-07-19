@@ -1264,11 +1264,13 @@ export async function runPullRequestReview(opts: {
     };
   };
 
-  // --- Acquire the ownership-fenced PID-liveness composite lease BEFORE writing
-  //     run/input artifacts or a worktree. A busy (LIVE) holder returns `skipped`
-  //     with no analysis — a live holder is never dispossessed. A stale claim
-  //     (dead pid) is taken over race-free. The lease is released (ownership-
-  //     fenced) in `finally`, and its `ownsClaim()` fences every remote write.
+  // --- Acquire the OS-flock composite lease BEFORE writing run/input artifacts
+  //     or a worktree. The lease takes an exclusive non-blocking `flock` on a
+  //     per-identity lock file; a busy (LIVE) holder returns `skipped` with no
+  //     analysis — the kernel serializes acquisition so two racers can never both
+  //     acquire. A crashed holder's lock is auto-released by the kernel (no PID
+  //     probe, no stale-claim takeover). The lease is released in `finally`, and
+  //     its `ownsClaim()` fences every remote write.
   const leaseResult = acquireReviewLease({
     workspaceDir,
     repository,

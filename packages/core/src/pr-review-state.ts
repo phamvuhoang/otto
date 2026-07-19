@@ -32,10 +32,12 @@
  *    `{runId,pid,acquiredAt}` as human evidence only.
  *
  *    The lease exposes {@link ReviewLease.release} (flock `LOCK_UN` + close the
- *    fd + best-effort unlink; idempotent) and {@link ReviewLease.ownsClaim}
- *    (while we still hold the fd's flock we are the sole owner, kernel-guaranteed
- *    — it returns `!released`, used by the pipeline as a defense-in-depth fence
- *    before every remote write). flock needs no heartbeat.
+ *    fd; idempotent — the lock FILE is left persistent so exclusion survives, as
+ *    unlinking a flock'd file would decouple future acquirers onto a fresh inode)
+ *    and {@link ReviewLease.ownsClaim} (while we still hold the fd's flock we are
+ *    the sole owner, kernel-guaranteed — it returns `!released`, used by the
+ *    pipeline as a defense-in-depth fence before every remote write). flock needs
+ *    no heartbeat.
  *
  * The lease API is synchronous. This module performs NO GitHub, model, or
  * pipeline I/O.
@@ -50,7 +52,6 @@ import {
   openSync,
   readFileSync,
   renameSync,
-  unlinkSync,
   writeSync,
   type Stats,
 } from "node:fs";
@@ -99,9 +100,10 @@ export type PullRequestReviewState = {
  * While the lease's fd holds the exclusive flock we are the SOLE owner
  * (kernel-guaranteed) — ownership cannot change under a live holder.
  *
- *  - `release` drops the flock (`LOCK_UN`), closes the fd, and best-effort
- *    unlinks the lock file. It is idempotent — safe to call repeatedly (e.g. in a
- *    `finally`).
+ *  - `release` drops the flock (`LOCK_UN`) and closes the fd. It is idempotent —
+ *    safe to call repeatedly (e.g. in a `finally`). The lock FILE is left
+ *    persistent (a stable inode keeps all acquirers contending on the same lock;
+ *    unlinking it would decouple future acquirers onto a fresh inode).
  *  - `ownsClaim` reports whether we still hold the lock (`!released`). The
  *    pipeline calls it immediately before every remote write as a
  *    defense-in-depth fence.
@@ -387,7 +389,13 @@ function makeLease(fd: number, lockPath: string): ReviewLease {
     release: () => {
       if (released) return;
       released = true;
-      // Drop the kernel lock, close the fd, then best-effort unlink the file.
+      // Drop the kernel lock and close the fd. The lock FILE is left PERSISTENT
+      // on purpose: unlinking a flock'd file decouples future acquirers onto a
+      // fresh inode (path→new inode via O_CREAT) whose flock is independent of the
+      // inode a concurrent acquirer may already hold → double-acquire. Keeping a
+      // stable inode means every acquirer opens the same path → same inode →
+      // contends on the SAME kernel lock. On crash the kernel frees the lock and
+      // the file survives for the next acquire to re-lock.
       try {
         flockSync(fd, "un");
       } catch {
@@ -397,11 +405,6 @@ function makeLease(fd: number, lockPath: string): ReviewLease {
         closeSync(fd);
       } catch {
         /* best-effort */
-      }
-      try {
-        unlinkSync(lockPath);
-      } catch {
-        /* best-effort: another run may have re-created/re-locked it */
       }
     },
     ownsClaim: () => !released,
@@ -415,8 +418,8 @@ function makeLease(fd: number, lockPath: string): ReviewLease {
  * lifetime, and takes an EXCLUSIVE NON-BLOCKING flock. Returns:
  *
  *  - `{ acquired: true, lease }` — the lock is now ours. `lease.ownsClaim()` is
- *    the pipeline's per-write fence and `lease.release()` drops + closes + unlinks
- *    (idempotent).
+ *    the pipeline's per-write fence and `lease.release()` drops the lock + closes
+ *    the fd (idempotent). The lock file is left persistent — see {@link makeLease}.
  *  - `{ acquired: false, reason: "busy" }` — a LIVE process already holds the
  *    lock (`EAGAIN`/`EWOULDBLOCK`). Kernel-serialized: two racers cannot both
  *    acquire. The caller treats busy as `skipped` with no analysis.

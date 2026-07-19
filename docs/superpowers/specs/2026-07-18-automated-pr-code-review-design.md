@@ -270,8 +270,9 @@ reason are recorded in `skillsUsed[]`.
    into typed PR/issue metadata, publication results, and retry classifications.
 3. **Review-input resolver** validates the exclusive source, snapshots exact
    content, computes its fingerprint, and writes the retrievable input artifact.
-4. **Revision state store** provides atomic local claims, partial-output
-   recovery, success identity, and stale-lock handling.
+4. **Revision state store** provides an atomic local OS-flock lease (a
+   persistent per-composite-identity lock file, kernel-released the instant
+   its holder dies), partial-output recovery, and success identity.
 5. **PR worktree manager** fetches exact base/head refs and creates a detached,
    disposable checkout without switching the operator's working tree.
 6. **Review analysis** runs lenses and adversarial verification, returning
@@ -482,28 +483,29 @@ export type PullRequestReviewState = {
 };
 ```
 
-Claims use an atomic create operation and include process/run identity plus a
-lease heartbeat. The separate claim file has this contract:
-
-```ts
-export type PullRequestReviewClaim = {
-  repository: string;
-  pullRequest: number;
-  headSha: string;
-  inputFingerprint: string;
-  runId: string;
-  pid: number;
-  acquiredAt: string;
-  heartbeatAt: string;
-};
-```
-
-The daemon refreshes `heartbeatAt` every 60 seconds. A claim is stale after 15
-minutes without a heartbeat and may then be replaced atomically. A live local
-claim prevents two daemon processes on the same workspace from reviewing the
-same composite identity concurrently. Remote publication markers reconcile
-crashes, restarts, and lost local state; simultaneous daemons on different
-machines are not a supported coordination mode in v1.
+**Superseded:** an earlier revision of this design specified a
+`PullRequestReviewClaim` file with `pid`/`acquiredAt`/`heartbeatAt` fields, a
+60-second heartbeat, and a 15-minute stale-timeout takeover. The shipped
+mechanism instead acquires the lease as a real OS advisory lock (`flock`) held
+on a persistent per-composite-identity lock file
+(`<state-path>.lock`, a stable inode) via the optional native `fs-ext`
+dependency (loaded lazily — only an actual `otto-review` run needs it; `--help`,
+`--print-config`, and every other command are unaffected, though building the
+native addon requires a C/C++ toolchain). Acquisition opens the lock file and
+takes a non-blocking exclusive flock; a second acquirer gets `EAGAIN`/
+`EWOULDBLOCK` and reports busy. There is no PID field, no heartbeat, and no
+tombstone: the kernel releases the flock the instant the holding file
+descriptor closes or the holding process dies, so a crashed or killed daemon's
+lock is freed automatically and a restart's exclusive flock simply succeeds.
+Release drops the flock and closes the fd; the lock file itself is left in
+place so future acquirers keep contending on the same inode. A live lease
+prevents two daemon processes on the same workspace from reviewing the same
+composite identity concurrently, and is scoped to one active daemon per
+repository. The lock requires a LOCAL filesystem — advisory `flock` is
+unreliable or unsupported over some network filesystems (e.g. NFS). Remote
+publication markers reconcile crashes, restarts, and lost local state;
+simultaneous daemons on different machines are not a supported coordination
+mode in v1.
 
 The summary comment contains a stable marker scoped to repository and PR:
 
@@ -660,7 +662,8 @@ publication receipts, and any stale or failed state.
 - Same-repository issue references, workspace-contained UTF-8 file validation,
   exact prompt preservation, deterministic snapshots, and fingerprints.
 - PR eligibility for label, state, draft, and successful SHA.
-- State transitions, atomic claim behavior, and stale-lock recovery.
+- State transitions and atomic OS-flock lease acquisition/release, including
+  automatic crash recovery (no heartbeat or stale-timeout takeover).
 - Outcome derivation from confirmed severities.
 - Comment/formal-review marker generation and matching.
 - Diff-side/line mapping for added, modified, deleted, binary, and unmappable
@@ -812,6 +815,9 @@ is approved. The intended boundaries are:
 | `README.md`, `docs/CLI.md`, `docs/ARCHITECTURE.md` | User and architecture docs                                   |
 | `docs/HARNESS_ROADMAP_PHASE6.md`                   | Record urgent P32 alongside, not inside, P27-P31             |
 
-No new npm dependency is required. Core remains ESM with `.js` relative imports;
+P32 adds exactly one new dependency: the optional native `fs-ext` (for the
+review lease's `flock`), loaded lazily and required only for an actual
+`otto-review` run — building it needs a C/C++ toolchain, but `install` and
+every other command are unaffected. Core remains ESM with `.js` relative imports;
 the CLI bin remains hand-written JavaScript with no build step; all new behavior
 is opt-in through the new bin and inert for existing commands.

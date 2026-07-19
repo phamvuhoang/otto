@@ -6,7 +6,7 @@
 
 **Architecture:** P32 is a new harness-owned path, not another `runLoop` stage chain. A typed GitHub adapter discovers immutable PR revisions and reads same-repository spec issues; a dedicated resolver turns zero or one issue/file/prompt source into an exact artifact plus deterministic fingerprint; a strict worktree manager fetches and verifies the exact base/head objects; a reusable `analyzeReview` operation runs read-only lenses plus adversarial verification without synth; a canonical renderer feeds terminal, Markdown, summary-comment, and formal-review outputs; a composite-identity state/lease store makes watch mode restartable. The model receives the exact diff, exact review-input artifact, and taint-fenced PR context but no GitHub credentials, publication tools, network authority, or workspace-write capability. Existing `runPanel` calls the same analysis core and retains its current synth/fix behavior.
 
-**Tech Stack:** TypeScript (NodeNext ESM), Node ≥20, Vitest, hand-written ESM CLI bin, Git and GitHub CLI through literal argv only. No new npm dependency.
+**Tech Stack:** TypeScript (NodeNext ESM), Node ≥20, Vitest, hand-written ESM CLI bin, Git and GitHub CLI through literal argv only. One new dependency: the optional native `fs-ext` (for the review lease's `flock`), loaded lazily and required only for an actual `otto-review` run — building it needs a C/C++ toolchain, but `install` and every other command are unaffected.
 
 **Source of truth:** `docs/superpowers/specs/2026-07-18-automated-pr-code-review-design.md` and user story `CR-001` in that document.
 
@@ -1561,7 +1561,7 @@ Expected: Slice 1 tests PASS; help exits 0; existing panel/runner regressions PA
 
 ---
 
-## Task 11: Atomic composite-identity state, claims, and lease recovery
+## Task 11: Atomic composite-identity state and OS-flock lease
 
 **Files:**
 
@@ -1571,7 +1571,7 @@ Expected: Slice 1 tests PASS; help exits 0; existing panel/runner regressions PA
 
 **Interfaces:**
 
-```ts
+````ts
 export type PullRequestReviewOutputState = {
   text?: { status: "succeeded" };
   markdown?: { status: "succeeded"; path: string };
@@ -1601,24 +1601,52 @@ export type PullRequestReviewState = {
   updatedAt: string;
 };
 
-export type PullRequestReviewClaim = {
+**Superseded:** this task originally specified a `PullRequestReviewClaim` file
+(`pid`/`acquiredAt`/`heartbeatAt` fields), `REVIEW_LEASE_HEARTBEAT_MS` (60s),
+`REVIEW_LEASE_STALE_MS` (15m), and `claimRevision`/`heartbeatClaim`/
+`releaseClaim` functions doing PID-liveness/heartbeat/stale-timeout takeover.
+The shipped mechanism replaces all of that with a real OS advisory lock
+(`flock`) via the optional native `fs-ext` dependency, loaded lazily so only an
+actual `otto-review` run needs it (a C/C++ toolchain is required to build the
+native addon; `--help`/`--print-config`/`install`/every other command are
+unaffected). The lease is held on a persistent per-composite-identity lock file
+(`<state-path>.lock`, a stable inode) and requires a LOCAL filesystem — `flock`
+is unreliable/unsupported over some network filesystems (e.g. NFS). It is
+scoped to one active daemon per repository:
+
+```ts
+export type ReviewLease = {
+  release: () => void;
+  ownsClaim: () => boolean;
+};
+
+export type ReviewLeaseResult =
+  | { acquired: true; lease: ReviewLease }
+  | { acquired: false; reason: "busy" };
+
+export function acquireReviewLease(opts: {
+  workspaceDir: string;
   repository: string;
   pullRequest: number;
   headSha: string;
   inputFingerprint: string;
   runId: string;
-  pid: number;
-  acquiredAt: string;
-  heartbeatAt: string;
-};
+}): ReviewLeaseResult;
+````
 
-export type ClaimResult =
-  | { acquired: true; claim: PullRequestReviewClaim }
-  | { acquired: false; reason: "busy"; claim: PullRequestReviewClaim };
+Acquisition opens the lock file and takes a non-blocking exclusive flock; a
+competing acquirer gets `EAGAIN`/`EWOULDBLOCK` and receives `{ acquired: false,
+reason: "busy" }`. There is no PID field, no heartbeat, and no tombstone: the
+kernel releases the flock the instant the holding file descriptor closes or the
+holding process dies, so a crashed daemon's lock is freed automatically and a
+restart's exclusive flock simply succeeds — crash recovery is automatic, not a
+timed takeover. `release()` drops the flock and closes the fd (idempotent,
+safe in `finally`); the lock file itself is left in place so future acquirers
+keep contending on the same inode. `ownsClaim()` reports whether the lease is
+still held (`!released`) and is checked as a defense-in-depth fence immediately
+before every remote write.
 
-export const REVIEW_LEASE_HEARTBEAT_MS = 60_000;
-export const REVIEW_LEASE_STALE_MS = 15 * 60_000;
-
+```ts
 export function reviewStatePath(
   workspaceDir: string,
   repository: string,
@@ -1637,25 +1665,8 @@ export function writeReviewState(
   workspaceDir: string,
   state: PullRequestReviewState
 ): void;
-export function claimRevision(opts: {
-  workspaceDir: string;
-  repository: string;
-  pullRequest: number;
-  headSha: string;
-  inputFingerprint: string;
-  runId: string;
-  pid?: number;
-  now?: Date;
-}): ClaimResult;
-export function heartbeatClaim(opts: {
-  workspaceDir: string;
-  claim: PullRequestReviewClaim;
-  now?: Date;
-}): boolean;
-export function releaseClaim(opts: {
-  workspaceDir: string;
-  claim: PullRequestReviewClaim;
-}): boolean;
+// acquireReviewLease (declared above) is the sole acquire/release surface —
+// there is no separate claimRevision/heartbeatClaim/releaseClaim trio.
 export function isStateRunnable(
   state: PullRequestReviewState | null,
   now?: Date
@@ -1671,15 +1682,21 @@ Cover:
 - parser requires a 64-character lower-case SHA-256 input fingerprint that matches its path;
 - parser rejects an `analysisArtifact` path that is not exactly `.otto/runs/<state.runId>/analysis.json`;
 - atomic temp-write + rename leaves valid JSON;
-- first `openSync(claimPath, "wx")` claim wins, second returns busy;
-- heartbeat only updates a claim with matching run ID;
-- release only removes a matching claim;
-- fresh claim is busy; >15-minute claim is recovered by atomic rename-to-tombstone then exclusive create;
-- two stale-recovery attempts cannot both acquire;
+- first `acquireReviewLease` at a composite identity's lock file wins the
+  exclusive flock; a second concurrent call on a live holder returns
+  `{ acquired: false, reason: "busy" }` (no PID/heartbeat/tombstone involved);
+- `release()` drops the flock and is idempotent (safe to call twice); the lock
+  file itself is left in place afterward;
+- a held lease's process death (fd close without explicit release) frees the
+  flock automatically, so a fresh `acquireReviewLease` afterward succeeds with
+  no stale-timeout wait;
 - `succeeded` and permanent failure are not runnable;
-- `running` is runnable only after its composite claim can be acquired/recovered; `superseded`/`cancelled` become runnable when the same composite identity is eligible again;
+- `running` is runnable only after its composite lease can be acquired;
+  `superseded`/`cancelled` become runnable when the same composite identity is
+  eligible again;
 - retryable publish/analysis failure becomes runnable only at/after `nextRetryAt`;
-- a new head SHA or changed input fingerprint uses an independent state path; the same SHA with two fingerprints can be claimed independently.
+- a new head SHA or changed input fingerprint uses an independent state path and independent lock file; the same SHA with two fingerprints can acquire leases independently;
+- the lock mechanism requires a LOCAL filesystem: a non-busy `flockSync` failure (e.g. `ENOTSUP`/`ENOSYS`, or a missing/malformed `fs-ext` export) surfaces as an actionable `ReviewLeaseError`, distinct from a busy lease.
 
 - [ ] **Step 2: Run test to verify red**
 
@@ -1689,7 +1706,7 @@ Expected: FAIL — state module absent.
 
 - [ ] **Step 3: Implement atomic persistence**
 
-Validate owner/repo, PR, and SHA using the Task 1 domain validators and validate the fingerprint with Task 5's `parseReviewInputFingerprint`. State writes use a same-directory temp file named with pid/run ID, `fsyncSync`, `closeSync`, then `renameSync`. Claims use exclusive create at the composite path. Stale takeover first renames the old claim to a unique `.stale-<runId>` tombstone; only the process whose rename succeeds may try exclusive create. Clean its own tombstone after success/failure.
+Validate owner/repo, PR, and SHA using the Task 1 domain validators and validate the fingerprint with Task 5's `parseReviewInputFingerprint`. State writes use a same-directory temp file named with pid/run ID, `fsyncSync`, `closeSync`, then `renameSync`. The lease is a real OS advisory lock (`flock`, via the optional native `fs-ext`, loaded lazily): `acquireReviewLease` opens the composite identity's persistent lock file (`<state-path>.lock`, a stable inode) and takes a non-blocking exclusive flock, returning busy on `EAGAIN`/`EWOULDBLOCK`. There is no PID field, heartbeat, or tombstone — the kernel frees the flock automatically when the holding fd closes or the holding process dies, so crash recovery needs no application-level takeover logic. `release()` drops the flock and closes the fd without unlinking the lock file. This requires a LOCAL filesystem (advisory `flock` is unreliable/unsupported over some network filesystems, e.g. NFS) and is scoped to one active daemon per repository.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -1796,8 +1813,8 @@ gh api user --jq {login: .login}
 
 Prove:
 
-- a composite head/input claim is acquired before analysis, heartbeated every 60 seconds with an unref'd interval, and released in `finally`;
-- a busy claim returns without analysis;
+- a composite head/input OS-flock lease is acquired before analysis and released in `finally` (no heartbeat interval — the kernel holds the flock for the life of the process);
+- a busy lease returns without analysis;
 - successful text/Markdown/comment outputs write independent receipts;
 - state `succeeded` skips only the same SHA plus input fingerprint; the same SHA with changed input runs again;
 - comment output reuses current head/input remote markers when local state was lost, persists the already resolved exact input as the recovered run's `review-input.md`, persists the remote body as `review.md`/`report.md`, and does not pay for analysis;
@@ -1817,7 +1834,7 @@ Expected: FAIL — publisher/state wiring absent.
 
 Before analysis, reconcile remote proof only for requested remote outputs. If an owned summary comment already contains both the current head and input-fingerprint markers and no other requested output is missing, reconstruct a succeeded composite state and return. A current-head comment with an older fingerprint is not proof and must be updated after the new analysis.
 
-Refine Task 10 startup for the stateful slice: after receiving the already resolved input and allocating `runId`, acquire the composite claim before writing run/input artifacts or creating a worktree. A busy claim returns `skipped`; every acquired path starts the heartbeat, initializes evidence, and releases in `finally`. Input-source resolution remains outside and before this claim.
+Refine Task 10 startup for the stateful slice: after receiving the already resolved input and allocating `runId`, acquire the composite OS-flock lease before writing run/input artifacts or creating a worktree. A busy lease returns `skipped`; every acquired path initializes evidence and releases the lease in `finally` (no heartbeat to start — the kernel auto-releases on process death). Input-source resolution remains outside and before this lease acquisition.
 
 After analysis:
 
@@ -2250,7 +2267,7 @@ Do not create a release commit or edit versions.
 - [x] Failure paths finalize evidence and release worktree/claim/keepalive resources.
 - [x] Remote writes are harness-owned, composite-marker-reconciled, and preceded by fresh PR reconciliation.
 - [x] Existing panel synth behavior is covered while P32 analysis never invokes synth.
-- [x] No task requires a new npm dependency or release-version edit.
+- [x] The only new dependency is the optional native `fs-ext` (review lease `flock`, loaded lazily); no release-version edit is required.
 - [x] Every implementation step is concrete; no deferred work or unspecified stand-in remains.
 - [x] Slice 1, Slice 2, and Slice 3 each end with independently runnable verification.
 

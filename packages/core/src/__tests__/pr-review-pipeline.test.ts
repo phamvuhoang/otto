@@ -52,7 +52,12 @@ import type { PullRequestReviewConfig } from "../review-cli.js";
 import type { ReviewAnalysisResult, ReviewSeverityCounts } from "../panel.js";
 import type { Finding } from "../review-severity.js";
 import type { StageResult } from "../runner.js";
-import type { PullRequestReviewEvidence, RunArtifact } from "../run-report.js";
+import {
+  writeManifest,
+  type PullRequestReviewEvidence,
+  type RunArtifact,
+  type RunManifest,
+} from "../run-report.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORE_DIR = join(HERE, "..", ".."); // packages/core (holds templates/)
@@ -280,16 +285,13 @@ function makeFakeAnalyze(cfg: FakeCfg = {}) {
   return { fn, calls, invocationCount: () => invocations };
 }
 
-function readManifest(
-  workspaceDir: string,
-  runId: string
-): Record<string, unknown> {
+function readManifest(workspaceDir: string, runId: string): RunManifest {
   return JSON.parse(
     readFileSync(
       join(workspaceDir, ".otto", "runs", runId, "manifest.json"),
       "utf8"
     )
-  );
+  ) as RunManifest;
 }
 
 const baseArgs = (fx: Fixture) => ({
@@ -2719,6 +2721,25 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
     const priorCommentId = res1.commentId;
     const m1 = readManifest(fx.workspaceDir, res1.runId);
     expect(m1.costUsd).toBeCloseTo(0.7, 5);
+    const seeded: RunManifest = {
+      ...m1,
+      runtime: { id: "claude", displayName: "Claude" },
+      startedAt: "2026-07-18T00:00:00.000Z",
+      toolsUsed: [
+        {
+          name: "headroom",
+          kind: "sdk",
+          stage: "pr-review",
+          tokensSaved: 123,
+          reasons: ["compress PR body"],
+        },
+      ],
+      artifacts: [
+        ...(m1.artifacts ?? []),
+        { kind: "review", path: `.otto/runs/${res1.runId}/review.md` },
+      ],
+    };
+    writeManifest(fx.workspaceDir, seeded);
 
     // Second run: the caller has ALREADY shut down (pre-abort) BEFORE any work.
     // Because a resumed run reuses the prior runId, finalizing "aborted-before-
@@ -2736,6 +2757,7 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
     const gh2 = makeReviewGithub({ current: () => fx.revision });
     const res2 = await runPullRequestReview({
       ...baseArgs(fx),
+      agentId: "codex",
       reviewInput: resolvedInput(fx),
       config: makeConfig({ output: "comment", githubReview: true }),
       signal: controller.signal,
@@ -2759,7 +2781,20 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
     // The finalized manifest RETAINS the prior paid evidence (cost + receipt +
     // analysis artifacts), not zeroed aborted-before-work evidence.
     const m2 = readManifest(fx.workspaceDir, res2.runId);
-    expect(m2.costUsd).toBeCloseTo(0.7, 5);
+    expect(m2.startedAt).toBe(seeded.startedAt);
+    expect(m2.runtime).toEqual(seeded.runtime);
+    expect(m2.toolsUsed).toEqual(seeded.toolsUsed);
+    expect(m2.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "review",
+          path: `.otto/runs/${res1.runId}/review.md`,
+        }),
+      ])
+    );
+    expect(m2.costUsd).toBe(seeded.costUsd);
+    expect(m2.tokenUsage).toEqual(seeded.tokenUsage);
+    expect(res2.costUsd).toBe(0);
     const pr2 = m2.pullRequestReview as {
       outcome?: string;
       commentId?: number;

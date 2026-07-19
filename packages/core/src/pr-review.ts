@@ -538,18 +538,14 @@ export async function runPullRequestReview(opts: {
 
   // Cumulative evidence CARRIED FORWARD from a resumed run's prior manifest. On
   // a resume we reuse the original runId and re-init this invocation's totals to
-  // zero; without carrying the prior paid analysis's cost/tokens, finalization
-  // would OVERWRITE the manifest with zero totals and erase the first (paying)
-  // invocation's evidence. Zero on a fresh run, so behavior is unchanged there.
-  let priorManifestCost = 0;
-  let priorManifestUsage: TokenUsage = emptyTokenUsage();
-  if (resumedAnalysis) {
-    const priorManifest = readManifest(workspaceDir, runId);
-    if (priorManifest) {
-      priorManifestCost = priorManifest.costUsd ?? 0;
-      priorManifestUsage = priorManifest.tokenUsage ?? emptyTokenUsage();
-    }
-  }
+  // zero; without carrying the prior paid analysis's manifest, finalization
+  // would erase the first (paying) invocation's provenance and evidence. Null on
+  // a fresh run, so behavior is unchanged there.
+  const priorManifest = resumedAnalysis
+    ? readManifest(workspaceDir, runId)
+    : null;
+  const priorManifestCost = priorManifest?.costUsd ?? 0;
+  const priorManifestUsage = priorManifest?.tokenUsage ?? emptyTokenUsage();
   const stageRecords: StageRecord[] = [];
   const runToolsUsed: ToolUsage[] = [];
   let seq = 0;
@@ -605,29 +601,62 @@ export async function runPullRequestReview(opts: {
     ...over,
   });
 
+  const mergeArtifacts = (
+    prior: RunArtifact[] = [],
+    current: RunArtifact[] = []
+  ): RunArtifact[] => {
+    const merged = new Map<string, RunArtifact>();
+    for (const artifact of [...prior, ...current]) {
+      merged.set(`${artifact.kind}\0${artifact.path}`, artifact);
+    }
+    return [...merged.values()];
+  };
+
+  const mergeTools = (
+    prior: ToolUsage[] = [],
+    current: ToolUsage[] = []
+  ): ToolUsage[] => {
+    const merged = new Map<string, ToolUsage>();
+    for (const usage of [...prior, ...current]) {
+      merged.set(JSON.stringify(usage), usage);
+    }
+    return [...merged.values()];
+  };
+
   const finalizeManifest = (
     exitReason: string,
     evidence: PullRequestReviewEvidence,
     artifacts: RunArtifact[]
   ): void => {
+    const toolsUsed = mergeTools(priorManifest?.toolsUsed, runToolsUsed);
+    const priorArtifacts =
+      evidence.reviewInput.artifactPath === null
+        ? priorManifest?.artifacts.filter(
+            (artifact) => artifact.kind !== "review-input"
+          )
+        : priorManifest?.artifacts;
     const manifest: RunManifest = {
+      ...(priorManifest ?? {}),
       runId,
       bin: "otto-review",
       mode: "github-pr-review",
       inputs: `${repository}#${pullRequest}`,
-      runtime: { id: activeAgentId, displayName: activeAgentId },
-      iterations: 1,
-      completedIterations: 1,
+      runtime: priorManifest?.runtime ?? {
+        id: activeAgentId,
+        displayName: activeAgentId,
+      },
+      iterations: priorManifest?.iterations ?? 1,
+      completedIterations: Math.max(priorManifest?.completedIterations ?? 0, 1),
       // Cumulative across resume: prior paid analysis + this invocation. Never
       // less than the prior manifest, so a resumed publication cannot erase the
       // first invocation's recorded cost/tokens.
       costUsd: priorManifestCost + manifestCost,
       tokenUsage: addTokenUsage(priorManifestUsage, manifestUsage),
       exitReason,
-      artifacts,
-      ...(runToolsUsed.length ? { toolsUsed: runToolsUsed } : {}),
+      artifacts: mergeArtifacts(priorArtifacts, artifacts),
+      ...(toolsUsed.length ? { toolsUsed } : { toolsUsed: undefined }),
       pullRequestReview: evidence,
-      startedAt,
+      startedAt: priorManifest?.startedAt ?? startedAt,
       finishedAt: deps.now().toISOString(),
     };
     writeManifest(workspaceDir, manifest);

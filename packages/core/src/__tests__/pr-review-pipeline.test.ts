@@ -856,6 +856,8 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
         deps: { analyze: fake.fn, github: gh.github, stdout, now },
       });
       expect(res.status).toBe("skipped");
+      // EXPLICIT busy reason — never inferred from costUsd.
+      expect(res.skipReason).toBe("busy");
       expect(fake.invocationCount()).toBe(0);
       expect(gh.calls.create).toBe(0);
     } finally {
@@ -892,6 +894,10 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
       deps: { analyze, github: gh.github, stdout, now },
     });
     expect(analyzed).toBe(1);
+    expect(res.status).toBe("skipped");
+    // EXPLICIT interrupted reason — distinguishes this paid-but-unpublished skip
+    // from a busy skip WITHOUT relying on costUsd (Codex would report 0 here).
+    expect(res.skipReason).toBe("interrupted");
     // The decisive guarantee: NO remote comment was published (no double-review).
     expect(gh.calls.create).toBe(0);
     // Cost is the REAL accumulated spend (5 lenses × 0.1 + verify 0.2 = 0.7), not 0.
@@ -1012,6 +1018,64 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
     expect(res2.runId).toBe(res1.runId); // same run bundle, resumed
     expect(gh2.calls.create).toBe(1);
     expect(res2.commentId).toBe(gh2.store[0].id);
+  });
+
+  it("(S6b/#5) a resumed publication PRESERVES the prior invocation's cost/token evidence in the finalized manifest (not overwritten to zero)", async () => {
+    // First attempt: analysis PAYS (0.7, tokens 60/30) then the comment write
+    // throws transiently → publish-failed with a resumable state + manifest.
+    const fake1 = makeFakeAnalyze({});
+    const gh1 = makeCommentGithub({
+      current: () => fx.revision,
+      createError: new GitHubPrError(
+        "rate limited (HTTP 429)",
+        "rate-limit",
+        true,
+        429
+      ),
+    });
+    const res1 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake1.fn, github: gh1.github, stdout, now },
+    });
+    expect(res1.status).toBe("publish-failed");
+    const m1 = readManifest(fx.workspaceDir, res1.runId);
+    expect(m1.costUsd).toBeCloseTo(0.7, 5);
+    expect((m1.tokenUsage as { inputTokens: number }).inputTokens).toBe(60);
+    expect((m1.tokenUsage as { outputTokens: number }).outputTokens).toBe(30);
+
+    // Second attempt: resume WITHOUT re-analyzing (this invocation spends 0), the
+    // comment now publishes and the run succeeds under the SAME runId.
+    const fake2 = {
+      fn: async () => {
+        throw new Error("analysis must not run on resume");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh2 = makeCommentGithub({ current: () => fx.revision });
+    const res2 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: fake2.fn as never,
+        github: gh2.github,
+        stdout,
+        now: later,
+      },
+    });
+    expect(res2.status).toBe("succeeded");
+    expect(res2.runId).toBe(res1.runId);
+    // The daemon's per-invocation watch-budget counts ONLY this run's spend (0).
+    expect(res2.costUsd).toBe(0);
+    // But the finalized manifest must RETAIN the prior paid analysis's evidence —
+    // cumulative, not overwritten to zero.
+    const m2 = readManifest(fx.workspaceDir, res2.runId);
+    expect(m2.costUsd).toBeCloseTo(0.7, 5);
+    expect((m2.tokenUsage as { inputTokens: number }).inputTokens).toBe(60);
+    expect((m2.tokenUsage as { outputTokens: number }).outputTokens).toBe(30);
   });
 
   it("(S7) comment mode reuses an existing remote comment when local state was lost (no analysis, no pay)", async () => {

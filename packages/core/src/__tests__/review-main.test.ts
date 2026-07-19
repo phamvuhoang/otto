@@ -394,10 +394,10 @@ describe("runReview", () => {
       expect(err.join("")).not.toMatch(/no.*output.*(published|delivered)/i);
     });
 
-    it("skipped with zero cost states another process is already reviewing and no work was done", async () => {
+    it("skipped busy states another process is already reviewing and no work was done, exit 0 (independent of costUsd)", async () => {
       const { deps } = makeDeps({
         runOne: vi.fn(async () =>
-          okResult({ status: "skipped", costUsd: 0 })
+          okResult({ status: "skipped", skipReason: "busy", costUsd: 0 })
         ) as never,
       });
       await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
@@ -406,16 +406,38 @@ describe("runReview", () => {
       expect(err.join("")).toMatch(/no work was done/i);
     });
 
-    it("skipped with nonzero cost states analysis completed but publication was interrupted, and the run is resumable", async () => {
+    it("skipped interrupted states analysis completed but publication was interrupted, is resumable, and exits 1", async () => {
       const { deps } = makeDeps({
         runOne: vi.fn(async () =>
-          okResult({ status: "skipped", costUsd: 0.42 })
+          okResult({
+            status: "skipped",
+            skipReason: "interrupted",
+            costUsd: 0.42,
+          })
         ) as never,
       });
       await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
-      expect(exitCode).toBeNull();
+      expect(exitCode).toBe(1);
       expect(err.join("")).toMatch(/analysis (completed|ran)/i);
       expect(err.join("")).toMatch(/resum/i);
+      expect(err.join("")).not.toMatch(/no work was done/i);
+    });
+
+    it("skipped interrupted with costUsd:0 (the Codex case) is NOT misreported as busy — still resumable message + exit 1", async () => {
+      const { deps } = makeDeps({
+        runOne: vi.fn(async () =>
+          okResult({
+            status: "skipped",
+            skipReason: "interrupted",
+            costUsd: 0,
+          })
+        ) as never,
+      });
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(exitCode).toBe(1);
+      expect(err.join("")).toMatch(/analysis (completed|ran)/i);
+      expect(err.join("")).toMatch(/resum/i);
+      expect(err.join("")).not.toMatch(/already.*reviewing/i);
       expect(err.join("")).not.toMatch(/no work was done/i);
     });
   });

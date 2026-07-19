@@ -340,9 +340,17 @@ export async function runReview(
   //                     against a stale head is correct, not a failure.
   //   cancelled      -> 0: the PR became closed/draft/unlabelled mid-run;
   //                     declining to publish is correct, not a failure.
-  //   skipped        -> 0: another process already holds the review lease for
-  //                     this revision; no analysis ran and no output was
-  //                     published.
+  //   skipped        -> driven by `result.skipReason` (NOT costUsd — Codex
+  //                     stages report costUsd:0, so a cost heuristic misreports
+  //                     an interrupted Codex run as busy):
+  //                       "busy"        -> 0: another process already holds the
+  //                                       review lease; no analysis ran and no
+  //                                       output was published.
+  //                       "interrupted" -> 1: paid analysis completed and a
+  //                                       resumable state was persisted, but
+  //                                       publication did NOT finish — a script
+  //                                       must see this as a failure so a missing
+  //                                       publication is never read as success.
   if (result.status === "publish-failed") {
     const delivered: string[] = [];
     if (result.commentId != null) {
@@ -396,20 +404,24 @@ export async function runReview(
   }
 
   if (result.status === "skipped") {
-    // costUsd > 0 is the agreed discriminator: analysis is paid model work,
-    // so a nonzero cost means the run reached (and paid for) analysis before
-    // being interrupted, and its state was persisted for a resumable re-run.
-    // A zero cost means the run never started — another process already held
-    // the lease for this revision and no work happened at all.
-    if (result.costUsd > 0) {
+    // EXPLICIT reason drives the message AND exit code — never costUsd (Codex
+    // stages report costUsd:0 even for an interrupted-after-analysis run, so a
+    // cost heuristic would misreport it as busy and exit 0 despite a missing
+    // publication).
+    if (result.skipReason === "interrupted") {
+      // Paid analysis ran and a resumable state was persisted, but publication
+      // did not finish. Exit NONZERO so scripts do not read a missing
+      // publication as success; re-running resumes from the saved analysis.
       deps.stderr(
         `review skipped: analysis completed but publication was interrupted — run state was saved; re-run to resume\n`
       );
-    } else {
-      deps.stderr(
-        `review skipped: another process is already reviewing this revision — no work was done\n`
-      );
+      return deps.exit(1);
     }
+    // Default (skipReason === "busy" or absent): another process owns the lease
+    // and no work was done — declining is correct, exit 0.
+    deps.stderr(
+      `review skipped: another process is already reviewing this revision — no work was done\n`
+    );
     return;
   }
 }

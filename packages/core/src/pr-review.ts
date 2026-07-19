@@ -91,6 +91,7 @@ import {
 import type { PullRequestReviewConfig } from "./review-cli.js";
 import {
   allocateRunId,
+  readManifest,
   runReportDir,
   writeManifest,
   writeRunReport,
@@ -218,6 +219,16 @@ export type PullRequestReviewRunResult = {
   retryable?: boolean;
   /** For a retryable `publish-failed` result: the next-eligible timestamp. */
   nextRetryAt?: string;
+  /**
+   * For a `skipped` result: WHY it was skipped. This is the EXPLICIT
+   * discriminator between the two skip producers — never inferred from
+   * `costUsd` (Codex stages always report `costUsd: 0`, so a cost heuristic
+   * misclassifies an interrupted Codex run as busy).
+   *   - `"busy"`        another process already owns the lease; NO work happened.
+   *   - `"interrupted"` paid analysis completed and a resumable state was
+   *                     persisted, but publication did not finish.
+   */
+  skipReason?: "busy" | "interrupted";
   error?: string;
 };
 
@@ -486,8 +497,26 @@ export async function runPullRequestReview(opts: {
 
   // Running evidence accumulated across every recorded stage (both attempts of a
   // fallback switch). `addTokenUsage` keeps the manifest totals exact.
+  // NOTE: `manifestCost`/`manifestUsage` track ONLY THIS invocation's spend —
+  // this is what the returned result reports so the daemon's per-invocation
+  // watch-budget counts only what this run actually paid.
   let manifestCost = 0;
   let manifestUsage: TokenUsage = emptyTokenUsage();
+
+  // Cumulative evidence CARRIED FORWARD from a resumed run's prior manifest. On
+  // a resume we reuse the original runId and re-init this invocation's totals to
+  // zero; without carrying the prior paid analysis's cost/tokens, finalization
+  // would OVERWRITE the manifest with zero totals and erase the first (paying)
+  // invocation's evidence. Zero on a fresh run, so behavior is unchanged there.
+  let priorManifestCost = 0;
+  let priorManifestUsage: TokenUsage = emptyTokenUsage();
+  if (resumedAnalysis) {
+    const priorManifest = readManifest(workspaceDir, runId);
+    if (priorManifest) {
+      priorManifestCost = priorManifest.costUsd ?? 0;
+      priorManifestUsage = priorManifest.tokenUsage ?? emptyTokenUsage();
+    }
+  }
   const stageRecords: StageRecord[] = [];
   const runToolsUsed: ToolUsage[] = [];
   let seq = 0;
@@ -555,8 +584,11 @@ export async function runPullRequestReview(opts: {
       runtime: { id: activeAgentId, displayName: activeAgentId },
       iterations: 1,
       completedIterations: 1,
-      costUsd: manifestCost,
-      tokenUsage: manifestUsage,
+      // Cumulative across resume: prior paid analysis + this invocation. Never
+      // less than the prior manifest, so a resumed publication cannot erase the
+      // first invocation's recorded cost/tokens.
+      costUsd: priorManifestCost + manifestCost,
+      tokenUsage: addTokenUsage(priorManifestUsage, manifestUsage),
       exitReason,
       artifacts,
       ...(runToolsUsed.length ? { toolsUsed: runToolsUsed } : {}),
@@ -612,6 +644,7 @@ export async function runPullRequestReview(opts: {
    */
   const busySkippedResult = (): PullRequestReviewRunResult => ({
     status: "skipped",
+    skipReason: "busy",
     runId,
     repository,
     pullRequest,
@@ -734,12 +767,16 @@ export async function runPullRequestReview(opts: {
       );
       return {
         status: "skipped",
+        // Paid analysis ran and a resumable state was persisted, but publication
+        // did not finish. EXPLICIT reason — do NOT infer from costUsd, which is
+        // 0 for Codex stages even here.
+        skipReason: "interrupted",
         runId,
         repository,
         pullRequest,
         headSha,
         inputFingerprint,
-        // The real accumulated cost — NEVER 0 — so the daemon's budget counts it.
+        // This invocation's accumulated spend, for the daemon's budget accounting.
         costUsd: manifestCost,
         outcome,
         ...(commentId !== undefined ? { commentId } : {}),

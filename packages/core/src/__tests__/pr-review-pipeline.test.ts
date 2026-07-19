@@ -2048,6 +2048,118 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
     expect(existsSync(join(fx.workspaceDir, inputArtifact!.path))).toBe(true);
   });
 
+  it("(#3f) recovery: a valid single comment + >1 owned formal reviews is publish-failed but PRESERVES the proven comment receipt (result/state/evidence) and writes the referenced input + a report", async () => {
+    // A single owned summary comment carrying THIS composite identity proves the
+    // comment is published (its receipt is KNOWN) BEFORE the duplicate formal
+    // reviews are discovered. The permanent >1-review failure must NOT zero that
+    // proven receipt to a misleading "no output delivered", and must not leave a
+    // dangling review-input reference or an absent run report.
+    const existingComment: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const rmark = reviewMarker("acme/widget", 7, fx.headSha, fp());
+    const dupReview = (id: number): GitHubReview => ({
+      id,
+      body: [rmark, "", "formal review body"].join("\n"),
+      author: "otto-bot",
+      commitId: fx.headSha,
+      state: "CHANGES_REQUESTED",
+    });
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when recovery hits a >1 conflict"
+        );
+      },
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [existingComment],
+      reviews: [dupReview(6161), dupReview(6162)],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    // Permanent failure — but the proven comment receipt is CARRIED, not zeroed.
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(false);
+    expect(res.commentId).toBe(4242);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    // NOT outputs:{} — the proven comment receipt survives.
+    expect(st?.outputs.comment?.commentId).toBe(4242);
+    // Evidence retains the receipt.
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect((m.pullRequestReview as { commentId?: number }).commentId).toBe(
+      4242
+    );
+    // Referenced review-input artifact + a run report exist (no dangling ref).
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(existsSync(join(runDir, "review-input.md"))).toBe(true);
+    expect(existsSync(join(runDir, "report.md"))).toBe(true);
+    const artifacts = m.artifacts as Array<{ kind: string; path: string }>;
+    const inputArtifact = artifacts.find((a) => a.kind === "review-input");
+    expect(inputArtifact).toBeDefined();
+    expect(existsSync(join(fx.workspaceDir, inputArtifact!.path))).toBe(true);
+  });
+
+  it("(#pre-abort) an acquired lease with an ALREADY-aborted caller signal is interrupted (NOT busy), finalizes evidence, and releases the lease", async () => {
+    // The lease WAS acquired (no other holder), then the caller shut down before
+    // ANY work. That is a caller-abort, NOT lock contention: it must not claim
+    // "another process is already reviewing this revision", and it must finalize
+    // evidence and release the acquired lease.
+    const controller = new AbortController();
+    controller.abort();
+    const fake = {
+      fn: async () => {
+        throw new Error("aborted-before-work must not analyze");
+      },
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      signal: controller.signal,
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("skipped");
+    // Interrupted (caller-abort), NOT busy ("another process").
+    expect(res.skipReason).toBe("interrupted");
+    expect(res.skipReason).not.toBe("busy");
+    // Evidence finalized (manifest written, referenced input present — no dangling).
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(m.exitReason).toBe("aborted");
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(existsSync(join(runDir, "review-input.md"))).toBe(true);
+    // The acquired lease was released → a fresh acquire for the same identity
+    // succeeds (a busy path would have left it held elsewhere; here WE held it).
+    const acq = await acquireReviewLease({
+      workspaceDir: fx.workspaceDir,
+      repository: "acme/widget",
+      pullRequest: 7,
+      headSha: fx.headSha,
+      inputFingerprint: fp(),
+      runId: "after-abort",
+    });
+    expect(acq.acquired).toBe(true);
+    if (acq.acquired) await acq.lease.release();
+  });
+
   it("(#7) a successful review detaches its caller-signal listener in finally — N runs against one long-lived signal do not accumulate listeners", async () => {
     // The caller's `signal` is a long-lived daemon signal reused across every
     // watch iteration. Each run forwards it into a run-scoped abort via an

@@ -180,19 +180,10 @@ try {
   // offline `npm install --offline` above intentionally does NOT fetch or
   // node-gyp-build it — that's the whole point: a missing/unbuildable native
   // addon must never break install, `--help`, `--print-config`, or any other
-  // bin (all verified below WITHOUT fs-ext present). But the one-shot review
-  // (step 4e) exercises the REAL lease, which needs the native flock. So supply
-  // the workspace's already-built fs-ext into the install prefix — simulating a
-  // normal environment where the optional dep's native build succeeded — so the
-  // review runs offline without weakening its end-to-end assertions. fs-ext's
-  // runtime need is only its own compiled `.node`; `nan` is build-time only.
-  const workspaceRequire = createRequire(
-    join(repo, "packages", "core", "package.json")
-  );
-  const fsExtSrc = dirname(workspaceRequire.resolve("fs-ext"));
-  cpSync(fsExtSrc, join(installDir, "node_modules", "fs-ext"), {
-    recursive: true,
-  });
+  // non-lease bin path. The bin checks below (4a–4d) therefore run with fs-ext
+  // DELIBERATELY ABSENT, independently demonstrating it is inert by default;
+  // the built addon is copied in only just before the one-shot review (4e),
+  // which is the sole step that exercises the REAL lease.
 
   // Invoke the installed entry with node (cross-platform; .bin shims differ by
   // OS). Running from installDir forces @phamvuhoang/otto-core to resolve from
@@ -282,6 +273,21 @@ try {
     reviewConfig.includes("deferred"),
     reviewConfig
   );
+
+  // The one-shot review (4e) exercises the REAL lease, which needs the native
+  // flock. Supply the workspace's already-built fs-ext into the install prefix
+  // NOW — AFTER the non-lease bin checks (4a–4d) already ran without it —
+  // simulating a normal environment where the optional dep's native build
+  // succeeded, so the review runs offline without weakening its end-to-end
+  // assertions. fs-ext's runtime need is only its own compiled `.node`; `nan`
+  // is build-time only.
+  const workspaceRequire = createRequire(
+    join(repo, "packages", "core", "package.json")
+  );
+  const fsExtSrc = dirname(workspaceRequire.resolve("fs-ext"));
+  cpSync(fsExtSrc, join(installDir, "node_modules", "fs-ext"), {
+    recursive: true,
+  });
 
   // 4e. One full installed one-shot text review, zero network: a local bare
   //     origin + target checkout with base/head commits and

@@ -655,6 +655,57 @@ export async function runPullRequestReview(opts: {
     costUsd: 0,
   });
 
+  /**
+   * Materialize the review-input artifact + a run report on a terminal path that
+   * would otherwise finalize a manifest referencing `review-input.md` (via
+   * `artifactList`) without ever having written it, and with no report on disk.
+   * Mirrors the recovery SUCCESS path + `finishPublication`: no dangling manifest
+   * reference, evidence retrievable via otto-explain. Best-effort — a run-dir
+   * write hiccup must not mask the terminal outcome being recorded.
+   */
+  const materializeReferencedInput = (report: string): void => {
+    try {
+      deps.writeReviewInput({ workspaceDir, runId, input: reviewInput });
+    } catch {
+      // Best-effort: the run dir may be unwritable; still finalize the manifest.
+    }
+    try {
+      writeRunReport(workspaceDir, runId, report);
+    } catch {
+      // Best-effort.
+    }
+  };
+
+  /**
+   * ACQUIRED then aborted before any work: the lease WAS taken (this is NOT lock
+   * contention), but the caller shut down before analysis. Distinct from
+   * `busySkippedResult` (lease not acquired → "another process" is misleading
+   * here) — surface the interrupted semantics, finalize retrievable evidence, and
+   * let the outer `finally` release the acquired lease. No spend (cost 0).
+   */
+  const interruptedBeforeWorkResult = (): PullRequestReviewRunResult => {
+    materializeReferencedInput(
+      `# Otto review — interrupted before analysis\n\n` +
+        `- Repository: ${repository}\n` +
+        `- Pull request: #${pullRequest}\n` +
+        `- Head: ${revision.headSha}\n` +
+        `- Review input: ${reviewInput.kind} (${inputFingerprint})\n\n` +
+        `The run acquired its lease but the caller shut down before any ` +
+        `analysis ran; no remote output was published. Re-run to complete it.\n`
+    );
+    finalizeManifest("aborted", buildEvidence(), artifactList());
+    return {
+      status: "skipped",
+      skipReason: "interrupted",
+      runId,
+      repository,
+      pullRequest,
+      headSha,
+      inputFingerprint,
+      costUsd: 0,
+    };
+  };
+
   /** Persist the durable per-composite-identity review state (best-effort). */
   const persistState = (
     over: Partial<PullRequestReviewState> &
@@ -1196,7 +1247,12 @@ export async function runPullRequestReview(opts: {
    * non-retryable `publish-failed` and return it, NEVER a silent success.
    */
   const recoveryPermanentFailure = (
-    err: unknown
+    err: unknown,
+    // A receipt already PROVEN before the permanent `>1` conflict was found (a
+    // valid single summary comment resolved before the duplicate FORMAL reviews
+    // were discovered). It MUST be carried into the result/state/evidence — not
+    // zeroed to a misleading "no output delivered".
+    proven: { commentId?: number; reviewId?: number } = {}
   ): PullRequestReviewRunResult => {
     const gerr =
       err instanceof GitHubPrError
@@ -1207,14 +1263,53 @@ export async function runPullRequestReview(opts: {
             false
           );
     const attempts = priorAttempts + 1;
+    // Write the review-input artifact + a run report BEFORE finalizing (the
+    // finalized manifest references review-input.md via artifactList): no
+    // dangling reference, evidence retrievable — same discipline as the recovery
+    // SUCCESS path and finishPublication.
+    materializeReferencedInput(
+      `# Otto review — recovery reconciliation failed\n\n` +
+        `- Repository: ${repository}\n` +
+        `- Pull request: #${pullRequest}\n` +
+        `- Head: ${revision.headSha}\n` +
+        `- Review input: ${reviewInput.kind} (${inputFingerprint})\n\n` +
+        `Recovery could not reconcile a single owned output: ${gerr.message}\n`
+    );
+    const outputs: PullRequestReviewOutputState = {
+      ...(proven.commentId !== undefined
+        ? {
+            comment: {
+              status: "succeeded" as const,
+              commentId: proven.commentId,
+            },
+          }
+        : {}),
+      ...(proven.reviewId !== undefined
+        ? {
+            githubReview: {
+              status: "succeeded" as const,
+              reviewId: proven.reviewId,
+            },
+          }
+        : {}),
+    };
     persistState({
       status: "publish-failed",
-      outputs: {},
+      outputs,
       attempts,
       retryable: gerr.retryable,
       error: gerr.message,
     });
-    finalizeManifest("publish-failed", buildEvidence(), artifactList());
+    finalizeManifest(
+      "publish-failed",
+      buildEvidence({
+        ...(proven.commentId !== undefined
+          ? { commentId: proven.commentId }
+          : {}),
+        ...(proven.reviewId !== undefined ? { reviewId: proven.reviewId } : {}),
+      }),
+      artifactList()
+    );
     return {
       status: "publish-failed",
       runId,
@@ -1223,6 +1318,10 @@ export async function runPullRequestReview(opts: {
       headSha,
       inputFingerprint,
       costUsd: manifestCost,
+      ...(proven.commentId !== undefined
+        ? { commentId: proven.commentId }
+        : {}),
+      ...(proven.reviewId !== undefined ? { reviewId: proven.reviewId } : {}),
       retryable: gerr.retryable,
       error: gerr.message,
     };
@@ -1307,7 +1406,10 @@ export async function runPullRequestReview(opts: {
             `this review — remove the duplicates so a single owned review remains`
         );
       } catch (err) {
-        return recoveryPermanentFailure(err);
+        // The single owned summary comment was ALREADY proven above (its head +
+        // input markers matched): carry that receipt into the permanent failure
+        // rather than discarding it as "no output delivered".
+        return recoveryPermanentFailure(err, { commentId: owned.id });
       }
       // Comment present but the owned formal review is absent: do NOT declare
       // success. Fall through so the normal analysis path completes the review.
@@ -1428,9 +1530,11 @@ export async function runPullRequestReview(opts: {
   }
 
   try {
-    // Caller shutdown already fired before any work happened: skip cheaply with
-    // no analysis and no finalize (the busy-skip semantics), cost 0.
-    if (runAbort.signal.aborted) return busySkippedResult();
+    // The lease WAS acquired but the caller shut down before any work: this is a
+    // caller-abort, NOT lock contention. Surface the interrupted semantics (never
+    // the "another process is already reviewing" busy result) and finalize
+    // retrievable evidence; the acquired lease is released in `finally`.
+    if (runAbort.signal.aborted) return interruptedBeforeWorkResult();
     // Resume a crashed/failed run from persisted analysis — never re-analyze.
     if (resumedAnalysis) {
       return finishPublication(resumedAnalysis, priorOutputs);

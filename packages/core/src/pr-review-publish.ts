@@ -33,8 +33,8 @@ import {
   type GitHubReview,
 } from "./github-pr.js";
 import {
-  headMarker,
-  inputMarker,
+  parseCanonicalFormalEnvelope,
+  parseCanonicalSummaryEnvelope,
   renderFormalReviewBody,
   renderInlineComment,
   reviewMarker,
@@ -243,7 +243,14 @@ export function upsertSummaryComment(opts: {
 
   const existing: GitHubComment | null = resolveOwnedUnique(
     comments,
-    (c) => c.author === viewer.login && c.body.includes(marker),
+    (c) => {
+      const envelope = parseCanonicalSummaryEnvelope(c.body);
+      return (
+        c.author === viewer.login &&
+        envelope?.repository === repository &&
+        envelope.pullRequest === pullRequest
+      );
+    },
     (count) =>
       `found ${count} Otto summary comments carrying ${marker} on ` +
       `${repository}#${pullRequest}; refusing to guess which to update — ` +
@@ -256,12 +263,11 @@ export function upsertSummaryComment(opts: {
     return { commentId: created.id, action: "created", body };
   }
 
-  const currentHead = headMarker(headSha);
-  const currentInput = inputMarker(inputFingerprint);
+  const existingEnvelope = parseCanonicalSummaryEnvelope(existing.body);
   if (
     existing.body === body &&
-    existing.body.includes(currentHead) &&
-    existing.body.includes(currentInput)
+    existingEnvelope?.headSha === headSha &&
+    existingEnvelope.inputFingerprint === inputFingerprint
   ) {
     return { commentId: existing.id, action: "reused", body: existing.body };
   }
@@ -347,7 +353,16 @@ export function publishFormalReview(opts: {
 
   const owned: GitHubReview | null = resolveOwnedUnique(
     reviews,
-    (r) => r.author === viewer.login && r.body.includes(marker),
+    (r) => {
+      const envelope = parseCanonicalFormalEnvelope(r.body);
+      return (
+        r.author === viewer.login &&
+        envelope?.repository === repository &&
+        envelope.pullRequest === pullRequest &&
+        envelope.headSha === headSha &&
+        envelope.inputFingerprint === review.reviewInput.fingerprint
+      );
+    },
     (count) =>
       `found ${count} Otto formal reviews carrying ${marker} on ` +
       `${repository}#${pullRequest}; refusing to guess which represents this ` +

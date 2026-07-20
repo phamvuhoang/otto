@@ -8,11 +8,14 @@
  */
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 
 import type { Finding } from "./review-severity.js";
@@ -86,12 +89,10 @@ import {
   buildReviewContext,
 } from "./pr-review-worktree.js";
 import {
-  headMarker,
-  inputMarker,
+  parseCanonicalFormalEnvelope,
+  parseCanonicalSummaryEnvelope,
   renderCanonicalReview,
   renderReviewText,
-  reviewMarker,
-  summaryMarker,
   writeCanonicalReview,
   type CanonicalReview,
   type PublishedReviewFinding,
@@ -254,7 +255,7 @@ export type PullRequestReviewRunResult = {
  * publish deterministically from local evidence alone.
  */
 export type PullRequestReviewAnalysisArtifact = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   repository: string;
   pullRequest: number;
   url: string;
@@ -273,7 +274,146 @@ export type PullRequestReviewAnalysisArtifact = {
   severity: ReviewAnalysisResult["severity"];
   skill: ReviewSkillSelection;
   diffArtifact: string;
+  diffSha256: string;
 };
+
+const SHA_RE = /^[0-9a-fA-F]{40,64}$/;
+const RUN_ID_RE = /^[A-Za-z0-9._-]+$/;
+const REVIEW_INPUT_KINDS = new Set([
+  "none",
+  "github-issue",
+  "local-file",
+  "prompt",
+]);
+const OUTCOMES = new Set<PullRequestReviewOutcome>([
+  "changes-requested",
+  "comment",
+  "approved",
+]);
+const SEVERITIES = new Set(["blocker", "major", "minor", "nit"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = []
+): boolean {
+  const allowed = new Set([...required, ...optional]);
+  return (
+    required.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every((key) => allowed.has(key))
+  );
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isOptionalNonEmptyString(value: unknown): value is string | undefined {
+  return value === undefined || isNonEmptyString(value);
+}
+
+function isCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isFindingLocation(value: unknown): value is string | undefined {
+  if (value === undefined) return true;
+  if (typeof value !== "string") return false;
+  const match = value.match(/^([1-9]\d*)(?:-([1-9]\d*))?$/);
+  if (!match) return false;
+  const start = Number(match[1]);
+  const end = match[2] === undefined ? start : Number(match[2]);
+  return (
+    Number.isSafeInteger(start) && Number.isSafeInteger(end) && end >= start
+  );
+}
+
+function parseFinding(value: unknown, published: boolean): Finding | null {
+  if (!isRecord(value)) return null;
+  const required = published
+    ? ["severity", "file", "claim", "why", "inlineEligible"]
+    : ["severity", "file", "claim", "why"];
+  const optional = published
+    ? ["line", "suggestedFix", "lens", "side", "mappedLine"]
+    : ["line", "suggestedFix", "lens"];
+  if (!hasKeys(value, required, optional)) return null;
+  if (
+    typeof value.severity !== "string" ||
+    !SEVERITIES.has(value.severity) ||
+    !isNonEmptyString(value.file) ||
+    !isFindingLocation(value.line) ||
+    !isNonEmptyString(value.claim) ||
+    !isNonEmptyString(value.why) ||
+    !isOptionalNonEmptyString(value.suggestedFix) ||
+    !isOptionalNonEmptyString(value.lens)
+  ) {
+    return null;
+  }
+  if (published) {
+    if (typeof value.inlineEligible !== "boolean") return null;
+    if (value.inlineEligible) {
+      if (
+        (value.side !== "LEFT" && value.side !== "RIGHT") ||
+        !Number.isSafeInteger(value.mappedLine) ||
+        (value.mappedLine as number) <= 0
+      ) {
+        return null;
+      }
+    } else if (value.side !== undefined || value.mappedLine !== undefined) {
+      return null;
+    }
+  }
+  return value as unknown as Finding;
+}
+
+function parseSkill(value: unknown): ReviewSkillSelection | null {
+  if (!isRecord(value)) return null;
+  if (
+    !hasKeys(value, [
+      "name",
+      "version",
+      "source",
+      "checksum",
+      "injection",
+      "usage",
+    ]) ||
+    !isNonEmptyString(value.name) ||
+    !isNonEmptyString(value.version) ||
+    !isNonEmptyString(value.source) ||
+    !FINGERPRINT_RE.test(String(value.checksum)) ||
+    typeof value.injection !== "string" ||
+    !isRecord(value.usage)
+  ) {
+    return null;
+  }
+  const usage = value.usage;
+  if (
+    !hasKeys(
+      usage,
+      ["name", "version", "source", "stage", "checksum"],
+      ["ref", "reasons"]
+    ) ||
+    usage.name !== value.name ||
+    usage.version !== value.version ||
+    usage.source !== value.source ||
+    usage.stage !== "pr-review" ||
+    usage.checksum !== value.checksum ||
+    !isOptionalNonEmptyString(usage.ref) ||
+    (usage.reasons !== undefined &&
+      (!Array.isArray(usage.reasons) || !usage.reasons.every(isNonEmptyString)))
+  ) {
+    return null;
+  }
+  return value as unknown as ReviewSkillSelection;
+}
+
+function fileSha256(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
 
 /**
  * Read + identity-validate a persisted analysis artifact. Returns `null` when the
@@ -286,27 +426,141 @@ export function readReviewAnalysisArtifact(opts: {
   runId: string;
   repository: string;
   pullRequest: number;
+  baseSha: string;
   headSha: string;
   inputFingerprint: string;
+  reviewInput: ResolvedReviewInput;
 }): PullRequestReviewAnalysisArtifact | null {
   try {
-    const path = join(
-      runReportDir(opts.workspaceDir, opts.runId),
-      "analysis.json"
-    );
-    const raw = JSON.parse(
-      readFileSync(path, "utf8")
-    ) as PullRequestReviewAnalysisArtifact;
     if (
-      raw.schemaVersion !== 1 ||
-      raw.repository !== opts.repository ||
-      raw.pullRequest !== opts.pullRequest ||
-      raw.headSha !== opts.headSha ||
-      raw.reviewInput?.fingerprint !== opts.inputFingerprint
+      opts.runId === "." ||
+      opts.runId === ".." ||
+      !RUN_ID_RE.test(opts.runId) ||
+      !SHA_RE.test(opts.baseSha) ||
+      !SHA_RE.test(opts.headSha) ||
+      !FINGERPRINT_RE.test(opts.inputFingerprint)
     ) {
       return null;
     }
-    return raw;
+    const runDir = runReportDir(opts.workspaceDir, opts.runId);
+    const path = join(runDir, "analysis.json");
+    if (!lstatSync(path).isFile()) return null;
+    const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!isRecord(raw)) return null;
+    if (
+      !hasKeys(raw, [
+        "schemaVersion",
+        "repository",
+        "pullRequest",
+        "url",
+        "title",
+        "baseSha",
+        "headSha",
+        "reviewInput",
+        "runId",
+        "analyzedAt",
+        "outcome",
+        "confirmed",
+        "rejected",
+        "severity",
+        "skill",
+        "diffArtifact",
+        "diffSha256",
+      ]) ||
+      raw.schemaVersion !== 2 ||
+      raw.repository !== opts.repository ||
+      raw.pullRequest !== opts.pullRequest ||
+      !isNonEmptyString(raw.url) ||
+      typeof raw.title !== "string" ||
+      raw.baseSha !== opts.baseSha ||
+      raw.headSha !== opts.headSha ||
+      raw.runId !== opts.runId ||
+      typeof raw.analyzedAt !== "string" ||
+      new Date(raw.analyzedAt).toISOString() !== raw.analyzedAt ||
+      typeof raw.outcome !== "string" ||
+      !OUTCOMES.has(raw.outcome as PullRequestReviewOutcome) ||
+      !Array.isArray(raw.confirmed) ||
+      !Array.isArray(raw.rejected) ||
+      !isRecord(raw.reviewInput) ||
+      !isRecord(raw.severity)
+    ) {
+      return null;
+    }
+
+    const expectedInputPath = `.otto/runs/${opts.runId}/review-input.md`;
+    if (
+      !hasKeys(raw.reviewInput, [
+        "kind",
+        "source",
+        "fingerprint",
+        "artifactPath",
+      ]) ||
+      typeof raw.reviewInput.kind !== "string" ||
+      !REVIEW_INPUT_KINDS.has(raw.reviewInput.kind) ||
+      raw.reviewInput.kind !== opts.reviewInput.kind ||
+      raw.reviewInput.source !== opts.reviewInput.source ||
+      raw.reviewInput.fingerprint !== opts.inputFingerprint ||
+      raw.reviewInput.fingerprint !== opts.reviewInput.fingerprint ||
+      raw.reviewInput.artifactPath !== expectedInputPath
+    ) {
+      return null;
+    }
+
+    const confirmed = raw.confirmed.map((finding) =>
+      parseFinding(finding, true)
+    );
+    const rejected = raw.rejected.map((finding) =>
+      parseFinding(finding, false)
+    );
+    if (
+      confirmed.some((finding) => finding === null) ||
+      rejected.some((finding) => finding === null)
+    )
+      return null;
+
+    if (
+      !hasKeys(raw.severity, [
+        "blocker",
+        "major",
+        "minor",
+        "nit",
+        "suppressed",
+      ]) ||
+      !Object.values(raw.severity).every(isCount)
+    ) {
+      return null;
+    }
+    const counts = { blocker: 0, major: 0, minor: 0, nit: 0 };
+    for (const finding of confirmed as Finding[]) counts[finding.severity]++;
+    if (
+      raw.severity.blocker !== counts.blocker ||
+      raw.severity.major !== counts.major ||
+      raw.severity.minor !== counts.minor ||
+      raw.severity.nit !== counts.nit + (raw.severity.suppressed as number)
+    ) {
+      return null;
+    }
+    if (parseSkill(raw.skill) === null) return null;
+
+    const expectedDiffPath = `.otto/runs/${opts.runId}/pr.diff`;
+    if (
+      raw.diffArtifact !== expectedDiffPath ||
+      typeof raw.diffSha256 !== "string" ||
+      !FINGERPRINT_RE.test(raw.diffSha256)
+    ) {
+      return null;
+    }
+    const diffPath = join(opts.workspaceDir, expectedDiffPath);
+    if (!lstatSync(diffPath).isFile()) return null;
+    const realRunDir = realpathSync(runDir);
+    const realDiffPath = realpathSync(diffPath);
+    if (dirname(realDiffPath) !== realRunDir) return null;
+    if (fileSha256(diffPath) !== raw.diffSha256) return null;
+
+    if (raw.outcome !== outcomeForFindings(confirmed as Finding[])) {
+      return null;
+    }
+    return raw as unknown as PullRequestReviewAnalysisArtifact;
   } catch {
     return null;
   }
@@ -497,8 +751,10 @@ export async function runPullRequestReview(opts: {
       runId: priorState.runId,
       repository,
       pullRequest,
+      baseSha: revision.baseSha,
       headSha,
       inputFingerprint,
+      reviewInput,
     });
     if (resumed) {
       resumedAnalysis = resumed;
@@ -1650,9 +1906,6 @@ export async function runPullRequestReview(opts: {
     } catch {
       return null;
     }
-    const marker = summaryMarker(repository, pullRequest);
-    const h = headMarker(headSha);
-    const i = inputMarker(inputFingerprint);
     let owned: GitHubComment | null;
     try {
       // Resolve uniqueness EXACTLY as upsertSummaryComment does: by author + the
@@ -1664,9 +1917,16 @@ export async function runPullRequestReview(opts: {
       // summary comment that publication rejects still existed on the PR.)
       owned = resolveOwnedUnique(
         comments,
-        (c) => c.author === viewerLogin && c.body.includes(marker),
+        (c) => {
+          const envelope = parseCanonicalSummaryEnvelope(c.body);
+          return (
+            c.author === viewerLogin &&
+            envelope?.repository === repository &&
+            envelope.pullRequest === pullRequest
+          );
+        },
         (count) =>
-          `found ${count} Otto summary comments carrying ${marker} on ` +
+          `found ${count} canonical Otto summary comments on ` +
           `${repository}#${pullRequest}; refusing to guess which to update — ` +
           `remove the duplicates so a single owned comment remains`
       );
@@ -1674,11 +1934,17 @@ export async function runPullRequestReview(opts: {
       return recoveryPermanentFailure(err);
     }
     if (!owned) return null;
+    const summaryEnvelope = parseCanonicalSummaryEnvelope(owned.body);
+    if (!summaryEnvelope) return null;
     // The SINGLE owned comment proves THIS composite identity is published only
     // when it carries the current head AND input markers. A stale-head/older-input
     // owned comment does NOT prove it — fall through to the normal analysis path
     // (which UPDATES that same comment in place) rather than declaring success.
-    if (!owned.body.includes(h) || !owned.body.includes(i)) return null;
+    if (
+      summaryEnvelope.headSha !== headSha ||
+      summaryEnvelope.inputFingerprint !== inputFingerprint
+    )
+      return null;
 
     // Recovery may declare full success ONLY when every configured remote output
     // is provably complete. With --github-review, a crash after the comment but
@@ -1698,19 +1964,22 @@ export async function runPullRequestReview(opts: {
       } catch {
         return null;
       }
-      const rmarker = reviewMarker(
-        repository,
-        pullRequest,
-        headSha,
-        inputFingerprint
-      );
       let ownedReview: GitHubReview | null;
       try {
         ownedReview = resolveOwnedUnique(
           reviewList,
-          (r) => r.author === reviewViewer && r.body.includes(rmarker),
+          (r) => {
+            const envelope = parseCanonicalFormalEnvelope(r.body);
+            return (
+              r.author === reviewViewer &&
+              envelope?.repository === repository &&
+              envelope.pullRequest === pullRequest &&
+              envelope.headSha === headSha &&
+              envelope.inputFingerprint === inputFingerprint
+            );
+          },
           (count) =>
-            `found ${count} Otto formal reviews carrying ${rmarker} on ` +
+            `found ${count} canonical Otto formal reviews for this identity on ` +
             `${repository}#${pullRequest}; refusing to guess which represents ` +
             `this review — remove the duplicates so a single owned review remains`
         );
@@ -1774,13 +2043,16 @@ export async function runPullRequestReview(opts: {
     });
     finalizeManifest(
       "succeeded",
-      recoveredReviewId !== undefined
-        ? buildEvidence({
-            githubReview: true,
-            commentId: owned.id,
-            reviewId: recoveredReviewId,
-          })
-        : buildEvidence(),
+      buildEvidence({
+        outcome: summaryEnvelope.outcome,
+        confirmed: summaryEnvelope.confirmed,
+        rejected: summaryEnvelope.rejected,
+        githubReview: recoveredReviewId !== undefined,
+        commentId: owned.id,
+        ...(recoveredReviewId !== undefined
+          ? { reviewId: recoveredReviewId }
+          : {}),
+      }),
       artifactList([{ kind: "review", path: written.artifactPath }])
     );
     return {
@@ -1791,6 +2063,7 @@ export async function runPullRequestReview(opts: {
       headSha,
       inputFingerprint,
       costUsd: 0,
+      outcome: summaryEnvelope.outcome,
       reviewArtifact: written.artifactPath,
       commentId: owned.id,
       ...(recoveredReviewId !== undefined
@@ -2161,7 +2434,7 @@ export async function runPullRequestReview(opts: {
         ? mapFindingsToDiff(analysis.confirmed, wt.diffText)
         : analysis.confirmed.map((f) => ({ ...f, inlineEligible: false }));
       const analysisArtifact: PullRequestReviewAnalysisArtifact = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         repository,
         pullRequest,
         url: revision.url,
@@ -2182,6 +2455,9 @@ export async function runPullRequestReview(opts: {
         severity: analysis.severity,
         skill,
         diffArtifact: diffArtifactRel,
+        diffSha256: createHash("sha256")
+          .update(wt.diffText, "utf8")
+          .digest("hex"),
       };
       atomicWriteJson(join(runDir, "analysis.json"), analysisArtifact);
       persistState({

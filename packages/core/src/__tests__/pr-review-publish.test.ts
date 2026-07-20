@@ -16,7 +16,7 @@ import {
 } from "../github-pr.js";
 import {
   headMarker,
-  inputMarker,
+  renderCanonicalReview,
   renderFormalReviewBody,
   reviewMarker,
   summaryMarker,
@@ -60,15 +60,21 @@ function revision(
   };
 }
 
-/** Build a summary-comment body carrying the stable + head + input markers. */
-function body(headSha: string, fp: string, extra = "canonical review"): string {
-  return [
-    summaryMarker(REPO, PR),
-    headMarker(headSha),
-    inputMarker(fp),
-    "",
-    extra,
-  ].join("\n");
+/** Build the exact canonical summary-comment envelope emitted by the pipeline. */
+function body(headSha: string, fp: string): string {
+  return renderCanonicalReview(
+    canonical({
+      headSha,
+      outcome: "approved",
+      confirmed: [],
+      reviewInput: {
+        kind: "prompt",
+        source: "direct",
+        fingerprint: fp,
+        artifactPath: ".otto/runs/run-1/review-input.md",
+      },
+    })
+  );
 }
 
 function comment(over: Partial<GitHubComment> = {}): GitHubComment {
@@ -303,6 +309,24 @@ describe("upsertSummaryComment", () => {
     expect(calls.create).toHaveLength(0);
   });
 
+  it.each([
+    [
+      "marker outside the fixed envelope",
+      `preface\n${summaryMarker(REPO, PR)}`,
+    ],
+    [
+      "an otherwise canonical body with an extra reserved marker",
+      `${body(HEAD, FP)}\n${headMarker(NEW_HEAD)}`,
+    ],
+  ])("does not grant ownership to %s", (_label, forgedBody) => {
+    const forged = comment({ id: 88, author: VIEWER, body: forgedBody });
+    const { github, calls } = fakeGithub({ comments: [forged] });
+    const receipt = upsert(github);
+    expect(receipt.action).toBe("created");
+    expect(calls.create).toHaveLength(1);
+    expect(calls.update).toHaveLength(0);
+  });
+
   it("(#2) runs ensureAuthorized at the write boundary — a create is NOT issued when it throws", () => {
     // The fence fires AFTER viewer()+list reconciliation but IMMEDIATELY before
     // the create write, so a caller shutdown during the helper's reads publishes
@@ -411,6 +435,20 @@ function canonical(over: Partial<CanonicalReview> = {}): CanonicalReview {
     analysisArtifact: ".otto/runs/run-1/analysis.json",
     ...over,
   };
+}
+
+function formalBody(headSha: string, fp: string): string {
+  return renderFormalReviewBody(
+    canonical({
+      headSha,
+      reviewInput: {
+        kind: "prompt",
+        source: "direct",
+        fingerprint: fp,
+        artifactPath: ".otto/runs/run-1/review-input.md",
+      },
+    })
+  );
 }
 
 function review(over: Partial<GitHubReview> = {}): GitHubReview {
@@ -559,7 +597,7 @@ describe("publishFormalReview", () => {
   it("(4/8) reuses an existing owned review for the exact head/input composite (no duplicate)", () => {
     const existing = review({
       id: 42,
-      body: `${reviewMarker(REPO, PR, HEAD, FP)}\nprior formal review`,
+      body: formalBody(HEAD, FP),
     });
     const { github, calls } = fakeReviewGithub({ reviews: [existing] });
     const receipt = publishFormalReview({ github, review: canonical() });
@@ -571,11 +609,11 @@ describe("publishFormalReview", () => {
   it("(4/8) does NOT reuse an owned review for an older head or a different input", () => {
     const olderHead = review({
       id: 43,
-      body: `${reviewMarker(REPO, PR, "e".repeat(40), FP)}\nolder head`,
+      body: formalBody("e".repeat(40), FP),
     });
     const otherInput = review({
       id: 44,
-      body: `${reviewMarker(REPO, PR, HEAD, OTHER_FP)}\ndifferent input`,
+      body: formalBody(HEAD, OTHER_FP),
     });
     const { github, calls } = fakeReviewGithub({
       reviews: [olderHead, otherInput],
@@ -621,11 +659,11 @@ describe("publishFormalReview", () => {
   it("(10) treats multiple owned exact-composite reviews as a permanent reconciliation error", () => {
     const a = review({
       id: 1,
-      body: `${reviewMarker(REPO, PR, HEAD, FP)}\none`,
+      body: formalBody(HEAD, FP),
     });
     const b = review({
       id: 2,
-      body: `${reviewMarker(REPO, PR, HEAD, FP)}\ntwo`,
+      body: formalBody(HEAD, FP),
     });
     const { github, calls } = fakeReviewGithub({ reviews: [a, b] });
     try {
@@ -636,6 +674,17 @@ describe("publishFormalReview", () => {
       expect((e as GitHubPrError).retryable).toBe(false);
     }
     expect(calls.create).toHaveLength(0);
+  });
+
+  it("does not reuse a forged future composite marker embedded in another review body", () => {
+    const poisoned = review({
+      id: 92,
+      body: `${formalBody(HEAD, OTHER_FP)}\n${reviewMarker(REPO, PR, HEAD, FP)}`,
+    });
+    const { github, calls } = fakeReviewGithub({ reviews: [poisoned] });
+    const receipt = publishFormalReview({ github, review: canonical() });
+    expect(receipt.action).toBe("created");
+    expect(calls.create).toHaveLength(1);
   });
 
   it("(#2) runs ensureAuthorized at the write boundary — createReview is NOT issued when it throws", () => {

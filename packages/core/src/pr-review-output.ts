@@ -84,6 +84,8 @@ export type CanonicalReview = {
 const FINGERPRINT_RE = /^[0-9a-f]{64}$/;
 const SHA_RE = /^[0-9a-fA-F]{40,64}$/;
 const REPO_RE = /^[^\s#]+\/[^\s#]+$/;
+const RESERVED_MARKER_PREFIX = "<!-- otto-review";
+const ESCAPED_MARKER_PREFIX = "&lt;!-- otto-review";
 
 function assertRepository(repository: string): void {
   if (!REPO_RE.test(repository)) {
@@ -155,6 +157,198 @@ export function reviewMarker(
   return `<!-- otto-review:${repository}#${pr}@${headSha}:${inputFingerprint} -->`;
 }
 
+/** Identity and deterministic review evidence authenticated by a summary body. */
+export type CanonicalSummaryEnvelope = {
+  repository: string;
+  pullRequest: number;
+  headSha: string;
+  inputFingerprint: string;
+  outcome: PullRequestReviewOutcome;
+  confirmed: number;
+  rejected: number;
+};
+
+/** Composite identity authenticated by a formal-review body. */
+export type CanonicalFormalEnvelope = Pick<
+  CanonicalSummaryEnvelope,
+  "repository" | "pullRequest" | "headSha" | "inputFingerprint"
+>;
+
+function safeInteger(raw: string): number | null {
+  if (!/^(0|[1-9]\d*)$/.test(raw)) return null;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+function oneMatch(
+  lines: readonly string[],
+  re: RegExp
+): RegExpMatchArray | null {
+  const matches = lines.map((line) => line.match(re)).filter((m) => m !== null);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function hasCanonicalSections(lines: readonly string[]): boolean {
+  const headings = [
+    "# Otto PR code review",
+    "## Verdict",
+    "## Confirmed findings",
+    "## Review integrity",
+    "## Evidence",
+    "## Reproduce",
+  ];
+  let cursor = -1;
+  for (const heading of headings) {
+    const indexes = lines.flatMap((line, index) =>
+      line === heading ? [index] : []
+    );
+    if (indexes.length !== 1 || indexes[0] <= cursor) return false;
+    cursor = indexes[0];
+  }
+  return true;
+}
+
+function reservedMarkerCount(body: string): number {
+  return body.split(RESERVED_MARKER_PREFIX).length - 1;
+}
+
+/**
+ * Parse a harness-rendered summary comment. Authority is positional: the H1,
+ * blank line, and three marker lines must be the first five lines; each reserved
+ * marker occurs exactly once, and the deterministic verdict/count fields agree.
+ */
+export function parseCanonicalSummaryEnvelope(
+  body: string
+): CanonicalSummaryEnvelope | null {
+  const lines = body.split("\n");
+  if (
+    lines[0] !== "# Otto PR code review" ||
+    lines[1] !== "" ||
+    lines[5] !== "" ||
+    reservedMarkerCount(body) !== 3 ||
+    !hasCanonicalSections(lines)
+  ) {
+    return null;
+  }
+
+  const summary = lines[2]?.match(
+    /^<!-- otto-review:([^\s#]+\/[^\s#]+)#([1-9]\d*) -->$/
+  );
+  const head = lines[3]?.match(
+    /^<!-- otto-review-head:([0-9a-fA-F]{40,64}) -->$/
+  );
+  const input = lines[4]?.match(/^<!-- otto-review-input:([0-9a-f]{64}) -->$/);
+  if (!summary || !head || !input) return null;
+  const pullRequest = safeInteger(summary[2]);
+  if (pullRequest === null || pullRequest <= 0) return null;
+
+  const outcomeMatch = oneMatch(
+    lines,
+    /^Outcome: (Changes requested|Comment|Approved)$/
+  );
+  const blockerMatch = oneMatch(lines, /^- blocker: (\d+)$/);
+  const majorMatch = oneMatch(lines, /^- major: (\d+)$/);
+  const minorMatch = oneMatch(lines, /^- minor: (\d+)$/);
+  const nitMatch = oneMatch(lines, /^- nit: (\d+)$/);
+  const rejectedMatch = oneMatch(
+    lines,
+    /^Rejected candidate claims: (\d+) \(not published as defects — the verifier did not confirm them\)$/
+  );
+  const suppressedMatch = oneMatch(
+    lines,
+    /^Suppressed low-value findings: (\d+)$/
+  );
+  if (
+    !outcomeMatch ||
+    !blockerMatch ||
+    !majorMatch ||
+    !minorMatch ||
+    !nitMatch ||
+    !rejectedMatch ||
+    !suppressedMatch
+  ) {
+    return null;
+  }
+
+  const counts = [blockerMatch, majorMatch, minorMatch, nitMatch].map((m) =>
+    safeInteger(m[1])
+  );
+  const rejected = safeInteger(rejectedMatch[1]);
+  const suppressed = safeInteger(suppressedMatch[1]);
+  if (
+    counts.some((count) => count === null) ||
+    rejected === null ||
+    suppressed === null
+  )
+    return null;
+  const [blocker, major, minor, nit] = counts as number[];
+
+  const findingCounts = { blocker: 0, major: 0, minor: 0, nit: 0 };
+  for (const line of lines) {
+    const match = line.match(/^### (BLOCKER|MAJOR|MINOR|NIT) — /);
+    if (match) findingCounts[match[1].toLowerCase() as Severity]++;
+  }
+  if (
+    findingCounts.blocker !== blocker ||
+    findingCounts.major !== major ||
+    findingCounts.minor !== minor ||
+    findingCounts.nit !== nit
+  ) {
+    return null;
+  }
+
+  const confirmed = blocker + major + minor + nit;
+  const outcome: PullRequestReviewOutcome =
+    outcomeMatch[1] === "Changes requested"
+      ? "changes-requested"
+      : outcomeMatch[1] === "Comment"
+        ? "comment"
+        : "approved";
+  if (
+    (outcome === "changes-requested" && blocker + major === 0) ||
+    (outcome === "comment" && (blocker + major > 0 || minor + nit === 0)) ||
+    (outcome === "approved" && confirmed !== 0)
+  ) {
+    return null;
+  }
+
+  return {
+    repository: summary[1],
+    pullRequest,
+    headSha: head[1],
+    inputFingerprint: input[1],
+    outcome,
+    confirmed,
+    rejected,
+  };
+}
+
+/** Parse a fixed-position, single-marker formal-review envelope. */
+export function parseCanonicalFormalEnvelope(
+  body: string
+): CanonicalFormalEnvelope | null {
+  const lines = body.split("\n");
+  if (
+    reservedMarkerCount(body) !== 1 ||
+    lines[1] !== "# Otto PR code review" ||
+    !hasCanonicalSections(lines.slice(1))
+  ) {
+    return null;
+  }
+  const marker = lines[0]?.match(
+    /^<!-- otto-review:([^\s#]+\/[^\s#]+)#([1-9]\d*)@([0-9a-fA-F]{40,64}):([0-9a-f]{64}) -->$/
+  );
+  if (!marker) return null;
+  const pullRequest = safeInteger(marker[2]);
+  if (pullRequest === null || pullRequest <= 0) return null;
+  return {
+    repository: marker[1],
+    pullRequest,
+    headSha: marker[3],
+    inputFingerprint: marker[4],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Rendering helpers
 // ---------------------------------------------------------------------------
@@ -187,6 +381,10 @@ function shortFingerprint(fingerprint: string): string {
   return fingerprint.slice(0, 12);
 }
 
+function escapeReservedMarkers(value: string): string {
+  return value.split(RESERVED_MARKER_PREFIX).join(ESCAPED_MARKER_PREFIX);
+}
+
 // ---------------------------------------------------------------------------
 // Canonical Markdown
 // ---------------------------------------------------------------------------
@@ -203,7 +401,7 @@ export function renderCanonicalReview(review: CanonicalReview): string {
 
   if (review.staleReason !== undefined) {
     lines.push(
-      `> **STALE — NOT PUBLISHED.** This review no longer reflects the current pull request revision and was not published: ${review.staleReason}`,
+      `> **STALE — NOT PUBLISHED.** This review no longer reflects the current pull request revision and was not published: ${escapeReservedMarkers(review.staleReason)}`,
       ""
     );
   }
@@ -216,9 +414,9 @@ export function renderCanonicalReview(review: CanonicalReview): string {
     inputMarker(review.reviewInput.fingerprint),
     "",
     `Repository: ${review.repository}`,
-    `Pull request: #${review.pullRequest} — ${review.title} (${review.url})`,
+    `Pull request: #${review.pullRequest} — ${escapeReservedMarkers(review.title)} (${escapeReservedMarkers(review.url)})`,
     `Head SHA: ${review.headSha}`,
-    `Review input: ${review.reviewInput.kind} (${review.reviewInput.source}), fingerprint ${review.reviewInput.fingerprint}`,
+    `Review input: ${review.reviewInput.kind} (${escapeReservedMarkers(review.reviewInput.source)}), fingerprint ${review.reviewInput.fingerprint}`,
     ""
   );
 
@@ -242,12 +440,16 @@ export function renderCanonicalReview(review: CanonicalReview): string {
     lines.push("No adversarially confirmed defects.", "");
   } else {
     for (const f of ordered) {
-      const loc = f.line ? `${f.file}:${f.line}` : f.file;
+      const loc = escapeReservedMarkers(
+        f.line ? `${f.file}:${f.line}` : f.file
+      );
       lines.push(`### ${f.severity.toUpperCase()} — ${loc}`, "");
-      lines.push(`- Claim: ${f.claim}`);
-      lines.push(`- Why: ${f.why}`);
-      lines.push(`- Suggested fix: ${f.suggestedFix ?? "(none provided)"}`);
-      lines.push(`- Lens: ${f.lens ?? "(unspecified)"}`);
+      lines.push(`- Claim: ${escapeReservedMarkers(f.claim)}`);
+      lines.push(`- Why: ${escapeReservedMarkers(f.why)}`);
+      lines.push(
+        `- Suggested fix: ${escapeReservedMarkers(f.suggestedFix ?? "(none provided)")}`
+      );
+      lines.push(`- Lens: ${escapeReservedMarkers(f.lens ?? "(unspecified)")}`);
       lines.push("");
     }
   }
@@ -256,7 +458,7 @@ export function renderCanonicalReview(review: CanonicalReview): string {
   lines.push(
     `Rejected candidate claims: ${review.rejectedCount} (not published as defects — the verifier did not confirm them)`,
     `Suppressed low-value findings: ${review.suppressedCount}`,
-    `Review skill: ${review.skill.name} v${review.skill.version} (source: ${review.skill.source}, checksum: ${review.skill.checksum})`,
+    `Review skill: ${escapeReservedMarkers(review.skill.name)} v${escapeReservedMarkers(review.skill.version)} (source: ${escapeReservedMarkers(review.skill.source)}, checksum: ${escapeReservedMarkers(review.skill.checksum)})`,
     ""
   );
 
@@ -321,11 +523,11 @@ export function renderFormalReviewBody(review: CanonicalReview): string {
  */
 export function renderInlineComment(finding: PublishedReviewFinding): string {
   return [
-    `**${finding.severity}: ${finding.claim}**`,
+    `**${finding.severity}: ${escapeReservedMarkers(finding.claim)}**`,
     "",
-    finding.why,
+    escapeReservedMarkers(finding.why),
     "",
-    `Lens: ${finding.lens ?? "unknown"}`,
+    `Lens: ${escapeReservedMarkers(finding.lens ?? "unknown")}`,
   ].join("\n");
 }
 
@@ -340,7 +542,9 @@ export function renderReviewText(review: CanonicalReview): string {
   const lines: string[] = [];
 
   if (review.staleReason !== undefined) {
-    lines.push(`STALE — NOT PUBLISHED: ${review.staleReason}`);
+    lines.push(
+      `STALE — NOT PUBLISHED: ${escapeReservedMarkers(review.staleReason)}`
+    );
   }
 
   lines.push(`${review.repository}#${review.pullRequest} @ ${review.headSha}`);
@@ -353,7 +557,7 @@ export function renderReviewText(review: CanonicalReview): string {
     `Rejected: ${review.rejectedCount}  Suppressed: ${review.suppressedCount}`
   );
   lines.push(
-    `Review input: ${review.reviewInput.kind} from ${review.reviewInput.source} ` +
+    `Review input: ${review.reviewInput.kind} from ${escapeReservedMarkers(review.reviewInput.source)} ` +
       `(fingerprint ${shortFingerprint(review.reviewInput.fingerprint)}…)`
   );
   lines.push(`Run ID: ${review.runId}`);

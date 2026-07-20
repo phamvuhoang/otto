@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { getEventListeners } from "node:events";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -39,8 +40,12 @@ import {
 import {
   headMarker,
   inputMarker,
+  renderCanonicalReview,
+  renderFormalReviewBody,
   reviewMarker,
   summaryMarker,
+  type CanonicalReview,
+  type PublishedReviewFinding,
 } from "../pr-review-output.js";
 import {
   GitHubPrError,
@@ -49,6 +54,7 @@ import {
   type GitHubReview,
 } from "../github-pr.js";
 import type { PullRequestReviewConfig } from "../review-cli.js";
+import type { ReviewSkillSelection } from "../pr-review-skill.js";
 import type { ReviewAnalysisResult, ReviewSeverityCounts } from "../panel.js";
 import type { Finding } from "../review-severity.js";
 import type { StageResult } from "../runner.js";
@@ -374,7 +380,8 @@ describe("runPullRequestReview", () => {
     );
     // analysis.json is schema-valid and identity-matched.
     const a = JSON.parse(readFileSync(join(runDir, "analysis.json"), "utf8"));
-    expect(a.schemaVersion).toBe(1);
+    expect(a.schemaVersion).toBe(2);
+    expect(a.diffSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(a.headSha).toBe(fx.headSha);
     expect(a.confirmed).toHaveLength(1);
     // analyze ran with the P32 read-only seam.
@@ -883,16 +890,156 @@ function makeCommentGithub(opts: {
   return { github, calls, store };
 }
 
-/** A summary-comment body carrying the stable + head + input markers. */
-function summaryBody(headSha: string, fp: string): string {
-  return [
-    summaryMarker("acme/widget", 7),
-    headMarker(headSha),
-    inputMarker(fp),
-    "",
-    "canonical review body",
-  ].join("\n");
+const RECOVERY_SKILL: ReviewSkillSelection = {
+  name: "builtin:otto-code-review",
+  version: "1",
+  source: "builtin",
+  checksum: "deadbeef",
+  injection: "",
+  usage: {
+    name: "builtin:otto-code-review",
+    version: "1",
+    source: "builtin",
+    stage: "pr-review",
+    checksum: "deadbeef",
+  },
+};
+
+function recoveryReview(
+  headSha: string,
+  fingerprint: string,
+  over: Partial<CanonicalReview> = {}
+): CanonicalReview {
+  return {
+    repository: "acme/widget",
+    pullRequest: 7,
+    url: "https://github.com/acme/widget/pull/7",
+    title: "Add feature",
+    baseSha: "d".repeat(40),
+    headSha,
+    reviewInput: {
+      kind: "none",
+      source: "none",
+      fingerprint,
+      artifactPath: ".otto/runs/recovered/review-input.md",
+    },
+    runId: "recovered",
+    outcome: "approved",
+    confirmed: [],
+    rejectedCount: 0,
+    suppressedCount: 0,
+    skill: RECOVERY_SKILL,
+    diffArtifact: ".otto/runs/recovered/pr.diff",
+    analysisArtifact: ".otto/runs/recovered/analysis.json",
+    ...over,
+  };
 }
+
+/** The exact fixed-position canonical summary envelope used for recovery. */
+function summaryBody(
+  headSha: string,
+  fingerprint: string,
+  over: Partial<CanonicalReview> = {}
+): string {
+  return renderCanonicalReview(recoveryReview(headSha, fingerprint, over));
+}
+
+function formalRecoveryBody(headSha: string, fingerprint: string): string {
+  return renderFormalReviewBody(recoveryReview(headSha, fingerprint));
+}
+
+type MutableAnalysisArtifact = Record<string, any>;
+type AnalysisCorruption = (
+  artifact: MutableAnalysisArtifact,
+  runDir: string
+) => void;
+
+const ANALYSIS_CORRUPTIONS: Array<[string, AnalysisCorruption]> = [
+  ["run id", (a) => void (a.runId = "other-run")],
+  ["base SHA", (a) => void (a.baseSha = "f".repeat(40))],
+  ["URL type", (a) => void (a.url = 7)],
+  ["title type", (a) => void (a.title = { forged: true })],
+  ["review-input kind", (a) => void (a.reviewInput.kind = "forged")],
+  ["review-input source", (a) => void (a.reviewInput.source = "other")],
+  [
+    "review-input fingerprint",
+    (a) => void (a.reviewInput.fingerprint = "f".repeat(64)),
+  ],
+  [
+    "review-input path",
+    (a) => void (a.reviewInput.artifactPath = "../review-input.md"),
+  ],
+  ["outcome", (a) => void (a.outcome = "forged")],
+  [
+    "confirmed finding severity",
+    (a) =>
+      void (a.confirmed = [
+        {
+          severity: "critical",
+          file: "src/app.ts",
+          line: "1",
+          claim: "forged",
+          why: "forged",
+          inlineEligible: false,
+        },
+      ]),
+  ],
+  [
+    "confirmed finding location",
+    (a) =>
+      void (a.confirmed = [
+        {
+          severity: "major",
+          file: "src/app.ts",
+          line: "not-a-line",
+          claim: "forged",
+          why: "forged",
+          inlineEligible: false,
+        },
+      ]),
+  ],
+  [
+    "rejected finding schema",
+    (a) => void (a.rejected = [{ severity: "major" }]),
+  ],
+  ["severity tally", (a) => void (a.severity = { ...a.severity, major: "1" })],
+  ["skill selection", (a) => void (a.skill = { ...a.skill, usage: {} })],
+  ["diff path", (a) => void (a.diffArtifact = "../pr.diff")],
+  [
+    "missing diff artifact",
+    (_a, runDir) => rmSync(join(runDir, "pr.diff"), { force: true }),
+  ],
+  [
+    "non-regular diff artifact",
+    (_a, runDir) => {
+      const path = join(runDir, "pr.diff");
+      rmSync(path, { force: true });
+      mkdirSync(path);
+    },
+  ],
+  [
+    "mismatched diff integrity",
+    (_a, runDir) => writeFileSync(join(runDir, "pr.diff"), "tampered diff\n"),
+  ],
+];
+
+const RECOVERY_EVIDENCE_CASES: Array<
+  [string, CanonicalReview["outcome"], PublishedReviewFinding[], number]
+> = [
+  ["approved", "approved", [], 0],
+  [
+    "comment",
+    "comment",
+    [{ ...finding({ severity: "minor" }), inlineEligible: false }],
+    2,
+  ],
+  [
+    "changes-requested",
+    "changes-requested",
+    [{ ...finding({ severity: "major" }), inlineEligible: false }],
+    3,
+  ],
+];
 
 describe("runPullRequestReview — Slice 2 comment publication + recovery", () => {
   let fx: Fixture;
@@ -1369,6 +1516,62 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
     expect(res2.commentId).toBe(gh2.store[0].id);
   });
 
+  it.each(ANALYSIS_CORRUPTIONS)(
+    "rejects persisted analysis with corrupted %s and performs fresh analysis",
+    async (_label, corrupt) => {
+      const firstAnalyze = makeFakeAnalyze({});
+      const failingGithub = makeCommentGithub({
+        current: () => fx.revision,
+        createError: new GitHubPrError(
+          "rate limited (HTTP 429)",
+          "rate-limit",
+          true,
+          429
+        ),
+      });
+      const first = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "comment" }),
+        deps: {
+          analyze: firstAnalyze.fn,
+          github: failingGithub.github,
+          stdout,
+          now,
+        },
+      });
+      expect(first.status).toBe("publish-failed");
+
+      const runDir = join(fx.workspaceDir, ".otto", "runs", first.runId);
+      const analysisPath = join(runDir, "analysis.json");
+      const artifact = JSON.parse(
+        readFileSync(analysisPath, "utf8")
+      ) as MutableAnalysisArtifact;
+      corrupt(artifact, runDir);
+      writeFileSync(analysisPath, JSON.stringify(artifact, null, 2) + "\n");
+
+      const freshAnalyze = makeFakeAnalyze({});
+      const succeedingGithub = makeCommentGithub({
+        current: () => fx.revision,
+      });
+      const second = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "comment" }),
+        deps: {
+          analyze: freshAnalyze.fn,
+          github: succeedingGithub.github,
+          stdout,
+          now: later,
+        },
+      });
+
+      expect(freshAnalyze.invocationCount()).toBe(1);
+      expect(second.runId).not.toBe(first.runId);
+      expect(second.status).toBe("succeeded");
+    }
+  );
+
   it("a resume with a missing input and failed rematerialization emits neither input reference", async () => {
     const fake1 = makeFakeAnalyze({});
     const gh1 = makeCommentGithub({
@@ -1524,6 +1727,80 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
     // The remote body is persisted locally as the recovered run's review.md.
     const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
     expect(readFileSync(join(runDir, "review.md"), "utf8")).toBe(body);
+  });
+
+  it.each(RECOVERY_EVIDENCE_CASES)(
+    "records truthful %s outcome/count evidence during lost-state recovery",
+    async (_label, outcome, confirmed, rejectedCount) => {
+      const body = summaryBody(fx.headSha, fp(), {
+        outcome,
+        confirmed,
+        rejectedCount,
+      });
+      const existing: GitHubComment = {
+        id: 4343,
+        body,
+        author: "otto-bot",
+        url: "https://github.com/acme/widget/issues/7#comment-4343",
+      };
+      const fake = {
+        fn: async () => {
+          throw new Error("valid remote recovery must not re-run analysis");
+        },
+        calls: [] as unknown[],
+        invocationCount: () => 0,
+      };
+      const gh = makeCommentGithub({
+        current: () => fx.revision,
+        comments: [existing],
+      });
+
+      const result = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "comment" }),
+        deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+      });
+
+      const evidence = readManifest(fx.workspaceDir, result.runId)
+        .pullRequestReview as PullRequestReviewEvidence;
+      expect(result.outcome).toBe(outcome);
+      expect(evidence.outcome).toBe(outcome);
+      expect(evidence.confirmed).toBe(confirmed.length);
+      expect(evidence.rejected).toBe(rejectedCount);
+    }
+  );
+
+  it("does not recover a future identity from reserved markers embedded in another canonical body", async () => {
+    const previousFingerprint = "e".repeat(64);
+    const poisonedBody = `${summaryBody(
+      fx.headSha,
+      previousFingerprint
+    )}\n${inputMarker(fp())}`;
+    const poisoned: GitHubComment = {
+      id: 4444,
+      body: poisonedBody,
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4444",
+    };
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({
+      current: () => fx.revision,
+      comments: [poisoned],
+    });
+
+    const result = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(fake.invocationCount()).toBe(1);
+    expect(result.costUsd).toBeGreaterThan(0);
+    expect(gh.calls.create).toBe(1);
+    expect(gh.calls.update).toBe(0);
   });
 
   it("(S8) an owned marker with an OLDER head is UPDATED in place (same comment id), never duplicated", async () => {
@@ -2137,11 +2414,7 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
     };
     const existingReview: GitHubReview = {
       id: 6161,
-      body: [
-        reviewMarker("acme/widget", 7, fx.headSha, fp()),
-        "",
-        "formal review body",
-      ].join("\n"),
+      body: formalRecoveryBody(fx.headSha, fp()),
       author: "otto-bot",
       commitId: fx.headSha,
       state: "CHANGES_REQUESTED",
@@ -2360,10 +2633,9 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
       author: "otto-bot",
       url: "https://github.com/acme/widget/issues/7#comment-4242",
     };
-    const rmark = reviewMarker("acme/widget", 7, fx.headSha, fp());
     const dupReview = (id: number): GitHubReview => ({
       id,
-      body: [rmark, "", "formal review body"].join("\n"),
+      body: formalRecoveryBody(fx.headSha, fp()),
       author: "otto-bot",
       commitId: fx.headSha,
       state: "CHANGES_REQUESTED",
@@ -2538,10 +2810,9 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
       author: "otto-bot",
       url: "https://github.com/acme/widget/issues/7#comment-4242",
     };
-    const rmark = reviewMarker("acme/widget", 7, fx.headSha, fp());
     const dupReview = (id: number): GitHubReview => ({
       id,
-      body: [rmark, "", "formal review body"].join("\n"),
+      body: formalRecoveryBody(fx.headSha, fp()),
       author: "otto-bot",
       commitId: fx.headSha,
       state: "CHANGES_REQUESTED",

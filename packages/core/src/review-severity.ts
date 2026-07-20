@@ -30,8 +30,15 @@ function asSeverity(token: string): Severity | null {
 }
 
 /** Wire format, one finding per line: `SEVERITY | file:line | claim | why | fix?`
- *  `file:line` may be just `file`; the trailing `fix` field is optional. A line
- *  that does not yield a valid severity + ≥4 fields is dropped (counted). */
+ *  `file:line` may be just `file`; the trailing `fix` field is optional.
+ *
+ *  `dropped` counts only lines that are a genuinely BOTCHED finding: the first
+ *  pipe-field IS a valid severity but the row has fewer than four fields. A
+ *  `|`-bearing line whose first field is NOT a severity is not a finding attempt
+ *  at all — it is prose, a markdown table, or code that merely contains a pipe —
+ *  so it is skipped WITHOUT counting. This matters because strict mode (the
+ *  automated PR review) fails the whole run on any dropped row; a stray pipe in
+ *  the lens's narration must never be mistaken for a malformed finding. */
 export function parseFindings(
   text: string,
   lens?: string
@@ -42,7 +49,10 @@ export function parseFindings(
     if (!raw.includes("|")) continue;
     const parts = raw.split("|").map((p) => p.trim());
     const severity = asSeverity(parts[0]);
-    if (!severity || parts.length < 4) {
+    // Not a finding row (prose/table/code with a pipe) — skip, do not count.
+    if (!severity) continue;
+    // A real severity but a truncated row — a genuinely malformed finding.
+    if (parts.length < 4) {
       dropped++;
       continue;
     }

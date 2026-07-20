@@ -318,8 +318,9 @@ describe("analyzeReview", () => {
   it("strictFindings fails on a malformed finding row that panel mode would drop", async () => {
     mocks.executeStage.mockImplementation((o: { vars: { LENS?: string } }) => {
       if (o.vars.LENS)
-        // "garbage | not-a-severity" → parseFindings drops it (no valid severity).
-        return Promise.resolve(ok("garbage | a.ts | half", 0.1));
+        // "major | a.ts | half" → a real severity but a TRUNCATED row (<4 fields):
+        // a genuinely botched finding, which strict mode must fail on.
+        return Promise.resolve(ok("major | a.ts | half", 0.1));
       return Promise.resolve(ok("none\n", 0.2));
     });
     await expect(
@@ -331,5 +332,35 @@ describe("analyzeReview", () => {
         lenses: ["l1"],
       })
     ).rejects.toBeInstanceOf(ReviewAnalysisContractError);
+  });
+
+  it("strictFindings does NOT fail when a lens emits a pipe-bearing prose line", async () => {
+    // Regression: a lens emitted a real finding plus narration containing a pipe
+    // ("reduces to `a | b`"). The pipe line is NOT a finding attempt (its first
+    // field is not a severity), so it must not be counted as a malformed row and
+    // fail the whole strict review.
+    mocks.executeStage.mockImplementation((o: { vars: { LENS?: string } }) => {
+      if (o.vars.LENS)
+        return Promise.resolve(
+          ok(
+            "major | a.ts:1 | real bug | the guard reduces to `a | b`\n" +
+              "It short-circuits when `a | b` is truthy.\n",
+            0.1
+          )
+        );
+      // Verifier confirms the single finding so the run completes cleanly.
+      return Promise.resolve(
+        ok("CONFIRMED major | a.ts:1 | real bug | confirmed\n", 0.2)
+      );
+    });
+    const res = await analyzeReview({
+      ...base,
+      workspaceDir: ws,
+      verdictSource: "result",
+      strictFindings: true,
+      lenses: ["l1"],
+    });
+    expect(res.contractErrors).toEqual([]);
+    expect(res.confirmed).toHaveLength(1);
   });
 });

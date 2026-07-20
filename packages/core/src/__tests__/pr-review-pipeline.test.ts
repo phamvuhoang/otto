@@ -623,6 +623,68 @@ describe("runPullRequestReview", () => {
     }
   });
 
+  it("(5c) a label-cancelled markdown run renders a VALID local review (full findings, NO STALE marker)", async () => {
+    // reconcile checks headSha FIRST, so a `cancelled` run analyzed the CURRENT
+    // head: its local render is valid (unpublished), not stale.
+    const fake = makeFakeAnalyze({
+      confirmed: [finding()],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+    });
+    const github = { getPullRequest: () => ({ ...fx.revision, labels: [] }) };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "markdown" }),
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(res.status).toBe("cancelled");
+    const printed = out.join("");
+    expect(printed).toContain("## Confirmed findings");
+    expect(printed).toContain("bug introduced");
+    expect(printed).not.toContain("STALE — NOT PUBLISHED");
+  });
+
+  it("(5d) a label-cancelled text run renders a VALID summary (counts, NO STALE line)", async () => {
+    const fake = makeFakeAnalyze({
+      confirmed: [finding()],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+    });
+    const github = { getPullRequest: () => ({ ...fx.revision, labels: [] }) };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(res.status).toBe("cancelled");
+    const printed = out.join("");
+    expect(printed).toContain("acme/widget#7");
+    expect(printed).toContain("Confirmed: blocker=0 major=1");
+    expect(printed).not.toContain("STALE — NOT PUBLISHED");
+  });
+
+  it("(5e) a superseded run STILL renders a STALE-marked local review (markdown + text)", async () => {
+    const newHead = "f".repeat(40);
+    for (const output of ["markdown", "text"] as const) {
+      out.length = 0;
+      const fake = makeFakeAnalyze({
+        confirmed: [finding()],
+        severity: { ...EMPTY_SEVERITY, major: 1 },
+      });
+      const github = {
+        getPullRequest: () => ({ ...fx.revision, headSha: newHead }),
+      };
+      const res = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output }),
+        deps: { analyze: fake.fn, github, stdout, now },
+      });
+      expect(res.status).toBe("superseded");
+      expect(out.join("")).toContain("STALE — NOT PUBLISHED");
+    }
+  });
+
   it("(6) every stage record carries cost, usage, runtime, review severity, skill usage, safety context, log path; manifest totals sum", async () => {
     const fake = makeFakeAnalyze({
       confirmed: [finding()],

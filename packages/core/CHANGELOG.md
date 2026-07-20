@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.4](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.3...otto-core-v0.36.4) (2026-07-20)
+
+
+### Bug Fixes
+
+* **otto-review:** match verdicts for multi-location findings with abbreviated paths ([#221](https://github.com/phamvuhoang/otto/issues/221)) ([09face3](https://github.com/phamvuhoang/otto/commit/09face395d62348d3d517968e6d13b796b82dfd1))
+
 ## [0.36.3](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.2...otto-core-v0.36.3) (2026-07-20)
 
 

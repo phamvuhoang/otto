@@ -9,12 +9,18 @@ import { classifyRisk, reviewDepthForLevel, selectLenses } from "./risk.js";
 import type { RiskAssessment } from "./risk.js";
 import {
   dedupeFindings,
+  findingToWire,
   parseFindings,
+  parseReviewVerdicts,
   severityCounts,
+  suppressLowValue,
   type Finding,
 } from "./review-severity.js";
 import type { StageResult } from "./runner.js";
 import type { Stage } from "./stages.js";
+import type { EventSink } from "./console-ui.js";
+import type { SafetyEvent, SkillUsage } from "./run-report.js";
+import type { SafetyPolicy } from "./safety-policy.js";
 import { bold, dim, green, red, SYM } from "./stream-render.js";
 import { emptyTokenUsage, type TokenMode } from "./tokens.js";
 
@@ -47,16 +53,6 @@ export function mergeLensFindings(files: { lens: string; text: string }[]): {
   for (const { lens, text } of files)
     all.push(...parseFindings(text, lens).findings);
   return { findings: dedupeFindings(all), total: all.length };
-}
-
-/** Serialize a deduped finding back to a wire-format line:
- *  `SEVERITY | file:line | claim | why | fix?` (the trailing `| fix` is omitted
- *  when there is no suggested fix). The verifier globs `findings-*.md`, so the
- *  single merged file matches and is read exactly once. */
-function findingToWire(f: Finding): string {
-  const loc = f.line ? `${f.file}:${f.line}` : f.file;
-  const head = `${f.severity} | ${loc} | ${f.claim} | ${f.why}`;
-  return f.suggestedFix ? `${head} | ${f.suggestedFix}` : head;
 }
 
 /** Bounded-concurrency map over `items` (inline to avoid coupling to fanout.ts).
@@ -219,8 +215,115 @@ export function formatCrossTaskBlock(summary: string | undefined): string {
   return `<cross-task-summary>\nThe implementation ran in parallel. Review these interactions:\n${summary}\n</cross-task-summary>`;
 }
 
-/** Harness-orchestrated reviewer panel: read-only lens reviews → one synth fix(review) commit. */
-export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
+/** Per-severity tally plus the low-value-suppressed count (issue P32). */
+export type ReviewSeverityCounts = {
+  blocker: number;
+  major: number;
+  minor: number;
+  nit: number;
+  suppressed: number;
+};
+
+/**
+ * Structured, read-only outcome of the review panel's analysis phase (issue P32):
+ * the adversarially-CONFIRMED findings that survived low-value suppression
+ * (`confirmed`), the REJECTED findings, the severity tally derived from ALL
+ * confirmed findings BEFORE suppression (`severity`, with `suppressed` counting
+ * the dropped low-value findings), the ordered `stageResults` for evidence, and
+ * any `contractErrors` collected. NO synth/fix stage is involved — this is the
+ * shape P32's analysis-only review consumes, and the substrate `runPanel` gates
+ * its synth stage on.
+ */
+export type ReviewAnalysisResult = {
+  confirmed: Finding[];
+  rejected: Finding[];
+  severity: ReviewSeverityCounts;
+  stageResults: StageResult[];
+  contractErrors: string[];
+  /** File/substrate path only: the verifier's ORIGINAL `verdicts.md` text (its
+   *  real CONFIRMED + REJECTED split), captured before cleanup and handed to the
+   *  substrate synth so it fixes ONLY the CONFIRMED subset — never a reconstructed
+   *  all-CONFIRMED file. Absent in the `verdictSource:"result"` (P32) path, which
+   *  exposes the true split structurally via `confirmed`/`rejected`. */
+  verifierVerdicts?: string;
+};
+
+/**
+ * Options for {@link analyzeReview}. A superset of {@link RunPanelOptions} (minus
+ * the callbacks it re-declares as optional) that adds the P32 review knobs:
+ * pinned lens/verify stages, extra template vars, injected skill context, a
+ * scrubbed child env, a trusted safety policy, a console sink, skill/taint
+ * evidence to fold into every returned `StageResult`, strict-parsing toggles, the
+ * verdict source (`file` keeps `runPanel`'s verdicts.md flow; `result` parses the
+ * verifier's returned text), and the mutation policy (`restore` keeps the
+ * reset-and-continue guard; `fail` turns a mutation into a contract error).
+ */
+export type ReviewAnalysisOptions = Omit<
+  RunPanelOptions,
+  "lenses" | "onStage" | "recordStage"
+> & {
+  lenses: string[];
+  lensStage?: Stage;
+  verifyStage?: Stage;
+  stageVars?: Record<string, string>;
+  injectedContext?: string;
+  childEnv?: NodeJS.ProcessEnv;
+  sink?: EventSink;
+  skillUsages?: SkillUsage[];
+  inputSafetyEvents?: SafetyEvent[];
+  safetyPolicy?: SafetyPolicy;
+  strictFindings?: boolean;
+  verdictSource?: "file" | "result";
+  mutationPolicy?: "restore" | "fail";
+  onStage?: RunPanelOptions["onStage"];
+  recordStage?: RunPanelOptions["recordStage"];
+};
+
+/** Thrown when review analysis breaks its contract (a stage error, a strict
+ *  malformed finding/verdict, or a mutation under `mutationPolicy:"fail"`). It
+ *  carries the partial {@link ReviewAnalysisResult} so a caller can still surface
+ *  the evidence gathered before the break. */
+export class ReviewAnalysisContractError extends Error {
+  readonly result: ReviewAnalysisResult;
+  constructor(result: ReviewAnalysisResult) {
+    super(
+      `review analysis contract broken: ${result.contractErrors.join("; ") || "unknown"}`
+    );
+    this.name = "ReviewAnalysisContractError";
+    this.result = result;
+  }
+}
+
+const emptySeverity = (): ReviewSeverityCounts => ({
+  blocker: 0,
+  major: 0,
+  minor: 0,
+  nit: 0,
+  suppressed: 0,
+});
+
+/** Synthetic clean result when the panel has nothing to return. */
+function cleanPanelResult(agentId?: AgentRuntimeId): StageResult {
+  return {
+    result: "<review>OK</review>",
+    costUsd: 0,
+    isError: false,
+    apiErrorStatus: null,
+    usage: emptyTokenUsage(),
+    runtimeId: agentId ?? DEFAULT_AGENT,
+  };
+}
+
+/**
+ * Read-only review analysis (issue P32): lens selection, bounded-concurrent lens
+ * execution, merge/dedupe, adversarial verify, mutation guard, low-value
+ * suppression, and cleanup — WITHOUT any synth/fix stage. Returns the structured
+ * {@link ReviewAnalysisResult}. `runPanel` wraps this for its substrate flow; P32
+ * calls it directly. NEVER invokes `review-synth.md`.
+ */
+export async function analyzeReview(
+  opts: ReviewAnalysisOptions
+): Promise<ReviewAnalysisResult> {
   const {
     workspaceDir,
     packageDir,
@@ -235,6 +338,68 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     onStage,
     recordStage,
   } = opts;
+  const verdictSource = opts.verdictSource ?? "file";
+  const mutationPolicy = opts.mutationPolicy ?? "restore";
+  const strictFindings = opts.strictFindings ?? false;
+  const lensStage = opts.lensStage ?? LENS_STAGE;
+  const verifyStage = opts.verifyStage ?? VERIFY_STAGE;
+  const extraVars = opts.stageVars ?? {};
+
+  const stageResults: StageResult[] = [];
+  const contractErrors: string[] = [];
+  const makeResult = (
+    confirmed: Finding[],
+    rejected: Finding[],
+    severity: ReviewSeverityCounts
+  ): ReviewAnalysisResult => ({
+    confirmed,
+    rejected,
+    severity,
+    stageResults,
+    contractErrors,
+  });
+  const breakContract = (
+    confirmed: Finding[],
+    rejected: Finding[],
+    severity: ReviewSeverityCounts
+  ): never => {
+    throw new ReviewAnalysisContractError(
+      makeResult(confirmed, rejected, severity)
+    );
+  };
+  // Fold selected skill usage + input taint evidence into every returned stage
+  // result so P32 attribution rides on each lens/verify record. Empty ⇒ identity.
+  const decorate = (sr: StageResult): StageResult => {
+    let out = sr;
+    if (opts.skillUsages?.length) {
+      out = {
+        ...out,
+        skillsUsed: [...(out.skillsUsed ?? []), ...opts.skillUsages],
+      };
+    }
+    if (opts.inputSafetyEvents?.length) {
+      out = {
+        ...out,
+        safetyEvents: [...(out.safetyEvents ?? []), ...opts.inputSafetyEvents],
+      };
+    }
+    return out;
+  };
+  // Shared executeStage options carrying the P32 read-only plumbing.
+  const stageBase = {
+    workspaceDir,
+    packageDir,
+    iteration,
+    maxRetries,
+    tokenMode,
+    signal,
+    agentId,
+    sink: opts.sink,
+    childEnv: opts.childEnv,
+    safetyPolicy: opts.safetyPolicy,
+    injectedContext: opts.injectedContext,
+  };
+
   // Router off → the full configured pool (today's behavior); on → risk-routed.
   let lenses = routedLenses(
     opts.changedPaths ?? [],
@@ -264,15 +429,14 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
   const panelHostDir = join(workspaceDir, ".otto-tmp", panelRel);
   mkdirSync(panelHostDir, { recursive: true });
 
-  // Lenses are contractually read-only; synth owns the single fix(review:) commit.
-  // Snapshot HEAD so we can detect + undo a lens that edits or commits despite the
-  // prompt (it runs bypassPermissions, so the OS would let it). We only ENFORCE
-  // (reset --hard) when the worktree starts tracked-clean — otherwise a reset would
-  // discard pre-existing uncommitted user changes, so we disable the guard and warn.
+  // Lenses are contractually read-only. Snapshot HEAD so we can detect a lens
+  // that edits or commits despite the prompt (it runs bypassPermissions). We only
+  // ENFORCE (reset --hard, restore policy) when the worktree starts tracked-clean
+  // — otherwise a reset would discard pre-existing user changes.
   const baseHead = git(["rev-parse", "HEAD"], workspaceDir);
   const enforceReadOnly =
     baseHead != null && trackedStatus(workspaceDir) === "";
-  if (baseHead != null && !enforceReadOnly) {
+  if (baseHead != null && !enforceReadOnly && mutationPolicy === "restore") {
     process.stderr.write(
       `${red(SYM.cross)} ${dim("worktree has uncommitted tracked changes — panel lens read-only enforcement disabled (won't risk your changes)")}\n`
     );
@@ -280,121 +444,149 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
 
   const findingsDirRef = `./${posix.join(".otto-tmp", panelRel)}/`;
 
-  // Restore HEAD if a contractually read-only sub-agent (lens or verifier)
-  // committed or edited tracked files despite the prompt. Only safe when the
-  // worktree started clean, so reset --hard can discard only the sub-agent's
-  // own changes — never pre-existing work. Returns true if it had to restore.
-  const restoreIfMutated = (who: string): boolean => {
+  // Under `restore`: reset a read-only sub-agent's tracked mutation (only when the
+  // worktree started clean). Under `fail`: any HEAD/tracked/untracked mutation is
+  // a contract error.
+  const guardMutation = (who: string): void => {
+    if (mutationPolicy === "fail") {
+      const mutated =
+        baseHead != null &&
+        (lensMutatedRepo(workspaceDir, baseHead) ||
+          worktreeDirty(workspaceDir));
+      if (mutated) {
+        contractErrors.push(`${who} mutated the repo (read-only violation)`);
+        breakContract([], [], emptySeverity());
+      }
+      return;
+    }
     if (enforceReadOnly && lensMutatedRepo(workspaceDir, baseHead)) {
       process.stderr.write(
         `${red(SYM.cross)} ${dim(`${who} mutated the repo (read-only violation) — restoring to ${baseHead!.slice(0, 8)}`)}\n`
       );
       git(["reset", "--hard", baseHead!], workspaceDir);
-      return true;
     }
-    return false;
   };
 
   try {
-    // 1. Lenses — each finds defects through one lens, read-only. Run them
-    //    concurrently (bounded) since they are independent reads of the same
-    //    HEAD. The per-lens reset guard is UNSAFE while siblings run, so we do
-    //    NOT restore inside the parallel region — the worktree started
-    //    tracked-clean (when enforceReadOnly), so a single end-of-batch reset
-    //    below undoes any read-only violation by any lens before verify runs.
+    // 1. Lenses — independent read-only reviews of the same HEAD, bounded-parallel.
     phaseLine(`${lenses.length} lenses (parallel): ${lenses.join(", ")}`);
     const lensStartedAt = isoNow();
-    // boundedMap preserves input (lens-index) order in `results`.
     const results = await boundedMap(lenses, LENS_CONCURRENCY, (lens) =>
       executeStage({
-        stage: { ...LENS_STAGE, tier: tierForLens(lens) },
-        vars: { LENS: lens, RESUME: resumeWithXtask },
-        workspaceDir,
-        packageDir,
-        iteration,
-        maxRetries,
-        tokenMode,
-        signal,
-        agentId,
+        ...stageBase,
+        stage: { ...lensStage, tier: tierForLens(lens) },
+        vars: { LENS: lens, RESUME: resumeWithXtask, ...extraVars },
         logLabel: `lens-${lens}`,
         modelRouting: opts.modelRouting,
         tierLadder: opts.tierLadder,
         riskAssessment: opts.riskAssessment,
-      }).then((sr) => ({ lens, sr }))
+      }).then((sr) => ({ lens, sr: decorate(sr) }))
     );
-    // One reset for the whole batch: undoes any tracked mutation/commit a lens
-    // made in violation of the read-only contract, before the verifier reads.
-    restoreIfMutated("lenses");
+    // One reset for the whole batch (or a contract error under `fail`).
+    guardMutation("lenses");
 
-    // Emit evidence + budget control in lens-INDEX order (deterministic), even
-    // though the agents ran concurrently. onStage still owns the budget stop —
-    // but since every lens already ran, a stop just skips verify + synth.
+    // Emit evidence + budget control in lens-INDEX order (deterministic).
     let stop = false;
     let cooldownFactor = 1;
+    let malformedFindings = 0;
     for (const { lens, sr } of results) {
-      const parsed = parseFindings(sr.result, lens).findings.length;
+      stageResults.push(sr);
+      if (sr.isError) {
+        contractErrors.push(`lens ${lens} returned an error result`);
+        breakContract([], [], emptySeverity());
+      }
+      const parsed = parseFindings(sr.result, lens);
+      malformedFindings += parsed.dropped;
       outcomeLine(
         /<lens>\s*SKIP\s*<\/lens>/i.test(sr.result.trim())
           ? "skipped (no commit)"
-          : `${parsed} finding${parsed === 1 ? "" : "s"}`
+          : `${parsed.findings.length} finding${parsed.findings.length === 1 ? "" : "s"}`
       );
       recordStage?.(lens, sr, lensStartedAt);
       const ctrl = onStage?.(sr) ?? { stop: false, cooldownFactor: 1 };
       if (ctrl.stop) stop = true;
-      // Lenses ran concurrently, so there is one batch cooldown — pace it by the
-      // most-throttled lens (max factor) to honor adaptive backoff.
       cooldownFactor = Math.max(cooldownFactor, ctrl.cooldownFactor);
     }
+    // Strict mode fails on any malformed finding row; panel mode already dropped
+    // (and counted) it above without failing.
+    if (strictFindings && malformedFindings > 0) {
+      contractErrors.push(`${malformedFindings} malformed finding row(s)`);
+      breakContract([], [], emptySeverity());
+    }
     if (stop) {
-      // Budget exhausted — skip verify + synth, return the last lens result.
-      return results[results.length - 1].sr;
+      // Budget exhausted — skip verify, return the analysis so far (no confirmed).
+      return makeResult([], [], emptySeverity());
     }
 
-    // Merge + dedupe across lenses into a single findings-merged.md so the
-    // verifier (which globs findings-*.md) reads each issue exactly once. We
-    // deliberately do NOT also write per-lens findings-<lens>.md files — both
-    // would double-count under the glob.
+    // Merge + dedupe across lenses into one findings-merged.md (the verifier
+    // globs findings-*.md, so one file is read exactly once).
     const { findings } = mergeLensFindings(
       results.map((r) => ({ lens: r.lens, text: r.sr.result }))
     );
-    const counts = severityCounts(findings);
+    const candidateCounts = severityCounts(findings);
     if (findings.length === 0) {
-      // Nothing to verify or fix — return a synthetic clean result.
-      outcomeLine("no findings — skipping verify + synth");
-      return {
-        result: "<review>OK</review>",
-        costUsd: 0,
-        isError: false,
-        apiErrorStatus: null,
-        usage: emptyTokenUsage(),
-        runtimeId: agentId ?? DEFAULT_AGENT,
-      };
+      // Nothing to verify — a clean analysis.
+      outcomeLine("no findings — skipping verify");
+      return makeResult([], [], emptySeverity());
     }
+    // The merged candidate findings, as pipe-delimited wire rows. Written to
+    // findings-merged.md (globbed via FINDINGS_DIR by the substrate verifier) AND
+    // exposed as the `CANDIDATE_FINDINGS` var so a template can inline them
+    // directly (the P32 `pr-review-verify.md` contract). The substrate
+    // `review-verify.md` ignores CANDIDATE_FINDINGS, so this is inert there.
+    const candidateFindingsWire = findings.map(findingToWire).join("\n");
     writeFileSync(
       join(panelHostDir, "findings-merged.md"),
-      findings.map(findingToWire).join("\n") + "\n",
+      candidateFindingsWire + "\n",
       "utf8"
     );
     if (cooldownMs > 0) await sleep(cooldownMs * cooldownFactor, signal);
 
-    // 2. Adversarial verify — a skeptic refutes the lens findings, writing
-    //    verdicts.md (CONFIRMED/REJECTED) so synth only fixes survivors.
+    // 2. Adversarial verify — a skeptic refutes the candidate findings.
     phaseLine("adversarial verify");
     const verifyStartedAt = isoNow();
-    const verify = await executeStage({
-      stage: VERIFY_STAGE,
-      vars: { FINDINGS_DIR: findingsDirRef, RESUME: resumeWithXtask },
-      workspaceDir,
-      packageDir,
-      iteration,
-      maxRetries,
-      tokenMode,
-      signal,
-      agentId,
-      logLabel: "verify",
-    });
-    restoreIfMutated("verify");
-    recordStage?.(VERIFY_STAGE.name, verify, verifyStartedAt, counts);
+    const verify = decorate(
+      await executeStage({
+        ...stageBase,
+        stage: verifyStage,
+        vars: {
+          FINDINGS_DIR: findingsDirRef,
+          CANDIDATE_FINDINGS: candidateFindingsWire,
+          RESUME: resumeWithXtask,
+          ...extraVars,
+        },
+        logLabel: "verify",
+      })
+    );
+    guardMutation("verify");
+    stageResults.push(verify);
+    if (verify.isError) {
+      contractErrors.push("verifier returned an error result");
+      breakContract([], [], emptySeverity());
+    }
+    recordStage?.(verifyStage.name, verify, verifyStartedAt, candidateCounts);
+
+    if (verdictSource === "result") {
+      // P32 flow: parse verdicts straight from the verifier's returned text —
+      // no verdicts.md is read or required.
+      const parse = parseReviewVerdicts(verify.result, findings);
+      const vctrl = onStage?.(verify) ?? { stop: false, cooldownFactor: 1 };
+      if (vctrl.stop) return makeResult([], [], emptySeverity());
+      const counts = severityCounts(parse.confirmed);
+      const kept = suppressLowValue(parse.confirmed).kept;
+      if (parse.errors.length > 0) {
+        // Strict: any malformed/missing/duplicate/unmatched verdict fails.
+        contractErrors.push(...parse.errors);
+        breakContract(kept, parse.rejected, counts);
+      }
+      if (kept.length > 0 && cooldownMs > 0) {
+        await sleep(cooldownMs * vctrl.cooldownFactor, signal);
+      }
+      return makeResult(kept, parse.rejected, counts);
+    }
+
+    // Default (substrate) flow: the verifier wrote verdicts.md. Its existence +
+    // CONFIRMED count gate the fix stage, preserving today's behavior.
     const verdicts = readVerdicts(panelHostDir);
     if (verdicts.exists) {
       outcomeLine(
@@ -403,24 +595,82 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     } else {
       outcomeLine("verifier wrote no verdicts.md (contract violation)", false);
     }
-
     const vctrl = onStage?.(verify) ?? { stop: false, cooldownFactor: 1 };
-    if (vctrl.stop) return verify; // budget exhausted — skip synth
-
-    // Contract gate: the verifier MUST write verdicts.md (the template emits
-    // `none` when there were no findings). Its absence means synth would run
-    // with no validated input — so skip the fix stage rather than let synth
-    // patch from unverified findings. Forward progress is preserved: the
-    // implementer's commit stands, just unreviewed this iteration.
+    if (vctrl.stop) return makeResult([], [], emptySeverity()); // budget spent
     if (!verdicts.exists) {
       outcomeLine("skipping synth — no validated verdicts to act on", false);
-      return verify;
+      return makeResult([], [], emptySeverity());
     }
-    if (cooldownMs > 0) await sleep(cooldownMs * vctrl.cooldownFactor, signal);
+    // The verifier's own verdicts.md is authoritative on CONFIRMED count here.
+    // The candidate findings stand in as the confirmed set only for the gate +
+    // severity tally; the substrate synth is handed the verifier's ORIGINAL
+    // verdicts.md (its real CONFIRMED/REJECTED split) so it fixes only the
+    // confirmed subset. No CONFIRMED ⇒ nothing to fix.
+    const allConfirmed = verdicts.confirmed > 0 ? findings : [];
+    const counts = severityCounts(allConfirmed);
+    const kept = suppressLowValue(allConfirmed).kept;
+    // Capture the verifier's real verdicts.md now — `finally` deletes panelHostDir
+    // before runPanelSynth runs.
+    let verifierVerdicts: string | undefined;
+    if (kept.length > 0) {
+      try {
+        verifierVerdicts = readFileSync(
+          join(panelHostDir, "verdicts.md"),
+          "utf8"
+        );
+      } catch {
+        verifierVerdicts = undefined;
+      }
+    }
+    if (kept.length > 0 && cooldownMs > 0) {
+      await sleep(cooldownMs * vctrl.cooldownFactor, signal);
+    }
+    return { ...makeResult(kept, [], counts), verifierVerdicts };
+  } finally {
+    rmSync(panelHostDir, { recursive: true, force: true });
+  }
+}
 
-    // 3. Synth — fix only CONFIRMED findings in one fix(review:) commit.
+/** Synthesize & fix the CONFIRMED findings in one `fix(review:)` commit. Hands
+ *  synth the verifier's ORIGINAL verdicts.md (its true CONFIRMED/REJECTED split)
+ *  via `analysis.verifierVerdicts`, so CONFIRMED-only semantics are preserved and
+ *  rejected findings are never presented as CONFIRMED. Runs the existing
+ *  `review-synth.md`, retaining today's onStage/recordStage/commit-status. */
+async function runPanelSynth(
+  opts: RunPanelOptions,
+  analysis: ReviewAnalysisResult
+): Promise<StageResult> {
+  const {
+    workspaceDir,
+    packageDir,
+    iteration,
+    maxRetries,
+    tokenMode = "off",
+    signal,
+    agentId,
+    resumeNote = "",
+    onStage,
+    recordStage,
+  } = opts;
+  const synthRel = `panel-synth-${process.pid}-${iteration}-${Date.now()}`;
+  const synthHostDir = join(workspaceDir, ".otto-tmp", synthRel);
+  mkdirSync(synthHostDir, { recursive: true });
+  const findingsDirRef = `./${posix.join(".otto-tmp", synthRel)}/`;
+  const baseHead = git(["rev-parse", "HEAD"], workspaceDir);
+  try {
+    // Faithful CONFIRMED-only semantics: synth reads the verifier's ORIGINAL
+    // verdicts.md (its real CONFIRMED + REJECTED lines), so it fixes only the
+    // confirmed subset and ignores rejected false positives. Fall back to
+    // reconstructing CONFIRMED lines from the kept findings only when the
+    // verifier's text wasn't captured (e.g. a non-file verdict source).
+    const verdictsText =
+      analysis.verifierVerdicts ??
+      analysis.confirmed
+        .map((f) => `CONFIRMED ${findingToWire(f)}`)
+        .join("\n") + "\n";
+    writeFileSync(join(synthHostDir, "verdicts.md"), verdictsText, "utf8");
     phaseLine("synthesize & fix");
-    const synthStartedAt = isoNow();
+    const synthStartedAt = new Date().toISOString();
     const synth = await executeStage({
       stage: SYNTH_STAGE,
       vars: { FINDINGS_DIR: findingsDirRef, RESUME: resumeNote },
@@ -433,9 +683,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
       agentId,
       logLabel: "synth",
     });
-    // Report from real signals: HEAD movement AND worktree cleanliness. A bare
-    // HEAD check would call an edit-without-commit (or a `commit -am` that missed
-    // a new file) "clean" — surface the dirty tree instead of hiding it.
+    // Report from real signals: HEAD movement AND worktree cleanliness.
     const after = git(["rev-parse", "HEAD"], workspaceDir);
     const committed = baseHead != null && after != null && after !== baseHead;
     const dirty = worktreeDirty(workspaceDir);
@@ -456,10 +704,30 @@ export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
     } else {
       outcomeLine("clean — no fix needed");
     }
-    recordStage?.(SYNTH_STAGE.name, synth, synthStartedAt, counts);
+    recordStage?.(SYNTH_STAGE.name, synth, synthStartedAt, analysis.severity);
     onStage?.(synth);
     return synth;
   } finally {
-    rmSync(panelHostDir, { recursive: true, force: true });
+    rmSync(synthHostDir, { recursive: true, force: true });
   }
+}
+
+/** Harness-orchestrated reviewer panel: read-only lens analysis → one synth
+ *  fix(review) commit, but only when adversarially-confirmed findings survive. */
+export async function runPanel(opts: RunPanelOptions): Promise<StageResult> {
+  let analysis: ReviewAnalysisResult;
+  try {
+    analysis = await analyzeReview({
+      ...opts,
+      verdictSource: "file",
+      mutationPolicy: "restore",
+    });
+  } catch (error) {
+    if (!(error instanceof ReviewAnalysisContractError)) throw error;
+    return error.result.stageResults.at(-1) ?? cleanPanelResult(opts.agentId);
+  }
+  if (analysis.confirmed.length === 0) {
+    return analysis.stageResults.at(-1) ?? cleanPanelResult(opts.agentId);
+  }
+  return runPanelSynth(opts, analysis);
 }

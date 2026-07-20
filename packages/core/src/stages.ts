@@ -1,11 +1,23 @@
 import type { ModelTier } from "./model-tier.js";
 
+/**
+ * OS-enforced execution capability for a stage (issue P32). `workspace-write`
+ * is today's behavior: the stage may write inside the sandboxed workspace.
+ * `read-only` denies all writes and network egress and scrubs credentials, so an
+ * untrusted PR head can be reviewed without any write or GitHub capability.
+ * Absent ⇒ `workspace-write` (see {@link stageAccess}), keeping every existing
+ * stage byte-for-byte unchanged.
+ */
+export type StageAccess = "workspace-write" | "read-only";
+
 export type Stage = {
   name: string;
   template: string;
   permissionMode?: string;
   /** Difficulty tier for model routing (issue #66 P11). Absent ⇒ runtime default model. */
   tier?: ModelTier;
+  /** OS-enforced access mode (issue P32). Absent ⇒ `workspace-write` (today). */
+  access?: StageAccess;
 };
 
 // Every stage runs `claude --permission-mode bypassPermissions` so bash + edits
@@ -90,5 +102,23 @@ export const STAGES = {
     name: "journal-screen",
     template: "journal-screen.md",
     permissionMode: "bypassPermissions",
+  } satisfies Stage,
+  // P32 automated PR review (issue P32): one read-only lens over the exact PR
+  // revision, and the adversarial verifier that refutes its candidate findings.
+  // Both run `access: "read-only"` so an untrusted PR head is reviewed with no
+  // write or GitHub capability, and `plan` permission mode denies edits.
+  prReviewLens: {
+    name: "pr-review-lens",
+    template: "pr-review-lens.md",
+    permissionMode: "plan",
+    tier: "strong",
+    access: "read-only",
+  } satisfies Stage,
+  prReviewVerify: {
+    name: "pr-review-verify",
+    template: "pr-review-verify.md",
+    permissionMode: "plan",
+    tier: "strong",
+    access: "read-only",
   } satisfies Stage,
 };

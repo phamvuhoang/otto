@@ -1,4 +1,10 @@
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -15,6 +21,7 @@ import {
   writeManifest,
   writeRunReport,
   writeStageRecord,
+  type PullRequestReviewEvidence,
   type RunManifest,
   type SafetyEvent,
   type StageRecord,
@@ -54,6 +61,29 @@ const manifest: RunManifest = {
   tokenUsage: emptyTokenUsage(),
   artifacts: [],
   startedAt: "2026-06-19T00:00:00.000Z",
+};
+
+const pullRequestReview: PullRequestReviewEvidence = {
+  repository: "acme/widgets",
+  pullRequest: 42,
+  url: "https://github.com/acme/widgets/pull/42",
+  baseSha: "a".repeat(40),
+  headSha: "b".repeat(40),
+  label: "otto-review",
+  reviewInput: {
+    kind: "prompt",
+    source: "direct",
+    fingerprint: "c".repeat(64),
+    artifactPath: ".otto/runs/2026-06-19T00-00-00-000Z-13793/review-input.txt",
+  },
+  outcome: "changes-requested",
+  confirmed: 2,
+  rejected: 1,
+  outputMode: "comment",
+  githubReview: true,
+  commentId: 555,
+  reviewId: 999,
+  supersededBy: "d".repeat(40),
 };
 
 const stageRecord: StageRecord = {
@@ -115,6 +145,62 @@ describe("manifest I/O", () => {
     mkdirSync(join(d, ".otto", "runs", "rid"), { recursive: true });
     writeFileSync(join(d, ".otto", "runs", "rid", "manifest.json"), "{ nope");
     expect(readManifest(d, "rid")).toBeNull();
+  });
+});
+
+describe("P32 pull-request review evidence (Task 9)", () => {
+  it("round-trips pullRequestReview evidence losslessly on a github-pr-review manifest", () => {
+    const d = tmp();
+    const m: RunManifest = {
+      ...manifest,
+      mode: "github-pr-review",
+      pullRequestReview,
+    };
+    writeManifest(d, m);
+    expect(readManifest(d, m.runId)).toEqual(m);
+  });
+
+  it("round-trips evidence with no outcome/receipts yet (in-flight review)", () => {
+    const d = tmp();
+    const inFlight: PullRequestReviewEvidence = {
+      repository: "acme/widgets",
+      pullRequest: 7,
+      url: "https://github.com/acme/widgets/pull/7",
+      baseSha: "1".repeat(40),
+      headSha: "2".repeat(40),
+      label: "otto-review",
+      reviewInput: {
+        kind: "none",
+        source: "none",
+        fingerprint: "3".repeat(64),
+        artifactPath: ".otto/runs/rid/review-input.txt",
+      },
+      confirmed: 0,
+      rejected: 0,
+      outputMode: "text",
+      githubReview: false,
+    };
+    const m: RunManifest = {
+      ...manifest,
+      runId: "2026-06-19T01-00-00-000Z-1",
+      mode: "github-pr-review",
+      pullRequestReview: inFlight,
+    };
+    writeManifest(d, m);
+    expect(readManifest(d, m.runId)).toEqual(m);
+  });
+
+  it("never adds a pullRequestReview field to an ordinary (non-P32) manifest", () => {
+    const d = tmp();
+    writeManifest(d, manifest);
+    const raw = JSON.parse(
+      readFileSync(
+        join(d, ".otto", "runs", manifest.runId, "manifest.json"),
+        "utf8"
+      )
+    );
+    expect("pullRequestReview" in raw).toBe(false);
+    expect(readManifest(d, manifest.runId)).toEqual(manifest);
   });
 });
 
@@ -205,15 +291,39 @@ describe("stage record I/O", () => {
   });
   it("round-trips skills used recorded on a stage record", () => {
     const d = tmp();
-    const skillsUsed = [{ name: "release-flow", version: "1.0.0", reasons: ["scope match"] }];
+    const skillsUsed = [
+      { name: "release-flow", version: "1.0.0", reasons: ["scope match"] },
+    ];
+    writeStageRecord(d, "rid", 0, { ...stageRecord, skillsUsed });
+    expect(readStageRecords(d, "rid")[0].skillsUsed).toEqual(skillsUsed);
+  });
+  it("round-trips an optional checksum on a skill usage record (P32 Task 6)", () => {
+    const d = tmp();
+    const skillsUsed = [
+      {
+        name: "builtin:otto-code-review",
+        version: "1",
+        source: "builtin",
+        stage: "pr-review",
+        checksum: "a".repeat(64),
+      },
+    ];
     writeStageRecord(d, "rid", 0, { ...stageRecord, skillsUsed });
     expect(readStageRecords(d, "rid")[0].skillsUsed).toEqual(skillsUsed);
   });
   it("round-trips reviewSeverity counts recorded on a stage record", () => {
     const d = tmp();
-    const reviewSeverity = { blocker: 1, major: 0, minor: 0, nit: 2, suppressed: 2 };
+    const reviewSeverity = {
+      blocker: 1,
+      major: 0,
+      minor: 0,
+      nit: 2,
+      suppressed: 2,
+    };
     writeStageRecord(d, "rid", 0, { ...stageRecord, reviewSeverity });
-    expect(readStageRecords(d, "rid")[0].reviewSeverity).toEqual(reviewSeverity);
+    expect(readStageRecords(d, "rid")[0].reviewSeverity).toEqual(
+      reviewSeverity
+    );
   });
   it("returns [] when the run has no stage records", () => {
     expect(readStageRecords(tmp(), "nope")).toEqual([]);

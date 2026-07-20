@@ -1,0 +1,745 @@
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { flockSync } from "fs-ext";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Wrap the real node:fs open/close with pass-through spies so a test can prove
+// acquireReviewLease never leaks the lock fd. Everything else in node:fs is the
+// untouched real module, so all other tests behave identically. (ESM forbids
+// vi.spyOn on a module namespace, hence this module mock.)
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    openSync: vi.fn(actual.openSync),
+    closeSync: vi.fn(actual.closeSync),
+  };
+});
+import {
+  reviewStatePath,
+  reviewPublicationLockPath,
+  readReviewState,
+  writeReviewState,
+  acquireReviewLease,
+  acquirePublicationLease,
+  isStateRunnable,
+  _resolveFlockSync,
+  _setFlockSyncForTest,
+  _setFlockLoaderForTest,
+  ReviewLeaseError,
+  type FlockSyncFn,
+  type ReviewLease,
+  type PullRequestReviewState,
+} from "../pr-review-state.js";
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const REPO = "Owner/Repo";
+const PR = 42;
+const HEAD = "a".repeat(40);
+const FP = "b".repeat(64);
+const RUN = "run-123";
+
+const T0 = new Date("2026-07-18T00:00:00.000Z");
+const at = (min: number) => new Date(T0.getTime() + min * 60_000);
+
+const STATUSES: PullRequestReviewState["status"][] = [
+  "running",
+  "analysis-failed",
+  "publish-failed",
+  "succeeded",
+  "superseded",
+  "cancelled",
+];
+
+function baseState(
+  over: Partial<PullRequestReviewState> = {}
+): PullRequestReviewState {
+  return {
+    repository: REPO,
+    pullRequest: PR,
+    headSha: HEAD,
+    inputFingerprint: FP,
+    status: "running",
+    runId: RUN,
+    outputs: {},
+    attempts: 1,
+    updatedAt: T0.toISOString(),
+    ...over,
+  };
+}
+
+let ws: string;
+beforeEach(() => {
+  ws = mkdtempSync(join(tmpdir(), "otto-review-state-"));
+});
+afterEach(() => {
+  rmSync(ws, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// Path + persistence
+// ---------------------------------------------------------------------------
+
+describe("reviewStatePath", () => {
+  it("is exactly the composite layout with lower-cased owner/repo", () => {
+    expect(reviewStatePath(ws, REPO, PR, HEAD, FP)).toBe(
+      join(
+        ws,
+        ".otto",
+        "review-state",
+        "github",
+        "owner",
+        "repo",
+        "42",
+        HEAD,
+        `${FP}.json`
+      )
+    );
+  });
+
+  it("gives a new head SHA or changed fingerprint an independent path", () => {
+    const p1 = reviewStatePath(ws, REPO, PR, HEAD, FP);
+    const p2 = reviewStatePath(ws, REPO, PR, "c".repeat(40), FP);
+    const p3 = reviewStatePath(ws, REPO, PR, HEAD, "d".repeat(64));
+    expect(new Set([p1, p2, p3]).size).toBe(3);
+  });
+
+  it("rejects a bad repository / PR / SHA / fingerprint before disk I/O", () => {
+    expect(() => reviewStatePath(ws, "no-slash", PR, HEAD, FP)).toThrow();
+    expect(() => reviewStatePath(ws, "../etc/x", PR, HEAD, FP)).toThrow();
+    expect(() => reviewStatePath(ws, REPO, 0, HEAD, FP)).toThrow();
+    expect(() => reviewStatePath(ws, REPO, PR, "xyz", FP)).toThrow();
+    expect(() => reviewStatePath(ws, REPO, PR, HEAD, "B".repeat(64))).toThrow();
+    expect(() => reviewStatePath(ws, REPO, PR, HEAD, "b".repeat(63))).toThrow();
+  });
+});
+
+describe("writeReviewState / readReviewState", () => {
+  it("round-trips every status", () => {
+    for (const status of STATUSES) {
+      const state = baseState({ status });
+      writeReviewState(ws, state);
+      expect(readReviewState(ws, REPO, PR, HEAD, FP)).toEqual(state);
+    }
+  });
+
+  it("returns null for an absent state", () => {
+    expect(readReviewState(ws, REPO, PR, HEAD, FP)).toBeNull();
+  });
+
+  it("returns null for malformed JSON", () => {
+    const p = reviewStatePath(ws, REPO, PR, HEAD, FP);
+    mkdirSync(join(p, ".."), { recursive: true });
+    writeFileSync(p, "{ not json");
+    expect(readReviewState(ws, REPO, PR, HEAD, FP)).toBeNull();
+  });
+
+  it("returns null when the stored fingerprint does not match its path", () => {
+    const p = reviewStatePath(ws, REPO, PR, HEAD, FP);
+    mkdirSync(join(p, ".."), { recursive: true });
+    writeFileSync(
+      p,
+      JSON.stringify(baseState({ inputFingerprint: "e".repeat(64) }))
+    );
+    expect(readReviewState(ws, REPO, PR, HEAD, FP)).toBeNull();
+  });
+
+  it("returns null when repository/PR/head in the record disagree with the path", () => {
+    const p = reviewStatePath(ws, REPO, PR, HEAD, FP);
+    mkdirSync(join(p, ".."), { recursive: true });
+    writeFileSync(p, JSON.stringify(baseState({ pullRequest: 99 })));
+    expect(readReviewState(ws, REPO, PR, HEAD, FP)).toBeNull();
+  });
+
+  it("accepts a canonical analysisArtifact but rejects any other path", () => {
+    const good = baseState({
+      analysisArtifact: `.otto/runs/${RUN}/analysis.json`,
+    });
+    writeReviewState(ws, good);
+    expect(readReviewState(ws, REPO, PR, HEAD, FP)).toEqual(good);
+
+    const p = reviewStatePath(ws, REPO, PR, HEAD, FP);
+    writeFileSync(
+      p,
+      JSON.stringify(baseState({ analysisArtifact: ".otto/runs/other/x.json" }))
+    );
+    expect(readReviewState(ws, REPO, PR, HEAD, FP)).toBeNull();
+
+    writeFileSync(
+      p,
+      JSON.stringify(baseState({ analysisArtifact: "/etc/passwd" }))
+    );
+    expect(readReviewState(ws, REPO, PR, HEAD, FP)).toBeNull();
+  });
+
+  it("writes atomically: valid JSON, no leftover temp files", () => {
+    writeReviewState(ws, baseState());
+    const dir = join(reviewStatePath(ws, REPO, PR, HEAD, FP), "..");
+    const entries = readdirSync(dir);
+    expect(entries).toEqual([`${FP}.json`]);
+    expect(() =>
+      JSON.parse(readFileSync(reviewStatePath(ws, REPO, PR, HEAD, FP), "utf8"))
+    ).not.toThrow();
+  });
+
+  it("validates identity before writing", () => {
+    expect(() =>
+      writeReviewState(ws, baseState({ runId: "bad id!" }))
+    ).toThrow();
+    expect(() =>
+      writeReviewState(ws, baseState({ headSha: "nope" }))
+    ).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OS flock (advisory-lock) lease
+//
+// The lease is a real kernel-serialized `flock` held on an open fd for the run's
+// lifetime. Two independent open file descriptions cannot both take the
+// exclusive lock, so two acquirers can NEVER both get `acquired: true` — the
+// exact double-hold the old read-decide-takeover claim scheme could not close.
+// The kernel auto-releases the lock when the holding fd closes or the process
+// dies, so crash recovery needs no PID probe, tombstone, or staleness logic.
+// ---------------------------------------------------------------------------
+
+const leaseOpts = (over: Record<string, unknown> = {}) => ({
+  workspaceDir: ws,
+  repository: REPO,
+  pullRequest: PR,
+  headSha: HEAD,
+  inputFingerprint: FP,
+  runId: RUN,
+  ...over,
+});
+
+/** The on-disk lock file path for a composite identity. */
+function lockFile(repository = REPO, pr = PR, head = HEAD, fp = FP): string {
+  return reviewStatePath(ws, repository, pr, head, fp).replace(
+    /\.json$/,
+    ".lock"
+  );
+}
+
+let held: ReviewLease[] = [];
+afterEach(() => {
+  for (const lease of held) lease.release();
+  held = [];
+});
+function acquire(over: Record<string, unknown> = {}) {
+  const res = acquireReviewLease(leaseOpts(over));
+  if (res.acquired) held.push(res.lease);
+  return res;
+}
+
+describe("acquireReviewLease", () => {
+  it("acquires a free identity, holds the lock, and reports ownership", () => {
+    const res = acquire();
+    expect(res.acquired).toBe(true);
+    if (res.acquired) {
+      expect(typeof res.lease.release).toBe("function");
+      expect(typeof res.lease.ownsClaim).toBe("function");
+      expect(res.lease.ownsClaim()).toBe(true);
+    }
+    expect(existsSync(lockFile())).toBe(true);
+  });
+
+  it("a SECOND acquire while the first still holds the flock is busy — two independent holders can NEVER both acquire", () => {
+    // This is the exact double-hold the old read-decide-takeover claim scheme
+    // could not close. `acquireReviewLease` opens its OWN fd each call, so these
+    // are two independent open file descriptions; the kernel serializes the
+    // exclusive flock and the second acquirer is rejected outright.
+    const first = acquire();
+    expect(first.acquired).toBe(true);
+
+    const second = acquireReviewLease(leaseOpts({ runId: "run-other" }));
+    expect(second.acquired).toBe(false);
+    if (!second.acquired) expect(second.reason).toBe("busy");
+  });
+
+  it("acquires independently for two fingerprints on the same head SHA", () => {
+    const a = acquire();
+    const b = acquire({ inputFingerprint: "f".repeat(64), runId: "run-2" });
+    expect(a.acquired).toBe(true);
+    expect(b.acquired).toBe(true);
+  });
+
+  it("release frees the lock so a subsequent acquire succeeds", () => {
+    const first = acquireReviewLease(leaseOpts());
+    expect(first.acquired).toBe(true);
+    if (!first.acquired) throw new Error("expected acquire");
+
+    const busy = acquireReviewLease(leaseOpts({ runId: "x" }));
+    expect(busy.acquired).toBe(false);
+
+    first.lease.release();
+
+    const again = acquire({ runId: "x" });
+    expect(again.acquired).toBe(true);
+  });
+
+  it("release keeps the lock FILE on disk (never unlinks it) so exclusion survives", () => {
+    // Unlinking a flock'd lock file is the classic footgun: it decouples future
+    // acquirers onto a fresh inode (path→new inode via O_CREAT) whose flock is
+    // independent of any inode a prior acquirer still holds → double-acquire. The
+    // file MUST persist so every acquirer opens the same path → same inode →
+    // contends on the SAME kernel lock.
+    const first = acquireReviewLease(leaseOpts());
+    expect(first.acquired).toBe(true);
+    if (!first.acquired) throw new Error("expected acquire");
+
+    first.lease.release();
+
+    // The persistent lock file survives release…
+    expect(existsSync(lockFile())).toBe(true);
+    // …and a subsequent acquire re-locks that same inode at the same path.
+    const again = acquire({ runId: "next" });
+    expect(again.acquired).toBe(true);
+  });
+
+  it("release is idempotent and ownsClaim is false afterwards", () => {
+    const first = acquireReviewLease(leaseOpts());
+    expect(first.acquired).toBe(true);
+    if (!first.acquired) throw new Error("expected acquire");
+    expect(first.lease.ownsClaim()).toBe(true);
+
+    first.lease.release();
+    // Safe to call again in a finally.
+    first.lease.release();
+    expect(first.lease.ownsClaim()).toBe(false);
+  });
+
+  it("crash recovery is automatic: the kernel releases a dead holder's lock on fd close", () => {
+    // Simulate a crashed daemon that still holds the OS lock: open the lock file
+    // on a raw fd and take the exclusive flock ourselves.
+    mkdirSync(join(lockFile(), ".."), { recursive: true });
+    const crashedFd = openSync(lockFile(), "a");
+    flockSync(crashedFd, "exnb");
+
+    // While that "process" holds the lock, a fresh acquire is busy.
+    const busy = acquireReviewLease(leaseOpts({ runId: "restart" }));
+    expect(busy.acquired).toBe(false);
+    if (!busy.acquired) expect(busy.reason).toBe("busy");
+
+    // The daemon "crashes": closing its fd makes the kernel release the flock —
+    // no PID probe, tombstone, or staleness logic is involved.
+    closeSync(crashedFd);
+
+    // The restart's exclusive flock simply succeeds.
+    const recovered = acquire({ runId: "restart" });
+    expect(recovered.acquired).toBe(true);
+    if (recovered.acquired) expect(recovered.lease.ownsClaim()).toBe(true);
+  });
+
+  it("a stale lock FILE left on disk with no live holder is freely acquirable (file content is not the authority)", () => {
+    // After a crash the lock FILE may survive, possibly holding stale evidence.
+    // With flock the file content is NOT the authority — nothing parses it for a
+    // pid or staleness. An unlocked file is simply acquirable.
+    mkdirSync(join(lockFile(), ".."), { recursive: true });
+    writeFileSync(
+      lockFile(),
+      JSON.stringify({ runId: "crashed", pid: 999_999_999 })
+    );
+    const res = acquire({ runId: "fresh" });
+    expect(res.acquired).toBe(true);
+    if (res.acquired) expect(res.lease.ownsClaim()).toBe(true);
+  });
+
+  it("rejects a bad runId before touching disk", () => {
+    expect(() => acquireReviewLease(leaseOpts({ runId: "bad id!" }))).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR-scoped SHARED publication lease (second lock)
+//
+// A SECOND persistent stable-inode flock keyed ONLY by repository/PR guards the
+// mutable summary-comment reconcile/write. It exists to SERIALIZE — not skip —
+// distinct input fingerprints onto the ONE shared summary comment, so it takes a
+// BLOCKING exclusive flock (`ex`), unlike the per-composite lease's `exnb`.
+// ---------------------------------------------------------------------------
+
+function pubLockFile(repository = REPO, pr = PR): string {
+  return join(
+    ws,
+    ".otto",
+    "review-state",
+    "github",
+    "owner",
+    "repo",
+    String(pr),
+    "publication.lock"
+  );
+}
+
+describe("reviewPublicationLockPath", () => {
+  it("is PR-scoped: identical for every head SHA and fingerprint of a PR", () => {
+    const a = reviewPublicationLockPath(ws, REPO, PR);
+    const b = reviewPublicationLockPath(ws, REPO, PR);
+    expect(a).toBe(b);
+    expect(a).toBe(pubLockFile());
+    // A sibling of the per-head composite state dirs (never nested under a head).
+    expect(a).not.toContain(HEAD);
+    expect(a).not.toContain(FP);
+  });
+
+  it("gives a different PR / repository an independent lock path", () => {
+    const p1 = reviewPublicationLockPath(ws, REPO, PR);
+    const p2 = reviewPublicationLockPath(ws, REPO, 99);
+    const p3 = reviewPublicationLockPath(ws, "Other/Repo", PR);
+    expect(new Set([p1, p2, p3]).size).toBe(3);
+  });
+
+  it("rejects a bad repository / PR before disk I/O", () => {
+    expect(() => reviewPublicationLockPath(ws, "no-slash", PR)).toThrow();
+    expect(() => reviewPublicationLockPath(ws, REPO, 0)).toThrow();
+  });
+});
+
+describe("acquirePublicationLease", () => {
+  it("acquires the PR-scoped lock, holds it, and reports ownership", () => {
+    const lease = acquirePublicationLease({
+      workspaceDir: ws,
+      repository: REPO,
+      pullRequest: PR,
+      runId: RUN,
+    });
+    held.push(lease);
+    expect(lease.ownsClaim()).toBe(true);
+    expect(existsSync(pubLockFile())).toBe(true);
+  });
+
+  it("release frees the lock and leaves the lock FILE on disk (stable inode)", () => {
+    const lease = acquirePublicationLease({
+      workspaceDir: ws,
+      repository: REPO,
+      pullRequest: PR,
+      runId: RUN,
+    });
+    lease.release();
+    expect(lease.ownsClaim()).toBe(false);
+    // Persistent lock file survives release so exclusion survives.
+    expect(existsSync(pubLockFile())).toBe(true);
+    // A subsequent acquire re-locks the same inode.
+    const again = acquirePublicationLease({
+      workspaceDir: ws,
+      repository: REPO,
+      pullRequest: PR,
+      runId: "next",
+    });
+    held.push(again);
+    expect(again.ownsClaim()).toBe(true);
+  });
+
+  it("takes a BLOCKING exclusive flock ('ex'), never the composite lease's non-blocking 'exnb'", () => {
+    // The op string is the whole serialize-vs-skip decision: `ex` WAITS for a
+    // live holder (serialize-then-proceed), `exnb` would reject it as busy
+    // (skip). Assert the publication lease chose the blocking op.
+    const ops: string[] = [];
+    const spy: FlockSyncFn = (_fd, op) => {
+      ops.push(op);
+    };
+    _setFlockSyncForTest(spy);
+    try {
+      const lease = acquirePublicationLease({
+        workspaceDir: ws,
+        repository: REPO,
+        pullRequest: PR,
+        runId: RUN,
+      });
+      lease.release();
+    } finally {
+      _setFlockSyncForTest(undefined);
+    }
+    expect(ops[0]).toBe("ex");
+    expect(ops).not.toContain("exnb");
+    expect(ops).toContain("un");
+  });
+
+  it("rejects a bad runId before touching disk", () => {
+    expect(() =>
+      acquirePublicationLease({
+        workspaceDir: ws,
+        repository: REPO,
+        pullRequest: PR,
+        runId: "bad id!",
+      })
+    ).toThrow();
+  });
+
+  it("wraps a non-busy flock failure (ENOTSUP) in an actionable ReviewLeaseError", () => {
+    const notsup: FlockSyncFn = () => {
+      const err = new Error("flock: not supported") as NodeJS.ErrnoException;
+      err.code = "ENOTSUP";
+      throw err;
+    };
+    _setFlockSyncForTest(notsup);
+    let thrown: unknown;
+    try {
+      acquirePublicationLease({
+        workspaceDir: ws,
+        repository: REPO,
+        pullRequest: PR,
+        runId: "notsup",
+      });
+    } catch (e) {
+      thrown = e;
+    } finally {
+      _setFlockSyncForTest(undefined);
+    }
+    expect(thrown).toBeInstanceOf(ReviewLeaseError);
+    expect((thrown as ReviewLeaseError).code).toBe("ENOTSUP");
+    expect((thrown as ReviewLeaseError).message).toContain(pubLockFile());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Real (non-busy) flock CALL failures — must be wrapped in an actionable error
+//
+// `getFlockSync()` only gives an actionable error when `fs-ext` itself is
+// MISSING. A real `flockSync` call failure — `ENOTSUP`/`ENOSYS` (advisory
+// locks unsupported, e.g. some network filesystems), a malformed/partial
+// native export, etc. — must NOT be rethrown raw: it must be wrapped in a
+// `ReviewLeaseError` naming the lock path, the original code, and the
+// local-filesystem/fs-ext guidance. The busy path (`EAGAIN`/`EWOULDBLOCK`)
+// must remain completely unaffected.
+// ---------------------------------------------------------------------------
+
+describe("acquireReviewLease — non-busy flock failures are wrapped, not raw", () => {
+  afterEach(() => {
+    // Always restore the real native flockSync so later tests (in this file,
+    // and any other lease acquisitions) are unaffected by the injected fake.
+    _setFlockSyncForTest(undefined);
+  });
+
+  it("wraps a real ENOTSUP flockSync failure in an actionable ReviewLeaseError, not busy", () => {
+    const notsup: FlockSyncFn = () => {
+      const err = new Error(
+        "flock: operation not supported on socket"
+      ) as NodeJS.ErrnoException;
+      err.code = "ENOTSUP";
+      throw err;
+    };
+    _setFlockSyncForTest(notsup);
+
+    let thrown: unknown;
+    try {
+      acquireReviewLease(leaseOpts({ runId: "notsup-run" }));
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown).toBeInstanceOf(ReviewLeaseError);
+    const err = thrown as ReviewLeaseError;
+    expect(err.code).toBe("ENOTSUP");
+    expect(err.message).toContain(lockFile());
+    expect(err.message).toContain("ENOTSUP");
+    expect(err.message.toLowerCase()).toContain("local filesystem");
+    expect(err.message).toContain("fs-ext");
+    expect((err.cause as NodeJS.ErrnoException)?.code).toBe("ENOTSUP");
+  });
+
+  it("throws the actionable error (not the raw error) when the resolved flockSync export is not callable", () => {
+    _setFlockSyncForTest(
+      123 as unknown as FlockSyncFn // simulates a malformed/partial fs-ext export
+    );
+
+    let thrown: unknown;
+    try {
+      acquireReviewLease(leaseOpts({ runId: "not-callable-run" }));
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown).toBeInstanceOf(ReviewLeaseError);
+    const err = thrown as ReviewLeaseError;
+    expect(err.message).toContain(lockFile());
+    expect(err.message).toContain("fs-ext");
+  });
+
+  it("the genuine busy path (EAGAIN) still returns { acquired: false, reason: 'busy' }, unaffected", () => {
+    const eagain: FlockSyncFn = (fd, op) => {
+      if (op === "exnb") {
+        const err = new Error("resource busy") as NodeJS.ErrnoException;
+        err.code = "EAGAIN";
+        throw err;
+      }
+    };
+    _setFlockSyncForTest(eagain);
+
+    const res = acquireReviewLease(leaseOpts({ runId: "busy-run" }));
+    expect(res.acquired).toBe(false);
+    if (!res.acquired) expect(res.reason).toBe("busy");
+  });
+
+  it("a normal acquire still works once the real flockSync is restored", () => {
+    _setFlockSyncForTest(undefined);
+    const res = acquire({ runId: "still-works" });
+    expect(res.acquired).toBe(true);
+  });
+});
+
+describe("acquireReviewLease — fd is closed when flock module resolution fails", () => {
+  afterEach(() => {
+    _setFlockLoaderForTest(undefined);
+  });
+
+  it("closes the opened lock fd (no leak) and rethrows an actionable error when getFlockSync() resolution throws", () => {
+    // A missing/unbuildable `fs-ext`: getFlockSync() → _resolveFlockSync()
+    // throws DIRECTLY, before any flock call. The fd opened for the lock file
+    // must still be closed — otherwise watch mode leaks one fd per poll, since
+    // a failed resolution is never cached and is retried on every acquire.
+    _setFlockLoaderForTest(() => {
+      throw new Error("Cannot find module 'fs-ext'");
+    });
+
+    const openMock = vi.mocked(openSync);
+    const closeMock = vi.mocked(closeSync);
+    openMock.mockClear();
+    closeMock.mockClear();
+
+    let thrown: unknown;
+    try {
+      acquireReviewLease(leaseOpts({ runId: "resolve-fail" }));
+    } catch (e) {
+      thrown = e;
+    }
+
+    // It throws (not swallowed) with an actionable message…
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("fs-ext");
+
+    // …and every fd openSync handed out during the call was closed — no leak.
+    const openedFds = openMock.mock.results
+      .filter((r) => r.type === "return")
+      .map((r) => r.value as number);
+    expect(openedFds.length).toBeGreaterThan(0);
+    for (const fd of openedFds) {
+      expect(closeMock).toHaveBeenCalledWith(fd);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lazy, optional native `fs-ext` load (P32 — opt-in / inert-by-default)
+//
+// `fs-ext` is a NATIVE, OPTIONAL dependency. It must be loaded LAZILY — only
+// when an actual review acquires a lease — so that merely importing the barrel
+// or running a non-review path (`--help`, `--print-config`, any other bin)
+// never touches the native addon. A missing/unbuildable addon must fail with an
+// ACTIONABLE error (naming the module + how to install), not a raw MODULE_NOT
+// _FOUND. We inject a fake `require` so we never have to uninstall fs-ext.
+// ---------------------------------------------------------------------------
+
+describe("lazy fs-ext load (_resolveFlockSync)", () => {
+  it("throws an ACTIONABLE error naming fs-ext when the native load fails", () => {
+    const boom = () => {
+      throw new Error("Cannot find module 'fs-ext'");
+    };
+    let thrown: Error | undefined;
+    try {
+      _resolveFlockSync(boom);
+    } catch (e) {
+      thrown = e as Error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const msg = thrown?.message ?? "";
+    expect(msg).toContain("fs-ext");
+    expect(msg).toContain("otto-review");
+    expect(msg).toContain("build toolchain");
+    // The underlying failure is preserved for diagnosis.
+    expect(msg).toContain("Cannot find module 'fs-ext'");
+  });
+
+  it("resolves the real native flockSync when fs-ext is present (default require)", () => {
+    // No injected require → uses the module's own createRequire. fs-ext is an
+    // installed optionalDependency in the workspace, so this resolves a real fn.
+    const fn = _resolveFlockSync();
+    expect(typeof fn).toBe("function");
+  });
+
+  it("returns the injected module's flockSync unchanged on success", () => {
+    const fake = (() => {}) as unknown;
+    const fn = _resolveFlockSync(() => ({ flockSync: fake }));
+    expect(fn).toBe(fake);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Runnability
+// ---------------------------------------------------------------------------
+
+describe("isStateRunnable", () => {
+  it("treats an absent state as runnable", () => {
+    expect(isStateRunnable(null, T0)).toBe(true);
+  });
+
+  it("is not runnable when succeeded", () => {
+    expect(isStateRunnable(baseState({ status: "succeeded" }), T0)).toBe(false);
+  });
+
+  it("is not runnable for a permanent (non-retryable) failure", () => {
+    expect(isStateRunnable(baseState({ status: "analysis-failed" }), T0)).toBe(
+      false
+    );
+    expect(
+      isStateRunnable(
+        baseState({ status: "publish-failed", retryable: false }),
+        T0
+      )
+    ).toBe(false);
+  });
+
+  it("treats running / superseded / cancelled as runnable", () => {
+    expect(isStateRunnable(baseState({ status: "running" }), T0)).toBe(true);
+    expect(isStateRunnable(baseState({ status: "superseded" }), T0)).toBe(true);
+    expect(isStateRunnable(baseState({ status: "cancelled" }), T0)).toBe(true);
+  });
+
+  it("makes a retryable failure runnable only at/after nextRetryAt", () => {
+    const state = baseState({
+      status: "publish-failed",
+      retryable: true,
+      nextRetryAt: at(5).toISOString(),
+    });
+    expect(isStateRunnable(state, at(4))).toBe(false);
+    expect(isStateRunnable(state, at(5))).toBe(true);
+    expect(isStateRunnable(state, at(6))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P32 Task 3 — public barrel package-shape: the typed platform/storage errors
+// must be reachable from the package root so callers can `instanceof`-branch.
+// ---------------------------------------------------------------------------
+
+describe("public barrel exports (package shape)", () => {
+  it("exports ReviewLeaseError and ReviewStatePersistenceError from the package root", async () => {
+    const barrel = await import("../index.js");
+    expect(typeof barrel.ReviewLeaseError).toBe("function");
+    expect(typeof barrel.ReviewStatePersistenceError).toBe("function");
+    // They construct and carry their typed fields.
+    const lease = new barrel.ReviewLeaseError("x", { code: "ENOTSUP" });
+    expect(lease).toBeInstanceOf(Error);
+    expect(lease.code).toBe("ENOTSUP");
+    const storage = new barrel.ReviewStatePersistenceError("y", {
+      path: "/p",
+    });
+    expect(storage).toBeInstanceOf(Error);
+    expect(storage.path).toBe("/p");
+  });
+});

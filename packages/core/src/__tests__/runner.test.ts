@@ -6,6 +6,7 @@ import {
   buildClaudeArgs,
   buildCodexArgs,
   buildCodexEnv,
+  buildReviewChildEnv,
   buildSandboxSettings,
   claudeRuntime,
   codexRuntime,
@@ -13,14 +14,17 @@ import {
   getAgentRuntime,
   parseGraceMs,
   resetsAtFromCodexEvent,
+  resolveChildEnv,
   resolveCodexSandboxMode,
   resolveModelArgs,
   resolveModelSelection,
   resolveRunner,
   resolveSandboxNet,
   resultFromEvent,
+  stageAccess,
   stageLogPath,
 } from "../runner.js";
+import { devNull } from "node:os";
 
 // The stream loop resolves `options.sink ?? new VerboseSink()` once and calls
 // `sink.onEvent(parsed)` per non-codex event (issue #65 P10). streamRuntime is
@@ -29,7 +33,8 @@ import {
 describe("runStage sink injection contract", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  const resolveSink = (sink?: EventSink): EventSink => sink ?? new VerboseSink();
+  const resolveSink = (sink?: EventSink): EventSink =>
+    sink ?? new VerboseSink();
 
   it("falls back to a VerboseSink when no sink is provided", () => {
     expect(resolveSink()).toBeInstanceOf(VerboseSink);
@@ -476,14 +481,28 @@ describe("codexRuntime adapter", () => {
   });
 
   it("adds .git to Codex writable roots under workspace-write so commits work", () => {
-    const args = buildCodexArgs(stage, promptPath, [], undefined, "workspace-write");
+    const args = buildCodexArgs(
+      stage,
+      promptPath,
+      [],
+      undefined,
+      "workspace-write"
+    );
     const ci = args.indexOf("-c");
     expect(ci).toBeGreaterThan(-1);
-    expect(args[ci + 1]).toBe('sandbox_workspace_write.writable_roots=[".git"]');
+    expect(args[ci + 1]).toBe(
+      'sandbox_workspace_write.writable_roots=[".git"]'
+    );
   });
 
   it("omits the writable-roots override under danger-full-access", () => {
-    const args = buildCodexArgs(stage, promptPath, [], undefined, "danger-full-access");
+    const args = buildCodexArgs(
+      stage,
+      promptPath,
+      [],
+      undefined,
+      "danger-full-access"
+    );
     expect(args).not.toContain("-c");
     expect(args.join(" ")).not.toContain("writable_roots");
   });
@@ -580,5 +599,250 @@ describe("codexRuntime adapter", () => {
     expect(codexRuntime.buildEnv).toBe(buildCodexEnv);
     const r = codexRuntime.parseResultEvent({ result: "legacy" });
     expect(r.runtimeId).toBe("codex");
+  });
+});
+
+// ── P32: enforced read-only stage access + credential scrubbing ──────────────
+
+describe("stageAccess", () => {
+  it("defaults an access-less stage to workspace-write (today's behavior)", () => {
+    expect(stageAccess({ name: "s", template: "s.md" })).toBe(
+      "workspace-write"
+    );
+  });
+  it("returns the declared access when set", () => {
+    expect(
+      stageAccess({ name: "s", template: "s.md", access: "read-only" })
+    ).toBe("read-only");
+    expect(
+      stageAccess({ name: "s", template: "s.md", access: "workspace-write" })
+    ).toBe("workspace-write");
+  });
+});
+
+describe("buildClaudeArgs read-only access (P32)", () => {
+  const promptPath = ".otto-tmp/prompt.md";
+
+  it("keeps existing workspace-write stages byte-for-byte unchanged", () => {
+    const stage = {
+      name: "implementer",
+      template: "afk.md",
+      permissionMode: "bypassPermissions",
+    };
+    // Absent access resolves to workspace-write ⇒ identical argv to before P32.
+    expect(buildClaudeArgs(stage, promptPath, [], "/ws/s.json")).toEqual([
+      "claude",
+      "--verbose",
+      "--print",
+      "--output-format",
+      "stream-json",
+      "--permission-mode",
+      "bypassPermissions",
+      "--settings",
+      "/ws/s.json",
+      `Read the full instructions from the file ./${promptPath} in the current workspace and execute them.`,
+    ]);
+  });
+
+  it("forces safe read-only flags and never bypassPermissions", () => {
+    const stage = {
+      name: "pr-review",
+      template: "pr-review-lens.md",
+      // permissionMode is intentionally overridden by read-only.
+      permissionMode: "bypassPermissions",
+      access: "read-only" as const,
+    };
+    const args = buildClaudeArgs(stage, promptPath, []);
+    expect(args).toContain("--safe-mode");
+    expect(args).toContain("--disable-slash-commands");
+    expect(args).toContain("--no-chrome");
+    expect(args).toContain("--permission-mode");
+    expect(args[args.indexOf("--permission-mode") + 1]).toBe("plan");
+    expect(args).toContain("--tools");
+    expect(args[args.indexOf("--tools") + 1]).toBe("Read,Glob,Grep");
+    expect(args).toContain("--no-session-persistence");
+    expect(args).toContain("--strict-mcp-config");
+    expect(args).toContain("--mcp-config");
+    expect(args[args.indexOf("--mcp-config") + 1]).toBe("{}");
+    expect(args.join(" ")).not.toContain("bypassPermissions");
+    expect(args.at(-1)).toContain(promptPath);
+  });
+
+  it("still injects --settings for the read-only sandbox when provided", () => {
+    const stage = {
+      name: "pr-review",
+      template: "pr-review-lens.md",
+      access: "read-only" as const,
+    };
+    const args = buildClaudeArgs(stage, promptPath, [], "/ws/ro.json");
+    const sIdx = args.indexOf("--settings");
+    expect(sIdx).toBeGreaterThan(-1);
+    expect(args[sIdx + 1]).toBe("/ws/ro.json");
+    const promptIdx = args.findIndex((a) => a.includes(promptPath));
+    expect(sIdx).toBeLessThan(promptIdx);
+  });
+});
+
+describe("buildCodexArgs read-only access (P32)", () => {
+  const promptPath = ".otto-tmp/prompt.md";
+
+  it("resolves to read-only sandbox + ephemeral with no writable_roots", () => {
+    const args = buildCodexArgs(
+      { name: "pr-review", template: "pr-review-lens.md", access: "read-only" },
+      promptPath,
+      [],
+      undefined,
+      "read-only"
+    );
+    expect(args).toContain("--ephemeral");
+    expect(args[args.indexOf("--sandbox") + 1]).toBe("read-only");
+    expect(args.join(" ")).not.toContain("writable_roots");
+    expect(args).not.toContain("-c");
+  });
+
+  it("forces read-only even when the runner mode would be workspace-write", () => {
+    // A read-only stage must never be weakened by OTTO_RUNNER=host: the access
+    // wins over the passed sandbox mode.
+    const args = buildCodexArgs(
+      { name: "pr-review", template: "pr-review-lens.md", access: "read-only" },
+      promptPath,
+      [],
+      undefined,
+      "danger-full-access"
+    );
+    expect(args[args.indexOf("--sandbox") + 1]).toBe("read-only");
+    expect(args).toContain("--ephemeral");
+    expect(args.join(" ")).not.toContain("writable_roots");
+  });
+
+  it("leaves workspace-write stages unchanged (no --ephemeral)", () => {
+    const args = buildCodexArgs(
+      { name: "implementer", template: "afk.md" },
+      promptPath,
+      [],
+      undefined,
+      "workspace-write"
+    );
+    expect(args).not.toContain("--ephemeral");
+    expect(args[args.indexOf("--sandbox") + 1]).toBe("workspace-write");
+    expect(args.join(" ")).toContain("writable_roots");
+  });
+});
+
+describe("buildSandboxSettings read-only access (P32)", () => {
+  it("returns a no-write, no-network, no-escape-hatch sandbox for read-only", () => {
+    expect(buildSandboxSettings("/ws", [], [], "read-only")).toEqual({
+      sandbox: {
+        enabled: true,
+        filesystem: { allowWrite: [] },
+        network: { allowedDomains: [] },
+        excludedCommands: [],
+      },
+    });
+  });
+
+  it("ignores extra write roots and network domains under read-only", () => {
+    expect(
+      buildSandboxSettings("/ws", ["github.com"], ["/other"], "read-only")
+    ).toEqual({
+      sandbox: {
+        enabled: true,
+        filesystem: { allowWrite: [] },
+        network: { allowedDomains: [] },
+        excludedCommands: [],
+      },
+    });
+  });
+
+  it("defaults to today's workspace-write settings when access is omitted", () => {
+    expect(buildSandboxSettings("/ws", [])).toEqual({
+      sandbox: {
+        enabled: true,
+        filesystem: { allowWrite: ["/ws"] },
+        excludedCommands: ["gh *", "gcloud *", "terraform *"],
+      },
+    });
+  });
+});
+
+describe("buildReviewChildEnv (P32 credential scrubbing)", () => {
+  it("removes GitHub/SSH/askpass vars, redirects gh/git config, preserves model keys", () => {
+    const env = buildReviewChildEnv(
+      {
+        GH_TOKEN: "secret",
+        GITHUB_TOKEN: "secret",
+        SSH_AUTH_SOCK: "/tmp/agent",
+        GIT_ASKPASS: "/usr/bin/askpass",
+        ANTHROPIC_API_KEY: "model-key",
+        OPENAI_API_KEY: "openai-key",
+        CODEX_API_KEY: "codex-key",
+      },
+      "/ws/.otto-tmp/pr-review/empty-gh-config"
+    );
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.SSH_AUTH_SOCK).toBeUndefined();
+    expect(env.GIT_ASKPASS).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBe("model-key");
+    expect(env.OPENAI_API_KEY).toBe("openai-key");
+    expect(env.CODEX_API_KEY).toBe("codex-key");
+    expect(env.GH_CONFIG_DIR).toBe("/ws/.otto-tmp/pr-review/empty-gh-config");
+    expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
+    expect(env.GIT_CONFIG_GLOBAL).toBe(devNull);
+  });
+
+  it("clears inherited git-config env injection, then installs one empty credential.helper", () => {
+    const env = buildReviewChildEnv(
+      {
+        GIT_CONFIG_COUNT: "2",
+        GIT_CONFIG_KEY_0: "credential.helper",
+        GIT_CONFIG_VALUE_0: "store",
+        GIT_CONFIG_KEY_1: "url.https://x.insteadof",
+        GIT_CONFIG_VALUE_1: "ssh://x",
+        GIT_CONFIG_PARAMETERS: "'credential.helper=store'",
+      },
+      "/ws/empty"
+    );
+    // Exactly one config pair remains: the empty credential.helper neutralizer.
+    expect(env.GIT_CONFIG_COUNT).toBe("1");
+    expect(env.GIT_CONFIG_KEY_0).toBe("credential.helper");
+    expect(env.GIT_CONFIG_VALUE_0).toBe("");
+    expect(env.GIT_CONFIG_KEY_1).toBeUndefined();
+    expect(env.GIT_CONFIG_VALUE_1).toBeUndefined();
+    // GIT_CONFIG_PARAMETERS is git's inline `-c`-equivalent injection vector —
+    // it must be scrubbed too, not just the count/key/value trio.
+    expect(env.GIT_CONFIG_PARAMETERS).toBeUndefined();
+  });
+
+  it("does not mutate the caller's env object", () => {
+    const original = { GH_TOKEN: "secret", ANTHROPIC_API_KEY: "k" };
+    buildReviewChildEnv(original, "/ws/empty");
+    expect(original.GH_TOKEN).toBe("secret");
+  });
+});
+
+describe("resolveChildEnv (P32 child-env threading)", () => {
+  const runtimeNoEnv = { ...claudeRuntime };
+  const runtimeWithEnv = {
+    ...codexRuntime,
+    buildEnv: (e?: NodeJS.ProcessEnv) => ({ ...e, MAPPED: "1" }),
+  };
+
+  it("passes the supplied childEnv (not global process.env) into buildEnv", () => {
+    const supplied = { ONLY_HERE: "yes" } as NodeJS.ProcessEnv;
+    const out = resolveChildEnv(runtimeWithEnv, supplied);
+    expect(out.ONLY_HERE).toBe("yes");
+    expect(out.MAPPED).toBe("1");
+  });
+
+  it("returns the base env unchanged when the runtime has no buildEnv", () => {
+    const supplied = { ONLY_HERE: "yes" } as NodeJS.ProcessEnv;
+    expect(resolveChildEnv(runtimeNoEnv, supplied)).toBe(supplied);
+  });
+
+  it("falls back to the provided fallback env when childEnv is absent", () => {
+    const fallback = { FROM_FALLBACK: "1" } as NodeJS.ProcessEnv;
+    expect(resolveChildEnv(runtimeNoEnv, undefined, fallback)).toBe(fallback);
   });
 });

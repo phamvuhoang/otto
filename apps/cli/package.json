@@ -36,7 +36,8 @@
     "otto-linear-afk": "./bin/otto-linear-afk.js",
     "otto-linear": "./bin/otto-linear.js",
     "otto-linear-auth": "./bin/otto-linear-auth.js",
-    "otto-tail": "./bin/otto-tail.js"
+    "otto-tail": "./bin/otto-tail.js",
+    "otto-review": "./bin/otto-review.js"
   },
   "files": [
     "bin",

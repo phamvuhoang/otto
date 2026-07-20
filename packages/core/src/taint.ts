@@ -22,9 +22,11 @@ export type TaintSource =
   | "review-doc"
   | "web-content"
   | "command-output"
-  | "model-memory";
+  | "model-memory"
+  | "review-input"
+  | "pull-request";
 
-/** The six taint sources, in declaration order. */
+/** The taint sources, in declaration order. */
 export const TAINT_SOURCES: readonly TaintSource[] = [
   "issue-body",
   "comment",
@@ -32,6 +34,8 @@ export const TAINT_SOURCES: readonly TaintSource[] = [
   "web-content",
   "command-output",
   "model-memory",
+  "review-input",
+  "pull-request",
 ];
 
 /** Human-readable label per source, shown in the warning line. */
@@ -42,6 +46,8 @@ const TAINT_LABELS: Record<TaintSource, string> = {
   "web-content": "fetched web content",
   "command-output": "command output",
   "model-memory": "model-written memory",
+  "review-input": "review intent",
+  "pull-request": "pull request",
 };
 
 /** The standard untrusted-content warning, surfaced inside every fenced block. */

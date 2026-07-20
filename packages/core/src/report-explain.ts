@@ -59,6 +59,21 @@ export function formatPlainReport(
   if (manifest.exitReason) {
     facts.push(`  Outcome:     ${manifest.exitReason}`);
   }
+  // P32 pull-request review evidence (Task 9): the composite PR/input
+  // identity (matching the same repo#pr@headSha:fingerprint key the
+  // published review's idempotency marker uses) plus the review verdict.
+  // `outcome` here is the REVIEW verdict, not run completion — `exitReason`
+  // above remains authoritative for that.
+  if (manifest.pullRequestReview) {
+    const pr = manifest.pullRequestReview;
+    facts.push(
+      `  Pull request: ${pr.repository}#${pr.pullRequest}` +
+        `@${pr.headSha}:${pr.reviewInput.fingerprint}`
+    );
+    if (pr.outcome) {
+      facts.push(`  Review outcome: ${pr.outcome}`);
+    }
+  }
   if (manifest.skillsUsed && manifest.skillsUsed.length > 0) {
     const names = [...new Set(manifest.skillsUsed.map((u) => u.name))];
     facts.push(

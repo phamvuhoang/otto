@@ -1,0 +1,805 @@
+// Documentation contract test for P32 automated pull-request code review
+// (otto-review). Pins that README.md and docs/CLI.md (plus the relevant
+// slices of docs/ARCHITECTURE.md and docs/HARNESS_ROADMAP_PHASE6.md) actually
+// document the shipped otto-review CLI/behavior — flags, env, defaults,
+// mutual-exclusion/validation rules, provenance, persistence paths, trust
+// boundary, idempotency, and the P32 roadmap entry — so a doc can never drift
+// silently from what packages/core/src/review-cli.ts et al. actually do.
+// Run via `pnpm test` (node --test). No build / network needed; reads the
+// markdown/source directly as strings.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const readDoc = (...p) => readFileSync(join(root, ...p), "utf8");
+
+const readme = readDoc("README.md");
+const cli = readDoc("docs", "CLI.md");
+const architecture = readDoc("docs", "ARCHITECTURE.md");
+const roadmap = readDoc("docs", "HARNESS_ROADMAP_PHASE6.md");
+const p32Spec = readFileSync(
+  join(
+    root,
+    "docs",
+    "superpowers",
+    "specs",
+    "2026-07-18-automated-pr-code-review-design.md"
+  ),
+  "utf8"
+);
+const p32Plan = readFileSync(
+  join(
+    root,
+    "docs",
+    "superpowers",
+    "plans",
+    "2026-07-18-automated-pr-code-review.md"
+  ),
+  "utf8"
+);
+
+// Everything otto-review-specific in one combined haystack, for assertions
+// that don't care which particular doc carries the fact.
+const all = [readme, cli, architecture, roadmap].join("\n\n");
+
+function assertAllInclude(haystack, needles, context) {
+  for (const needle of needles) {
+    assert.ok(
+      haystack.includes(needle),
+      `${context} is missing ${JSON.stringify(needle)}`
+    );
+  }
+}
+
+function sectionBetween(document, startMarker, endMarker) {
+  const start = document.indexOf(startMarker);
+  const end = document.indexOf(endMarker, start + startMarker.length);
+  assert.notEqual(
+    start,
+    -1,
+    `missing section start ${JSON.stringify(startMarker)}`
+  );
+  assert.notEqual(end, -1, `missing section end ${JSON.stringify(endMarker)}`);
+  return document.slice(start, end);
+}
+
+function typeBlock(document, typeName) {
+  const match = document.match(
+    new RegExp(`export type ${typeName}[^\\n]*\\{[\\s\\S]*?\\n\\};`)
+  );
+  assert.ok(match, `missing ${typeName} declaration`);
+  return match[0];
+}
+
+function countBalancedTypeScriptFences(markdown, context) {
+  let openFence = null;
+  let typeScriptFences = 0;
+
+  for (const line of markdown.split("\n")) {
+    const fence = line.match(/^```([a-z0-9_-]*)$/i);
+    if (!fence) continue;
+
+    if (openFence === null) {
+      openFence = fence[1];
+      if (openFence === "ts") typeScriptFences += 1;
+      continue;
+    }
+
+    assert.equal(line, "```", `${context} opens a fence before closing one`);
+    openFence = null;
+  }
+
+  assert.equal(openFence, null, `${context} has an unclosed Markdown fence`);
+  return typeScriptFences;
+}
+
+// ---------------------------------------------------------------------------
+// README: quick-start recipes
+// ---------------------------------------------------------------------------
+
+test("README documents the otto-review quick-start recipes verbatim", () => {
+  assert.ok(
+    readme.includes("otto-review"),
+    "README never mentions otto-review"
+  );
+  const recipeLines = [
+    "gh label create otto-review --repo owner/name",
+    "otto-review --repo owner/name --pr 123",
+    "otto-review --repo owner/name --pr 123 --spec-issue 456",
+    "otto-review --repo owner/name --pr 123 --spec-file docs/feature.md",
+    'otto-review --repo owner/name --pr 123 --prompt "focus on cancellation"',
+    "otto-review --repo owner/name --watch --detach --notify",
+    "otto-review --repo owner/name --watch --github-review",
+  ];
+  assertAllInclude(readme, recipeLines, "README quick-start block");
+});
+
+test("README documents one-shot and watch recipes together in context", () => {
+  const section = readme.slice(readme.indexOf("otto-review"));
+  assert.ok(
+    section.includes("--pr"),
+    "README otto-review section missing --pr"
+  );
+  assert.ok(
+    section.includes("--watch"),
+    "README otto-review section missing --watch"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Default label / output behavior
+// ---------------------------------------------------------------------------
+
+test("docs state the default label and the mode-dependent default output", () => {
+  assertAllInclude(
+    all,
+    [
+      "otto-review", // the default label name itself
+      "text", // one-shot default output
+      "comment", // watch default output
+    ],
+    "combined docs"
+  );
+  assert.ok(
+    /default[^.]*otto-review/i.test(cli) ||
+      /otto-review[^.]*default/i.test(cli),
+    "docs/CLI.md never states the default label is otto-review"
+  );
+  assert.ok(
+    /text[^.]*one-shot|one-shot[^.]*text/i.test(cli),
+    "docs/CLI.md never states one-shot defaults to text output"
+  );
+  assert.ok(
+    /comment[^.]*watch|watch[^.]*comment/i.test(cli),
+    "docs/CLI.md never states watch defaults to comment output"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Every P32 flag / env / config field
+// ---------------------------------------------------------------------------
+
+test("docs/CLI.md documents every otto-review flag", () => {
+  const flags = [
+    "--repo",
+    "--pr",
+    "--watch",
+    "--watch-interval",
+    "--label",
+    "--review-skill",
+    "--spec-issue",
+    "--spec-file",
+    "--prompt",
+    "--output",
+    "--output-file",
+    "--github-review",
+    "--agent",
+    "--fallback-agent",
+    "--auto-switch-on-limit",
+    "--model-routing",
+    "--token-mode",
+    "--context-compressor",
+    "--budget",
+    "--cooldown",
+    "--max-retries",
+    "--detach",
+    "--log",
+    "--notify",
+    "--verbose",
+    "--print-config",
+    "--help",
+    "--version",
+  ];
+  assertAllInclude(cli, flags, "docs/CLI.md otto-review section");
+});
+
+test("docs/CLI.md documents every otto-review env var and config field", () => {
+  assertAllInclude(
+    cli,
+    [
+      "OTTO_REVIEW_LABEL",
+      "OTTO_REVIEW_SKILL",
+      "OTTO_REVIEW_OUTPUT",
+      "pullRequestReview",
+    ],
+    "docs/CLI.md otto-review section"
+  );
+});
+
+test("docs/CLI.md states review-input flags have NO env/config equivalent", () => {
+  assert.ok(
+    /--spec-issue.*--spec-file.*--prompt|--spec-issue\/--spec-file\/--prompt/s.test(
+      cli
+    ),
+    "docs/CLI.md never groups --spec-issue/--spec-file/--prompt together"
+  );
+  assert.ok(
+    /no environment variable or config (?:file )?equivalent|no env(?:ironment)?\/config equivalent|invocation-only/i.test(
+      cli
+    ),
+    "docs/CLI.md never states review-input flags have no env/config equivalent"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Mutual exclusion, validation, provenance, persistence, no-secret warning
+// ---------------------------------------------------------------------------
+
+test("docs/CLI.md documents review-input mutual exclusion and validation rules", () => {
+  assert.ok(
+    /at most one of.*--spec-issue.*--spec-file.*--prompt/is.test(cli),
+    "docs/CLI.md never states at most one of --spec-issue/--spec-file/--prompt"
+  );
+  assert.ok(
+    /exactly one of.*--pr.*--watch/is.test(cli),
+    "docs/CLI.md never states exactly one of --pr/--watch is required"
+  );
+  assert.ok(
+    cli.includes("--output-file") && /markdown/i.test(cli),
+    "docs/CLI.md never ties --output-file to --output markdown"
+  );
+});
+
+test("docs document review-input provenance (kind/source/fingerprint/artifact)", () => {
+  assertAllInclude(
+    all,
+    ["kind", "source", "fingerprint", "artifactPath"],
+    "combined docs"
+  );
+});
+
+test("docs document review-input persistence under .otto/runs/<run-id>/", () => {
+  assert.ok(
+    all.includes(".otto/runs/") && all.includes("review-input.md"),
+    "docs never document the .otto/runs/<run-id>/review-input.md artifact path"
+  );
+});
+
+test("docs document the prompt no-secret warning (never echoed, only length)", () => {
+  assert.ok(
+    /direct \(<?N?>? ?chars\)|direct \(\d|never echo|not echo|redact/i.test(
+      cli
+    ),
+    "docs/CLI.md never document that a direct --prompt is never echoed"
+  );
+});
+
+test("docs document same-repository issue syntax and workspace file constraints", () => {
+  assert.ok(
+    /issue/i.test(cli) && /\.txt|\.md|\.markdown/.test(cli),
+    "docs/CLI.md missing issue syntax or workspace file extension constraints"
+  );
+});
+
+test("docs document watch-wide input behavior and changed-input reruns", () => {
+  assert.ok(
+    /re-resolved|resolved fresh|every poll/i.test(cli),
+    "docs/CLI.md never documents that watch re-resolves review input each poll"
+  );
+  assert.ok(
+    /new (?:composite )?review|changed input|new fingerprint/i.test(cli),
+    "docs/CLI.md never documents that changed input triggers a new review"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// One-review-per-head-and-fingerprint semantics + composite state paths
+// ---------------------------------------------------------------------------
+
+test("docs document one-review-per-head-and-input-fingerprint semantics", () => {
+  assert.ok(
+    /head sha.*fingerprint|fingerprint.*head sha|composite identity/is.test(
+      all
+    ),
+    "docs never document the composite (head, input fingerprint) identity"
+  );
+  assert.ok(
+    /exactly once/i.test(all),
+    "docs never state a composite identity is reviewed exactly once"
+  );
+});
+
+test("docs document the composite review-state path under .otto/review-state/", () => {
+  assert.ok(
+    all.includes(".otto/review-state/"),
+    "docs never mention the .otto/review-state/ path"
+  );
+  assert.ok(
+    /github\/<owner>\/<repo>\/<pr>\/<head-sha>\/<fingerprint>\.json|github\/.*owner.*repo.*pr.*head.*fingerprint/i.test(
+      all
+    ),
+    "docs never spell out the composite state path shape"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Skill validation rules
+// ---------------------------------------------------------------------------
+
+test("docs document explicit review-skill validation rules", () => {
+  assertAllInclude(
+    all,
+    ["builtin:otto-code-review", "validated"],
+    "combined docs"
+  );
+  assert.ok(
+    /afk-safe|stage-scoped/i.test(all),
+    "docs never mention the afk-safe/stage-scoped compatibility classes"
+  );
+  assert.ok(
+    /never fall(?:s)? back|does not fall back/i.test(all),
+    "docs never state an explicit invalid --review-skill never falls back to the built-in"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Read-only / no-fix / no-push trust boundary
+// ---------------------------------------------------------------------------
+
+test("docs document the read-only / no-fix / no-push trust boundary", () => {
+  assert.ok(/read-only/i.test(all), "docs never say read-only");
+  assert.ok(
+    /no fix|never (?:edits?|writes?) (?:source|the repo)|does not edit|no source edits/i.test(
+      all
+    ),
+    "docs never state the review stage never edits/fixes source"
+  );
+  assert.ok(
+    /no push|never push(?:es)?|no network|no github credentials?/i.test(all),
+    "docs never state the review stage cannot push or reach GitHub/network credentials"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Marker / idempotency + single-daemon limitation
+// ---------------------------------------------------------------------------
+
+test("docs document the idempotency markers and single-daemon-per-workspace limitation", () => {
+  assertAllInclude(
+    all,
+    ["<!-- otto-review:", "<!-- otto-review-head:", "<!-- otto-review-input:"],
+    "combined docs"
+  );
+  assert.ok(
+    /idempotent/i.test(all),
+    "docs never describe the summary comment / formal review as idempotent"
+  );
+  assert.ok(
+    /single[- ]daemon|one .*--watch.* daemon|only (?:run|one) .*watch/i.test(
+      all
+    ),
+    "docs never document the single-daemon-per-workspace limitation"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Self-approval permanent-error note
+// ---------------------------------------------------------------------------
+
+test("docs document GitHub's self-approval refusal as a permanent (non-retryable) error", () => {
+  assert.ok(/self-approv/i.test(all), "docs never mention self-approval");
+  assert.ok(
+    /permanent|non-retryable|not retr(?:y|ied)/i.test(all),
+    "docs never state the self-approval failure is permanent/non-retryable"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Evidence / input-artifact paths
+// ---------------------------------------------------------------------------
+
+test("docs document the durable evidence paths (diff, analysis, canonical review)", () => {
+  assertAllInclude(
+    all,
+    [".otto/runs/", "pr.diff", "analysis.json", "review.md"],
+    "combined docs"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// ARCHITECTURE.md: module rows + local-exclude fact
+// ---------------------------------------------------------------------------
+
+test("docs/ARCHITECTURE.md adds P32 module rows to the module map", () => {
+  assertAllInclude(
+    architecture,
+    [
+      "pr-review.ts",
+      "pr-review-input.ts",
+      "pr-review-worktree.ts",
+      "pr-review-state.ts",
+      "pr-review-output.ts",
+      "pr-review-publish.ts",
+      "pr-review-watch.ts",
+      "pr-review-diff.ts",
+      "pr-review-skill.ts",
+      "review-cli.ts",
+      "review-main.ts",
+    ],
+    "docs/ARCHITECTURE.md module map"
+  );
+});
+
+test("docs/ARCHITECTURE.md never universally claims permissionMode is bypassPermissions for ALL stages (the P32 read-only review stages use plan)", () => {
+  // Guard against the pre-P32 universal claim regressing. A bare "always
+  // bypassPermissions for all stages" contradicts the read-only review stages,
+  // which run under permissionMode "plan". The assertion is deliberately narrow
+  // so it does not misfire on the legitimate qualified sentences.
+  assert.ok(
+    !/always\s+`?bypassPermissions`?\s+for\s+all\s+stages/i.test(architecture),
+    "docs/ARCHITECTURE.md still universally claims bypassPermissions for all stages"
+  );
+  assert.ok(
+    !/`--permission-mode`\s+is\s+always\s+`?bypassPermissions`?/i.test(
+      architecture
+    ),
+    "docs/ARCHITECTURE.md still claims --permission-mode is always bypassPermissions"
+  );
+  // Wherever the read-only review stages are described, `plan` must be named.
+  assert.ok(
+    /pr-review-lens[\s\S]*?permissionMode|permissionMode[\s\S]*?plan[\s\S]*?pr-review|pr-review-(?:lens|verify)[\s\S]*?`?plan`?|`?plan`?[\s\S]*?pr-review-(?:lens|verify)/i.test(
+      architecture
+    ),
+    "docs/ARCHITECTURE.md never names permissionMode plan for the pr-review stages"
+  );
+});
+
+test("docs record that target-repo ignoring uses local .git/info/exclude, never the tracked .gitignore", () => {
+  assert.ok(
+    /info\/exclude/.test(all),
+    "docs never mention git's local info/exclude mechanism"
+  );
+  assert.ok(
+    /tracked `?\.gitignore`? is never edited|never edit(?:s|ing)? (?:the )?(?:target(?:'s|s')? )?(?:repository'?s? )?tracked `?\.gitignore`?/i.test(
+      all
+    ),
+    "docs never state the target repo's tracked .gitignore is never edited"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// HARNESS_ROADMAP_PHASE6.md: P32 as an urgent parallel initiative
+// ---------------------------------------------------------------------------
+
+test("HARNESS_ROADMAP_PHASE6.md records P32 as an urgent PARALLEL initiative alongside P27-P31, not a renumbering", () => {
+  assert.ok(roadmap.includes("P32"), "roadmap never mentions P32");
+  assert.ok(
+    /P27/.test(roadmap) && /P31/.test(roadmap),
+    "roadmap no longer names P27..P31 alongside the new P32 entry"
+  );
+  assert.ok(
+    /parallel/i.test(roadmap),
+    "roadmap never frames P32 as a parallel initiative"
+  );
+  assert.ok(/urgent/i.test(roadmap), "roadmap never frames P32 as urgent");
+  // Must not claim P27-P31 shipped (a targeted phrase check, not a broad
+  // regex — the roadmap legitimately says things like "none of which have
+  // shipped", which a naive negative match would misfire on).
+  for (const bad of [
+    "p27 has shipped",
+    "p27 is shipped",
+    "p27 shipped",
+    "p28 has shipped",
+    "p29 has shipped",
+    "p30 has shipped",
+    "p31 has shipped",
+  ]) {
+    assert.ok(
+      !roadmap.toLowerCase().includes(bad),
+      `roadmap must not claim "${bad}"`
+    );
+  }
+});
+
+test("HARNESS_ROADMAP_PHASE6.md P32 entry covers optional input, composite fingerprint identity, and uncompressed evidence", () => {
+  const p32Start = roadmap.indexOf("P32");
+  assert.notEqual(p32Start, -1, "roadmap has no P32 marker");
+  const p32Section = roadmap.slice(p32Start);
+  assert.ok(
+    /issue|file|prompt/i.test(p32Section),
+    "roadmap P32 entry never mentions optional issue/file/prompt input"
+  );
+  assert.ok(
+    /composite/i.test(p32Section) && /fingerprint/i.test(p32Section),
+    "roadmap P32 entry never mentions the composite fingerprint identity"
+  );
+  assert.ok(
+    /uncompressed|never compress/i.test(p32Section),
+    "roadmap P32 entry never mentions exact uncompressed input evidence"
+  );
+});
+
+test("HARNESS_ROADMAP_PHASE6.md states P27 attested checks can enrich P32 later but do not block it", () => {
+  assert.ok(
+    /P27[^.]*(?:enrich|later)[^.]*P32|P32[^.]*P27[^.]*(?:enrich|later)|does not block/i.test(
+      roadmap
+    ),
+    "roadmap never states P27 attested checks can enrich P32 later without blocking it"
+  );
+});
+
+test("HARNESS_ROADMAP_PHASE6.md 'Last updated' is bumped to 2026-07-18", () => {
+  assert.ok(
+    roadmap.includes("Last updated: 2026-07-18"),
+    "roadmap 'Last updated' line was not bumped to 2026-07-18"
+  );
+});
+
+test("P32 design allocates the run ID before acquiring the lease and writing artifacts", () => {
+  const dataFlow = sectionBetween(
+    p32Spec,
+    "## Data flow",
+    "## State, locking, and idempotency"
+  ).toLowerCase();
+  const runId = dataFlow.indexOf("allocate a run id");
+  const lease = dataFlow.indexOf("os-flock lease");
+  const artifact = dataFlow.indexOf("write the exact input artifact");
+
+  assert.notEqual(runId, -1, "P32 data flow never allocates a run ID");
+  assert.notEqual(lease, -1, "P32 data flow never acquires its OS-flock lease");
+  assert.notEqual(
+    artifact,
+    -1,
+    "P32 data flow never writes the exact input artifact"
+  );
+  assert.ok(runId < lease, "run ID allocation must precede lease acquisition");
+  assert.ok(
+    lease < artifact,
+    "lease acquisition must precede exact input-artifact writes"
+  );
+});
+
+test("P32 operative requirements use lease terminology while preserving superseded history", () => {
+  const operativeClaimPhrase =
+    /\b(?:before|release(?:s|d|ing)?)\b[^\n]*(?:\bclaim\b|claim\/|\/claim(?:\/|\b))/i;
+  const supersededHistories = [
+    sectionBetween(p32Spec, "**Superseded:**", "The summary comment"),
+    sectionBetween(
+      p32Plan,
+      "**Superseded:**",
+      "- [ ] **Step 1: Write failing state-machine tests**"
+    ),
+  ];
+  const operativeDocuments = [
+    p32Spec.replace(supersededHistories[0], ""),
+    p32Plan.replace(supersededHistories[1], ""),
+  ];
+
+  assert.doesNotMatch(
+    operativeDocuments[0],
+    /atomically claim the|atomic claims/
+  );
+  assert.doesNotMatch(operativeDocuments[1], /state, claims, evidence/);
+  for (const document of operativeDocuments) {
+    assert.doesNotMatch(document, operativeClaimPhrase);
+  }
+  for (const history of supersededHistories) {
+    assert.match(history, /PullRequestReviewClaim/);
+    assert.match(history, /heartbeat/i);
+    assert.match(history, /tombstone/i);
+  }
+});
+
+test("P32 evidence is durable-or-unavailable while successful snapshots retain artifact paths", () => {
+  const durableUnavailable =
+    /`reviewInput\.artifactPath`[\s\S]{0,250}\bdurable\b[\s\S]{0,250}`null`[\s\S]{0,250}durably\s+materialized[\s\S]{0,250}unavailable/i;
+
+  for (const document of [p32Spec, p32Plan]) {
+    assert.match(
+      typeBlock(document, "PullRequestReviewEvidence"),
+      /reviewInput: \{[\s\S]*artifactPath: string \| null;/
+    );
+    assert.match(document, durableUnavailable);
+
+    const snapshot = typeBlock(document, "ReviewInputSnapshot");
+    assert.match(snapshot, /artifactPath: string;/);
+    assert.doesNotMatch(snapshot, /artifactPath: string \| null;/);
+  }
+});
+
+test("P32 source documents pin every shipped OS-flock lease property", () => {
+  const leaseProperties = [
+    /OS advisory lock\s*\n?\(`flock`\)/,
+    /persistent per-composite-identity lock file[\s\S]{0,100}stable inode/,
+    /optional native `fs-ext`[\s\S]{0,100}loaded lazily/,
+    /requires a LOCAL filesystem/,
+    /one active daemon per\s+repository/,
+  ];
+
+  for (const document of [p32Spec, p32Plan]) {
+    for (const property of leaseProperties) assert.match(document, property);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Final-audit remediation (996ef32): dual composite/publication flock,
+// strict resume/recovery validation, current-output completion, fail-closed
+// state, and watch preflight/fatal-error contracts.
+// ---------------------------------------------------------------------------
+
+test("docs document the composite lease and the separate PR-scoped publication lock with a fixed acquisition order", () => {
+  assert.ok(
+    /publication lock|publication lease|acquirePublicationLease/i.test(cli),
+    "docs/CLI.md never documents the separate publication lock"
+  );
+  assert.ok(
+    /publication\.lock/.test(cli),
+    "docs/CLI.md never names the publication.lock file"
+  );
+  assert.ok(
+    /composite-first\/publication-second|composite lease FIRST[\s\S]{0,80}publication lease SECOND/i.test(
+      cli
+    ),
+    "docs/CLI.md never states the fixed composite-first/publication-second acquisition order"
+  );
+  assert.ok(
+    /acquirePublicationLease/.test(architecture) &&
+      /composite-first\/publication-second|composite lease FIRST[\s\S]{0,80}publication lease SECOND/i.test(
+        architecture
+      ),
+    "docs/ARCHITECTURE.md never documents acquirePublicationLease and its fixed order relative to the composite lease"
+  );
+});
+
+test("docs document strict schema/envelope validation of persisted analysis and remote bodies before resume/recovery", () => {
+  assert.ok(
+    /schema `?v2`?|schema-v2|schemaVersion/i.test(all),
+    "docs never mention the analysis.json schema-v2 validation"
+  );
+  assert.ok(
+    /SHA-256/.test(cli) && /diff/i.test(cli),
+    "docs/CLI.md never mentions diff SHA-256 integrity validation"
+  );
+  assert.ok(
+    /O_NOFOLLOW/.test(all),
+    "docs never mention the O_NOFOLLOW / same-inode artifact-path checks"
+  );
+  assert.ok(
+    /occurring \*\*exactly once\*\*|occur(?:ring|s)? exactly once|EXACTLY once/i.test(
+      cli + architecture
+    ),
+    "docs never state a reserved marker must occur exactly once before evidence is trusted"
+  );
+  assert.ok(
+    /HTML-escaped|escaped before render/i.test(cli + architecture),
+    "docs never state model-authored marker-prefix text is escaped so it can never forge a marker"
+  );
+});
+
+test("docs document current-output completion semantics and cost-free missing-sink resume", () => {
+  assert.ok(
+    /CURRENT invocation/i.test(cli),
+    "docs/CLI.md never scopes sink completion to the CURRENT invocation"
+  );
+  assert.ok(
+    /zero additional model cost|no additional model cost|at zero cost/i.test(
+      all
+    ),
+    "docs never state a missing-sink resume costs zero additional model spend"
+  );
+  assert.ok(
+    /currentRequiredSinks|currentSinksComplete/.test(architecture),
+    "docs/ARCHITECTURE.md never names the current-sink completion functions"
+  );
+});
+
+test("docs document fail-closed durable state persistence", () => {
+  assert.ok(
+    /ReviewStatePersistenceError/.test(all),
+    "docs never mention ReviewStatePersistenceError"
+  );
+  assert.ok(
+    /fail-closed|FAIL-CLOSED|fails? the run closed/i.test(cli + architecture),
+    "docs never describe review state persistence as fail-closed"
+  );
+  assert.ok(
+    /never reports? .?succeeded.? |never returns? success|never report(?:s|ed)? a run `?succeeded`?/i.test(
+      cli + architecture
+    ),
+    "docs never state a run never reports succeeded when its terminal state was not durably persisted"
+  );
+});
+
+test("docs document the shared one-shot/watch preflight and fatal platform/storage error handling", () => {
+  assert.ok(
+    /identical .*preflight|SAME .*preflight|same one-shot preflight/i.test(cli),
+    "docs/CLI.md never states watch runs the identical preflight as one-shot before polling"
+  );
+  assert.ok(
+    /ReviewLeaseError/.test(architecture),
+    "docs/ARCHITECTURE.md never mentions ReviewLeaseError"
+  );
+  assert.ok(
+    /ENOTSUP/.test(cli + architecture),
+    "docs never mention ENOTSUP as a fatal non-busy flock failure"
+  );
+  assert.ok(
+    /EXITS?\b|exits? rather than spinning|attempts? (?:it )?once/i.test(
+      cli + architecture
+    ),
+    "docs never state watch attempts a fatal error once and exits rather than polling forever"
+  );
+});
+
+test("docs document --max-retries 0 as valid fail-fast and timer-overflow rejection for watch-interval/cooldown", () => {
+  assert.ok(
+    /--max-retries 0/.test(cli) && /fail-fast/i.test(cli),
+    "docs/CLI.md never documents --max-retries 0 as a valid fail-fast value"
+  );
+  assert.ok(
+    /overflow/i.test(cli) && /setTimeout/i.test(cli),
+    "docs/CLI.md never documents timer-overflow rejection for --watch-interval/--cooldown"
+  );
+});
+
+test("original P32 spec/plan and the evidence-hardening spec/plan record the final-audit remediation follow-up", () => {
+  const finalAuditRemediation = /final-audit[- ]remediation/i;
+  assert.ok(
+    finalAuditRemediation.test(p32Spec),
+    "P32 design doc never records the final-audit remediation addendum"
+  );
+  assert.ok(
+    /acquirePublicationLease/.test(p32Spec) &&
+      /acquirePublicationLease/.test(p32Plan),
+    "P32 spec/plan never name acquirePublicationLease in the remediation addendum"
+  );
+  const hardeningSpec = readDoc(
+    "docs",
+    "superpowers",
+    "specs",
+    "2026-07-19-pr-review-evidence-state-hardening-design.md"
+  );
+  const hardeningPlan = readDoc(
+    "docs",
+    "superpowers",
+    "plans",
+    "2026-07-19-pr-review-evidence-state-hardening.md"
+  );
+  assert.ok(
+    finalAuditRemediation.test(hardeningSpec),
+    "evidence-hardening design doc never points to the later final-audit remediation"
+  );
+  assert.ok(
+    finalAuditRemediation.test(hardeningPlan),
+    "evidence-hardening plan doc never points to the later final-audit remediation"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Anti-regression: the specific stale wordings this round corrected must
+// never come back, even if an unrelated future edit touches these docs.
+// ---------------------------------------------------------------------------
+
+test("docs never regress to composite-only publication, best-effort state persistence, or shallow resume wording", () => {
+  const staleAbsences = [
+    /composite-only publication|publication is composite-only|composite lease alone (?:guards?|serializes?) publication/i,
+    /best-effort state (?:persistence|writes?)|state (?:persistence|writes?) (?:is|are) best-effort/i,
+    /shallow resume|resumes? shallow(?:ly)?/i,
+  ];
+  for (const stale of staleAbsences) {
+    assert.doesNotMatch(cli, stale);
+    assert.doesNotMatch(architecture, stale);
+    assert.doesNotMatch(readme, stale);
+  }
+});
+
+test("P32 Task 11 has balanced fences with supersession rendered as prose", () => {
+  const task11 = sectionBetween(
+    p32Plan,
+    "## Task 11: Atomic composite-identity state and OS-flock lease",
+    "## Task 12: State-aware output recovery and idempotent summary comments"
+  );
+
+  assert.equal(countBalancedTypeScriptFences(task11, "P32 Task 11"), 3);
+  assert.match(
+    task11,
+    /export type PullRequestReviewState[\s\S]*?\n\};\n```\n\n\*\*Superseded:\*\*/
+  );
+  assert.match(
+    task11,
+    /\*\*Superseded:\*\*[\s\S]*?\n```ts\nexport type ReviewLease/
+  );
+});

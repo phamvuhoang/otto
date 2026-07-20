@@ -21,7 +21,11 @@ import {
   stageLogPath,
   type StageResult,
 } from "./runner.js";
-import { readSafetyPolicy, type PolicyViolation } from "./safety-policy.js";
+import {
+  readSafetyPolicy,
+  type PolicyViolation,
+  type SafetyPolicy,
+} from "./safety-policy.js";
 import type { SafetyEvent, ToolUsage } from "./run-report.js";
 import type { EventSink } from "./console-ui.js";
 import { USE_COLOR, dim } from "./stream-render.js";
@@ -64,6 +68,15 @@ export type ExecuteStageOptions = {
    *  #114 P18). Empty/absent ⇒ the prompt is unchanged. Appended after rendering
    *  so it is measured by `analyzeContext` but never disturbs the template. */
   injectedContext?: string;
+  /** Base environment for the spawned agent (issue P32); passed unchanged to
+   *  `runStage`. A read-only review stage supplies a credential-scrubbed env.
+   *  Absent ⇒ runner default (`process.env`). */
+  childEnv?: NodeJS.ProcessEnv;
+  /** Trusted safety policy pinned by the caller (issue P32). When supplied it is
+   *  used verbatim at the render boundary instead of loading a (possibly
+   *  contributor-modified) `.otto/policy.json` from the PR head. Absent ⇒
+   *  today's `readSafetyPolicy(workspaceDir)` load. */
+  safetyPolicy?: SafetyPolicy;
 };
 
 /** Map a spill filename to its compression category for evidence attribution. */
@@ -125,7 +138,9 @@ export async function executeStage(
   // Load the repo-local safety policy once per stage (issue #43 P4). Absent or
   // malformed `.otto/policy.json` → DEFAULT_POLICY (permissive), so the boundary
   // checks threaded into renderTemplate below are a no-op for trusted workflows.
-  const policy = readSafetyPolicy(workspaceDir);
+  // A caller may inject a trusted policy (issue P32) — used verbatim so a P32
+  // review pins the operator's policy instead of the PR head's contributor copy.
+  const policy = opts.safetyPolicy ?? readSafetyPolicy(workspaceDir);
 
   return withRetries(
     async () => {
@@ -203,6 +218,7 @@ export async function executeStage(
           sink: opts.sink,
           modelSpec: model.spec,
           sandboxWriteRoots: opts.sandboxWriteRoots,
+          childEnv: opts.childEnv,
         }
       );
       // Attribute the *final* prompt's window footprint by category (issue #62

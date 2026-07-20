@@ -8,13 +8,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createInterface } from "node:readline";
+import { devNull } from "node:os";
 import { join, posix } from "node:path";
 
 import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
 import { resolveModelSelection } from "./model-tier.js";
 import type { ContextBreakdown } from "./context-report.js";
 import type { SafetyEvent, SkillUsage, ToolUsage } from "./run-report.js";
-import type { Stage } from "./stages.js";
+import type { Stage, StageAccess } from "./stages.js";
 import { boldOut, dim, SYM_OUT, type StreamJson } from "./stream-render.js";
 import { VerboseSink, type EventSink } from "./console-ui.js";
 import {
@@ -39,6 +40,10 @@ export type RunStageOptions = {
    *  sub-agent passes its parent repo so it can commit from its worktree (whose
    *  shared `.git` lives outside the worktree dir). Sandbox runner only. */
   sandboxWriteRoots?: string[];
+  /** Base environment for the spawned agent (issue P32). Absent ⇒ `process.env`.
+   *  A read-only review stage passes a credential-scrubbed env (see
+   *  {@link buildReviewChildEnv}) so the child inherits no GitHub/SSH secrets. */
+  childEnv?: NodeJS.ProcessEnv;
 };
 
 export type StageResult = {
@@ -325,8 +330,23 @@ const SANDBOX_EXCLUDED_COMMANDS = ["gh *", "gcloud *", "terraform *"];
 export function buildSandboxSettings(
   workspaceDir: string,
   allowedDomains: string[],
-  extraWriteRoots: string[] = []
+  extraWriteRoots: string[] = [],
+  access: StageAccess = "workspace-write"
 ): Record<string, unknown> {
+  // Read-only stages (issue P32) get an OS-enforced no-capability sandbox: no
+  // write roots (not even the workspace), no network egress, and no
+  // excluded-command escape hatch. `allowedDomains`/`extraWriteRoots` are
+  // deliberately ignored so an untrusted PR head cannot widen the blast radius.
+  if (access === "read-only") {
+    return {
+      sandbox: {
+        enabled: true,
+        filesystem: { allowWrite: [] },
+        network: { allowedDomains: [] },
+        excludedCommands: [],
+      },
+    };
+  }
   const sandbox: Record<string, unknown> = {
     enabled: true,
     // `extraWriteRoots` lets a fan-out sub-agent commit from a worktree whose
@@ -338,6 +358,84 @@ export function buildSandboxSettings(
     sandbox.network = { allowedDomains };
   }
   return { sandbox };
+}
+
+/**
+ * Resolve a stage's OS-enforced access mode (issue P32). Absent `access` ⇒
+ * `workspace-write`, so every existing stage keeps today's behavior; a stage
+ * opts INTO the read-only, credential-scrubbed path by declaring
+ * `access: "read-only"`.
+ */
+export function stageAccess(stage: Stage): StageAccess {
+  return stage.access ?? "workspace-write";
+}
+
+/**
+ * GitHub/SSH/askpass credential carriers stripped from a read-only review
+ * child's environment (issue P32) so an untrusted PR head cannot exfiltrate or
+ * abuse the operator's push/pull credentials.
+ */
+const REVIEW_STRIPPED_ENV_VARS = [
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+  "SSH_AUTH_SOCK",
+  "GIT_ASKPASS",
+  "SSH_ASKPASS",
+] as const;
+
+/**
+ * Build the credential-scrubbed environment for a read-only P32 review stage
+ * (issue P32). Returns a fresh copy — the caller's env is never mutated.
+ *
+ * It (1) removes GitHub/SSH/askpass credential carriers; (2) clears any
+ * inherited `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*` /
+ * `GIT_CONFIG_PARAMETERS` config-injection env so a leaked helper cannot ride
+ * in; (3) points `gh` at a
+ * harness-created empty config dir and neutralizes git's ambient config
+ * (no system/global config, no interactive prompt); and (4) installs exactly
+ * one empty `credential.helper` override so even a repository-local helper from
+ * the PR head cannot recover credentials. Model API keys
+ * (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CODEX_API_KEY`) are preserved so
+ * the review agent can still reach its provider.
+ */
+export function buildReviewChildEnv(
+  env: NodeJS.ProcessEnv,
+  emptyGithubConfigDir: string
+): NodeJS.ProcessEnv {
+  const next: NodeJS.ProcessEnv = { ...env };
+
+  // (1) Strip credential carriers.
+  for (const key of REVIEW_STRIPPED_ENV_VARS) delete next[key];
+
+  // (2) Clear inherited git-config env injection (the count, the numbered
+  // key/value pairs, and the inline `-c`-equivalent GIT_CONFIG_PARAMETERS)
+  // before installing our own single override.
+  for (const key of Object.keys(next)) {
+    if (
+      key === "GIT_CONFIG_COUNT" ||
+      /^GIT_CONFIG_KEY_\d+$/.test(key) ||
+      /^GIT_CONFIG_VALUE_\d+$/.test(key)
+    ) {
+      delete next[key];
+    }
+  }
+  delete next.GIT_CONFIG_PARAMETERS;
+
+  // (3) Redirect gh + neutralize git's ambient configuration.
+  next.GH_CONFIG_DIR = emptyGithubConfigDir;
+  next.GIT_TERMINAL_PROMPT = "0";
+  next.GIT_CONFIG_NOSYSTEM = "1";
+  next.GIT_CONFIG_GLOBAL = devNull;
+
+  // (4) One empty credential.helper override — an empty helper value resets the
+  // helper list, so any repo-local helper the PR head configured is disabled.
+  next.GIT_CONFIG_COUNT = "1";
+  next.GIT_CONFIG_KEY_0 = "credential.helper";
+  next.GIT_CONFIG_VALUE_0 = "";
+
+  return next;
 }
 
 function abortError(command: string): Error {
@@ -388,7 +486,26 @@ export function buildClaudeArgs(
     "--output-format",
     "stream-json",
   ];
-  if (stage.permissionMode) {
+  if (stageAccess(stage) === "read-only") {
+    // Read-only review stages (issue P32): force safe mode (no hooks/plugins/
+    // custom agents or automatic repo customizations), disable slash commands
+    // and Chrome, pin plan mode, and allow ONLY read tools — regardless of the
+    // stage's declared permissionMode. Never `bypassPermissions`. An empty MCP
+    // config with strict enforcement blocks any repo-declared MCP server.
+    args.push(
+      "--safe-mode",
+      "--disable-slash-commands",
+      "--no-chrome",
+      "--permission-mode",
+      "plan",
+      "--tools",
+      "Read,Glob,Grep",
+      "--no-session-persistence",
+      "--strict-mcp-config",
+      "--mcp-config",
+      "{}"
+    );
+  } else if (stage.permissionMode) {
     args.push("--permission-mode", stage.permissionMode);
   }
   if (settingsPath) {
@@ -401,7 +518,10 @@ export function buildClaudeArgs(
   return args;
 }
 
-export type CodexSandboxMode = "workspace-write" | "danger-full-access";
+export type CodexSandboxMode =
+  | "read-only"
+  | "workspace-write"
+  | "danger-full-access";
 
 /** Map Otto's runner mode to Codex's own sandbox vocabulary. */
 export function resolveCodexSandboxMode(
@@ -425,7 +545,7 @@ export function resolveCodexSandboxMode(
  * Unnecessary under `danger-full-access`, which has no filesystem confinement.
  */
 export function buildCodexArgs(
-  _stage: Stage,
+  stage: Stage,
   promptRelPath: string,
   modelArgs: string[],
   _settingsPath?: string,
@@ -433,10 +553,18 @@ export function buildCodexArgs(
     process.env.OTTO_RUNNER
   )
 ): string[] {
+  // A read-only stage (issue P32) resolves directly to Codex's `read-only`
+  // sandbox — even when the runner mode (e.g. OTTO_RUNNER=host) would otherwise
+  // grant more capability. P32 review must never be weakened by that escape
+  // hatch, so stage access wins over the passed sandbox mode.
+  const mode: CodexSandboxMode =
+    stageAccess(stage) === "read-only" ? "read-only" : sandboxMode;
   const gitWritableArgs =
-    sandboxMode === "workspace-write"
+    mode === "workspace-write"
       ? ["-c", 'sandbox_workspace_write.writable_roots=[".git"]']
       : [];
+  // `--ephemeral` keeps no session state for the untrusted read-only review.
+  const ephemeralArgs = mode === "read-only" ? ["--ephemeral"] : [];
   return [
     "codex",
     "--ask-for-approval",
@@ -446,7 +574,8 @@ export function buildCodexArgs(
     "--ignore-user-config",
     "--skip-git-repo-check",
     "--sandbox",
-    sandboxMode,
+    mode,
+    ...ephemeralArgs,
     ...gitWritableArgs,
     ...modelArgs,
     `Read the full instructions from the file ./${promptRelPath} in the current workspace and execute them.`,
@@ -541,6 +670,22 @@ export function getAgentRuntime(id: AgentRuntimeId): AgentRuntime {
   return runtime;
 }
 
+/**
+ * Resolve the environment a stage's child process spawns with (issue P32).
+ * The base is the supplied `childEnv` (a credential-scrubbed env for a P32
+ * read-only review) or `fallback` (`process.env`); the runtime's optional
+ * `buildEnv` then maps the base. Threading `childEnv` here means the runtime's
+ * `buildEnv` receives the supplied env rather than global `process.env`.
+ */
+export function resolveChildEnv(
+  runtime: AgentRuntime,
+  childEnv?: NodeJS.ProcessEnv,
+  fallback: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  const baseEnv = childEnv ?? fallback;
+  return runtime.buildEnv?.(baseEnv) ?? baseEnv;
+}
+
 export async function runStage(
   stage: Stage,
   renderedPrompt: string,
@@ -565,21 +710,31 @@ export async function runStage(
 
   const runtime = options.runtime ?? claudeRuntime;
 
+  const access = stageAccess(stage);
   let settingsHostPath: string | undefined;
-  if (
-    runtime.supportsSandboxSettings &&
-    resolveRunner(process.env.OTTO_RUNNER) === "sandbox"
-  ) {
-    const settings = buildSandboxSettings(
-      workspaceDir,
-      resolveSandboxNet(process.env.OTTO_SANDBOX_NET),
-      options.sandboxWriteRoots ?? []
-    );
-    settingsHostPath = join(
-      tmpHostDir,
-      `.sandbox-${process.pid}-${iteration}-${Date.now()}.json`
-    );
-    writeFileSync(settingsHostPath, JSON.stringify(settings), "utf8");
+  if (runtime.supportsSandboxSettings) {
+    let settings: Record<string, unknown> | undefined;
+    if (access === "read-only") {
+      // A read-only review stage (issue P32) ALWAYS gets an OS-enforced no-write
+      // sandbox, even under OTTO_RUNNER=host — the host escape hatch must never
+      // weaken P32. No write roots, no network, no excluded-command bypass.
+      settings = buildSandboxSettings(workspaceDir, [], [], "read-only");
+    } else if (resolveRunner(process.env.OTTO_RUNNER) === "sandbox") {
+      // Existing workspace-write stages keep today's behavior, including the
+      // host-runner escape hatch (host ⇒ no settings file written).
+      settings = buildSandboxSettings(
+        workspaceDir,
+        resolveSandboxNet(process.env.OTTO_SANDBOX_NET),
+        options.sandboxWriteRoots ?? []
+      );
+    }
+    if (settings) {
+      settingsHostPath = join(
+        tmpHostDir,
+        `.sandbox-${process.pid}-${iteration}-${Date.now()}.json`
+      );
+      writeFileSync(settingsHostPath, JSON.stringify(settings), "utf8");
+    }
   }
 
   process.stderr.write(`${dim("log → " + logPath)}\n`);
@@ -645,11 +800,14 @@ function streamRuntime(
       graceTimer.unref?.();
     };
 
-    // Spawn the selected agent CLI on the host instead of docker.
+    // Spawn the selected agent CLI on the host instead of docker. The base env
+    // is the caller-supplied `childEnv` (a credential-scrubbed env for a P32
+    // read-only review) or `process.env`, then the runtime's optional buildEnv
+    // maps it (e.g. Codex's OPENAI→CODEX key alias).
     const child = spawn(argv[0], argv.slice(1), {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: runtime.buildEnv?.(process.env) ?? process.env,
+      env: resolveChildEnv(runtime, options.childEnv),
     });
 
     let final: StageResult = {

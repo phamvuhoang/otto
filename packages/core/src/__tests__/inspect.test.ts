@@ -8,6 +8,7 @@ import {
   writeManifest,
   writeRunReport,
   writeStageRecord,
+  type PullRequestReviewEvidence,
   type RunManifest,
   type StageRecord,
 } from "../run-report.js";
@@ -57,6 +58,29 @@ const reviewerStage: StageRecord = {
   isError: true,
   apiErrorStatus: "429",
   finishedAt: "2026-06-19T00:02:00.000Z",
+};
+
+const pullRequestReview: PullRequestReviewEvidence = {
+  repository: "acme/widgets",
+  pullRequest: 42,
+  url: "https://github.com/acme/widgets/pull/42",
+  baseSha: "a".repeat(40),
+  headSha: "b".repeat(40),
+  label: "otto-review",
+  reviewInput: {
+    kind: "prompt",
+    source: "direct",
+    fingerprint: "c".repeat(64),
+    artifactPath: ".otto/runs/2026-06-19T00-00-00-000Z-13793/review-input.txt",
+  },
+  outcome: "changes-requested",
+  confirmed: 2,
+  rejected: 1,
+  outputMode: "comment",
+  githubReview: true,
+  commentId: 555,
+  reviewId: 999,
+  supersededBy: "d".repeat(40),
 };
 
 describe("formatRunReport", () => {
@@ -214,6 +238,102 @@ describe("formatRunReport", () => {
     // No exit reason / next action invented for a run that never finalized.
     expect(out).not.toContain("exit:");
     expect(out).not.toContain("review the diff");
+  });
+
+  describe("pull request review evidence (P32 Task 9)", () => {
+    it("prints a compact 'Pull request review:' section when evidence is present", () => {
+      const manifest: RunManifest = {
+        ...finalized,
+        mode: "github-pr-review",
+        pullRequestReview,
+        skillsUsed: [
+          {
+            name: "builtin:otto-code-review",
+            version: "1",
+            source: "builtin",
+            stage: "pr-review",
+            checksum: "e".repeat(64),
+          },
+        ],
+      };
+      const out = formatRunReport(manifest, [implStage]);
+
+      expect(out).toContain("Pull request review:");
+      expect(out).toContain("acme/widgets#42");
+      expect(out).toContain(pullRequestReview.url);
+      expect(out).toContain(pullRequestReview.label);
+
+      // Base/head SHAs are SHORTENED in the header...
+      expect(out).toContain(pullRequestReview.baseSha.slice(0, 8));
+      expect(out).toContain(pullRequestReview.headSha.slice(0, 8));
+      // ...but the full 40-char SHAs never appear in the rendered text.
+      expect(out).not.toContain(pullRequestReview.baseSha);
+      expect(out).not.toContain(pullRequestReview.headSha);
+
+      // Review-input kind/source/SHORT fingerprint/artifact.
+      expect(out).toContain("prompt");
+      expect(out).toContain("direct");
+      expect(out).toContain(
+        pullRequestReview.reviewInput.fingerprint.slice(0, 12)
+      );
+      expect(out).not.toContain(pullRequestReview.reviewInput.fingerprint);
+      expect(out).toContain(pullRequestReview.reviewInput.artifactPath!);
+
+      // Outcome, confirmed/rejected counts, output mode.
+      expect(out).toContain("changes-requested");
+      expect(out).toContain("2 / 1");
+      expect(out).toContain("comment");
+
+      // Comment/review receipts and superseding SHA (shortened).
+      expect(out).toContain("555");
+      expect(out).toContain("999");
+      expect(out).toContain(pullRequestReview.supersededBy!.slice(0, 8));
+      expect(out).not.toContain(pullRequestReview.supersededBy);
+
+      // The selected skill's checksum.
+      expect(out).toContain("builtin:otto-code-review");
+      expect(out).toContain("e".repeat(64));
+    });
+
+    it("renders explicitly unavailable review-input evidence", () => {
+      const unavailableInput: PullRequestReviewEvidence = {
+        ...pullRequestReview,
+        reviewInput: {
+          ...pullRequestReview.reviewInput,
+          artifactPath: null,
+        },
+      };
+      const out = formatRunReport(
+        {
+          ...finalized,
+          mode: "github-pr-review",
+          pullRequestReview: unavailableInput,
+        },
+        []
+      );
+      expect(out).toContain("artifact (unavailable)");
+      expect(out).not.toContain("artifact undefined");
+    });
+
+    it("omits the section entirely when no evidence is present (non-P32 manifest)", () => {
+      const out = formatRunReport(finalized, [implStage, reviewerStage]);
+      expect(out).not.toContain("Pull request review:");
+    });
+
+    it("does not infer run completion from outcome alone — exitReason stays authoritative", () => {
+      const manifest: RunManifest = {
+        ...finalized,
+        mode: "github-pr-review",
+        exitReason: "error",
+        pullRequestReview: { ...pullRequestReview, outcome: "approved" },
+      };
+      const out = formatRunReport(manifest, [implStage]);
+      // exitReason ("error") remains the reported exit, independent of the
+      // review outcome ("approved") — the section reports both, neither hides
+      // the other.
+      expect(out).toContain("exit:        error");
+      expect(out).toContain("approved");
+    });
   });
 });
 

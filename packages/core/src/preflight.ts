@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 
 import type { AgentRuntimeId } from "./agent-runtime.js";
+import { canonicalGithubOrigin } from "./github-pr.js";
 import { resolveLinearAuth, type LinearAuth } from "./linear-api.js";
 
 /** One prerequisite check rendered by `--print-config`. */
@@ -80,7 +81,8 @@ const defaultProbes: PreflightProbes = {
 /**
  * Diagnose the prerequisites a run needs before any paid `claude` invocation:
  * the agent CLI, its credentials, a git workspace to commit into, and — for
- * otto-ghafk — the `gh` CLI and its credentials. Reports only; never throws.
+ * otto-ghafk and otto-review (P32 automated PR review) — the `gh` CLI and its
+ * credentials. Reports only; never throws.
  */
 export function runPreflight(
   opts: { bin: string; workspaceDir: string; agentId?: AgentRuntimeId },
@@ -151,7 +153,7 @@ export function runPreflight(
     detail: git ? opts.workspaceDir : "not a git repo — Otto commits here",
   });
 
-  if (opts.bin === "otto-ghafk") {
+  if (opts.bin === "otto-ghafk" || opts.bin === "otto-review") {
     const gh = resolveBin("gh");
     results.push({
       label: "gh CLI",
@@ -176,6 +178,52 @@ export function runPreflight(
         : "run `otto-linear-auth login`",
     });
   }
+
+  return results;
+}
+
+/**
+ * P32 automated-review-specific preflight (pure, no I/O): reports whether the
+ * workspace's git remote origin resolves to the exact target GitHub
+ * repository, and whether the configured review label exists there. A
+ * missing or non-GitHub origin fails the "repository origin" check; the
+ * caller resolves `originUrl` (e.g. from `git remote get-url origin`) and
+ * `labelExists` (via {@link GitHubPrClient.labelExists}) beforehand so this
+ * stays a pure, easily-tested function.
+ */
+export function runReviewPreflight(opts: {
+  workspaceDir: string;
+  repository: string;
+  label: string;
+  originUrl: string | null;
+  labelExists: boolean;
+}): PreflightResult[] {
+  const results: PreflightResult[] = [];
+
+  const canonical =
+    opts.originUrl != null ? canonicalGithubOrigin(opts.originUrl) : null;
+  const wantRepo = opts.repository.toLowerCase();
+  const originOk = canonical != null && canonical === wantRepo;
+  results.push({
+    label: "repository origin",
+    ok: originOk,
+    detail:
+      opts.originUrl == null
+        ? `no git remote origin found in ${opts.workspaceDir} — expected a GitHub remote for ${opts.repository}`
+        : canonical == null
+          ? `origin "${opts.originUrl}" is not a GitHub remote — expected ${opts.repository}`
+          : originOk
+            ? `origin matches ${opts.repository}`
+            : `origin resolves to "${canonical}", expected "${opts.repository}"`,
+  });
+
+  results.push({
+    label: "review label",
+    ok: opts.labelExists,
+    detail: opts.labelExists
+      ? `label "${opts.label}" exists in ${opts.repository}`
+      : `label "${opts.label}" not found in ${opts.repository} — create it or choose a different --label`,
+  });
 
   return results;
 }

@@ -115,6 +115,7 @@ export {
   writeManifest,
   writeRunReport,
   writeStageRecord,
+  type PullRequestReviewEvidence,
   type RunArtifact,
   type RunManifest,
   type SafetyEvent,
@@ -545,10 +546,26 @@ export {
 } from "./watch.js";
 export {
   runPreflight,
+  runReviewPreflight,
   whichBin,
   type PreflightResult,
   type PreflightProbes,
 } from "./preflight.js";
+export {
+  createGitHubPrClient,
+  canonicalGithubOrigin,
+  classifyGitHubPrError,
+  GitHubPrError,
+  type GhInvocation,
+  type GhRunner,
+  type GitHubPrErrorKind,
+  type GitHubActor,
+  type GitHubIssueSpec,
+  type GitHubComment,
+  type GitHubReview,
+  type CreateGitHubReviewInput,
+  type GitHubPrClient,
+} from "./github-pr.js";
 export {
   parseLinearRef,
   parseLinearIssueArg,
@@ -667,3 +684,129 @@ export {
   recentlyPosted,
   type PostedEntry,
 } from "./journal-ledger.js";
+export {
+  formatReviewConfig,
+  formatReviewHelp,
+  parsePullRequestRef,
+  parseReviewFlags,
+  readPullRequestReviewConfig,
+  resolvePullRequestReviewConfig,
+  type PullRequestReviewConfig,
+  type ReviewCliFlags,
+  type ReviewInputRequest,
+  type ReviewOutputMode,
+} from "./review-cli.js";
+export {
+  ineligibleReason,
+  outcomeForFindings,
+  readReviewAnalysisArtifact,
+  revisionKey,
+  runPullRequestReview,
+  type PullRequestRevision,
+  type PullRequestReviewAnalysisArtifact,
+  type PullRequestReviewDeps,
+  type PullRequestReviewOutcome,
+  type PullRequestReviewRunResult,
+  type PullRequestReviewRunStatus,
+} from "./pr-review.js";
+export {
+  runReview,
+  type ReviewMainDeps,
+  type RunReviewOptions,
+} from "./review-main.js";
+export {
+  runPullRequestReviewWatch,
+  type ReviewWatchDeps,
+} from "./pr-review-watch.js";
+export {
+  parseSpecIssueRef,
+  parseReviewInputFingerprint,
+  reviewInputFingerprint,
+  resolveReviewInput,
+  renderReviewInputArtifact,
+  writeReviewInputArtifact,
+  readReviewInputArtifact,
+  ReviewInputError,
+  type ResolvedReviewInput,
+  type ReviewInputSnapshot,
+  type ReviewInputErrorKind,
+  type ReviewInputFs,
+} from "./pr-review-input.js";
+export {
+  BUILTIN_REVIEW_SKILL_NAME,
+  BUILTIN_REVIEW_SKILL_VERSION,
+  resolveReviewSkill,
+  ReviewSkillError,
+  type ReviewSkillSelection,
+} from "./pr-review-skill.js";
+export {
+  assertReviewWorktreeClean,
+  buildBaseInstructionBundle,
+  buildReviewContext,
+  createPullRequestWorktree,
+  prepareReviewLocalExcludes,
+  PullRequestWorktreeError,
+  type GitCommandRunner,
+  type PullRequestWorktree,
+} from "./pr-review-worktree.js";
+export {
+  headMarker,
+  inputMarker,
+  renderCanonicalReview,
+  renderFormalReviewBody,
+  renderInlineComment,
+  renderReviewText,
+  reviewMarker,
+  summaryMarker,
+  writeCanonicalReview,
+  type CanonicalReview,
+  type PublishedReviewFinding,
+} from "./pr-review-output.js";
+export {
+  mapFindingToDiff,
+  mapFindingsToDiff,
+  normalizeFindingPath,
+  parseZeroContextDiff,
+  type DiffLine,
+  type DiffLineMap,
+} from "./pr-review-diff.js";
+export {
+  reconcilePublication,
+  upsertSummaryComment,
+  githubReviewEvent,
+  publishFormalReview,
+  nextPublicationRetryAt,
+  ReviewWriteAbortedError,
+  type PublicationReconciliation,
+  type SummaryCommentReceipt,
+  type FormalReviewReceipt,
+} from "./pr-review-publish.js";
+export {
+  reviewStatePath,
+  reviewPublicationLockPath,
+  readReviewState,
+  writeReviewState,
+  acquireReviewLease,
+  acquirePublicationLease,
+  isStateRunnable,
+  ReviewLeaseError,
+  ReviewStatePersistenceError,
+  type PullRequestReviewState,
+  type PullRequestReviewOutputState,
+  type ReviewLease,
+  type ReviewLeaseResult,
+} from "./pr-review-state.js";
+export {
+  findingToWire,
+  parseReviewVerdicts,
+  type Finding,
+  type ReviewVerdictParse,
+  type Severity,
+} from "./review-severity.js";
+export {
+  analyzeReview,
+  ReviewAnalysisContractError,
+  type ReviewAnalysisOptions,
+  type ReviewAnalysisResult,
+  type ReviewSeverityCounts,
+} from "./panel.js";

@@ -1,0 +1,4003 @@
+import { execFileSync } from "node:child_process";
+import { getEventListeners } from "node:events";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The pipeline tests inject a FAKE analyze via deps, so real executeStage is
+// never called there. The dedicated "renders real templates" test calls the
+// REAL analyzeReview, which uses this mock to render the actual template files.
+const mocks = vi.hoisted(() => ({ executeStage: vi.fn(), sleep: vi.fn() }));
+vi.mock("../stage-exec.js", () => ({ executeStage: mocks.executeStage }));
+vi.mock("../pacing.js", () => ({ sleep: mocks.sleep }));
+
+import { analyzeReview, ReviewAnalysisContractError } from "../panel.js";
+import { renderTemplate } from "../render.js";
+import { RateLimitError } from "../rate-limit.js";
+import { STAGES } from "../stages.js";
+import { emptyTokenUsage } from "../tokens.js";
+import {
+  renderReviewInputArtifact,
+  resolveReviewInput,
+  type ResolvedReviewInput,
+} from "../pr-review-input.js";
+import type { PullRequestRevision } from "../pr-review.js";
+import {
+  readReviewAnalysisArtifact,
+  runPullRequestReview,
+} from "../pr-review.js";
+import {
+  acquireReviewLease,
+  acquirePublicationLease,
+  readReviewState,
+  writeReviewState,
+  ReviewStatePersistenceError,
+  type PullRequestReviewState,
+  type ReviewLease,
+} from "../pr-review-state.js";
+import {
+  headMarker,
+  inputMarker,
+  renderCanonicalReview,
+  renderFormalReviewBody,
+  reviewMarker,
+  summaryMarker,
+  type CanonicalReview,
+  type PublishedReviewFinding,
+} from "../pr-review-output.js";
+import {
+  GitHubPrError,
+  type CreateGitHubReviewInput,
+  type GitHubComment,
+  type GitHubReview,
+} from "../github-pr.js";
+import type { PullRequestReviewConfig } from "../review-cli.js";
+import type { ReviewSkillSelection } from "../pr-review-skill.js";
+import type { ReviewAnalysisResult, ReviewSeverityCounts } from "../panel.js";
+import type { Finding } from "../review-severity.js";
+import type { StageResult } from "../runner.js";
+import {
+  writeManifest,
+  type PullRequestReviewEvidence,
+  type RunArtifact,
+  type RunManifest,
+  type ToolUsage,
+} from "../run-report.js";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const CORE_DIR = join(HERE, "..", ".."); // packages/core (holds templates/)
+
+function g(cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+const EMPTY_SEVERITY: ReviewSeverityCounts = {
+  blocker: 0,
+  major: 0,
+  minor: 0,
+  nit: 0,
+  suppressed: 0,
+};
+
+type Fixture = {
+  workspaceDir: string;
+  baseSha: string;
+  headSha: string;
+  revision: PullRequestRevision;
+  cleanupDirs: string[];
+};
+
+const PROMPT_SECRET = "SECRET_DIRECT_PROMPT_MARKER_9Z";
+const PR_BODY_MARKER = "PR_BODY_MARKER_ABC";
+
+/** A local origin with base + PR head refs, and a cloned operator workspace. */
+function setupFixture(): Fixture {
+  const cleanupDirs: string[] = [];
+  const mk = (p: string): string => {
+    const d = mkdtempSync(join(tmpdir(), p));
+    cleanupDirs.push(d);
+    return d;
+  };
+  const originDir = mk("otto-origin-");
+  g(originDir, "init", "--bare", "-q");
+
+  const seedDir = mk("otto-seed-");
+  g(seedDir, "init", "-q");
+  g(seedDir, "symbolic-ref", "HEAD", "refs/heads/main");
+  g(seedDir, "config", "user.email", "t@t");
+  g(seedDir, "config", "user.name", "t");
+  writeFileSync(join(seedDir, "AGENTS.md"), "BASE trusted policy\n");
+  execFileSync("mkdir", ["-p", join(seedDir, "src")]);
+  writeFileSync(join(seedDir, "src", "app.ts"), "export const v = 1;\n");
+  g(seedDir, "add", ".");
+  g(seedDir, "commit", "-qm", "base");
+  const baseSha = g(seedDir, "rev-parse", "HEAD");
+  g(seedDir, "remote", "add", "origin", originDir);
+  g(seedDir, "push", "-q", "origin", "HEAD:refs/heads/main");
+  writeFileSync(join(seedDir, "src", "app.ts"), "export const v = 2;\n");
+  g(seedDir, "add", ".");
+  g(seedDir, "commit", "-qm", "head");
+  const headSha = g(seedDir, "rev-parse", "HEAD");
+  g(seedDir, "push", "-q", "origin", "HEAD:refs/pull/7/head");
+  g(originDir, "symbolic-ref", "HEAD", "refs/heads/main");
+
+  const workspaceDir = mk("otto-ws-");
+  execFileSync("git", ["clone", "-q", originDir, workspaceDir], {
+    stdio: "ignore",
+  });
+  g(workspaceDir, "config", "user.email", "t@t");
+  g(workspaceDir, "config", "user.name", "t");
+
+  const revision: PullRequestRevision = {
+    repository: "acme/widget",
+    number: 7,
+    url: "https://github.com/acme/widget/pull/7",
+    title: "Add feature",
+    body: PR_BODY_MARKER,
+    author: "octocat",
+    state: "OPEN",
+    isDraft: false,
+    labels: ["otto-review"],
+    baseRefName: "main",
+    baseSha,
+    headSha,
+    changedFiles: ["src/app.ts"],
+  };
+  return { workspaceDir, baseSha, headSha, revision, cleanupDirs };
+}
+
+function makeConfig(
+  over: Partial<PullRequestReviewConfig> = {}
+): PullRequestReviewConfig {
+  return {
+    repository: "acme/widget",
+    pullRequest: 7,
+    watch: false,
+    watchIntervalSec: 300,
+    label: "otto-review",
+    reviewInput: { kind: "none" },
+    output: "text",
+    githubReview: false,
+    ...over,
+  };
+}
+
+function resolvedInput(
+  fx: Fixture,
+  request: ResolvedReviewInput | { kind: "none" } = { kind: "none" }
+): ResolvedReviewInput {
+  if ("fingerprint" in request) return request;
+  return resolveReviewInput({
+    workspaceDir: fx.workspaceDir,
+    repository: "acme/widget",
+    request,
+  });
+}
+
+const finding = (over: Partial<Finding> = {}): Finding => ({
+  severity: "major",
+  file: "src/app.ts",
+  line: "1",
+  claim: "bug introduced",
+  why: "off-by-one",
+  ...over,
+});
+
+type FakeCfg = {
+  confirmed?: Finding[];
+  rejected?: Finding[];
+  severity?: ReviewSeverityCounts;
+  lensCost?: number;
+  verifyCost?: number;
+  throwContract?: boolean;
+  rateLimitOnce?: boolean;
+};
+
+/** A fake analyze that mirrors analyzeReview's decorate/record/budget contract
+ *  without any model call, and records every option it was called with. */
+function makeFakeAnalyze(cfg: FakeCfg = {}) {
+  const calls: Array<Record<string, unknown>> = [];
+  let invocations = 0;
+  const usage = () => ({
+    inputTokens: 10,
+    outputTokens: 5,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+  });
+  const fn = async (
+    opts: Parameters<typeof analyzeReview>[0]
+  ): Promise<ReviewAnalysisResult> => {
+    calls.push(opts as unknown as Record<string, unknown>);
+    const decorate = (sr: StageResult): StageResult => ({
+      ...sr,
+      skillsUsed: [...(sr.skillsUsed ?? []), ...(opts.skillUsages ?? [])],
+      safetyEvents: [
+        ...(sr.safetyEvents ?? []),
+        ...(opts.inputSafetyEvents ?? []),
+      ],
+    });
+    const mkSr = (cost: number): StageResult =>
+      decorate({
+        result: "ok",
+        costUsd: cost,
+        isError: false,
+        apiErrorStatus: null,
+        usage: usage(),
+        runtimeId: (opts.agentId ?? "claude") as StageResult["runtimeId"],
+        logPath: ".otto-tmp/logs/x.ndjson",
+      });
+    const stageResults: StageResult[] = [];
+
+    if (cfg.rateLimitOnce && invocations === 0) {
+      invocations++;
+      const sr = mkSr(0.1);
+      stageResults.push(sr);
+      opts.recordStage?.("correctness", sr, "2020-01-01T00:00:00.000Z");
+      throw new RateLimitError("rate limited", null);
+    }
+    invocations++;
+
+    let stopped = false;
+    for (const lens of opts.lenses) {
+      const sr = mkSr(cfg.lensCost ?? 0.1);
+      stageResults.push(sr);
+      opts.recordStage?.(lens, sr, "2020-01-01T00:00:00.000Z");
+      const ctrl = opts.onStage?.(sr) ?? { stop: false, cooldownFactor: 1 };
+      if (ctrl.stop) {
+        stopped = true;
+        break;
+      }
+    }
+    if (cfg.throwContract) {
+      throw new ReviewAnalysisContractError({
+        confirmed: [],
+        rejected: [],
+        severity: EMPTY_SEVERITY,
+        stageResults,
+        contractErrors: ["lenses mutated the repo (read-only violation)"],
+      });
+    }
+    if (stopped) {
+      return {
+        confirmed: [],
+        rejected: [],
+        severity: EMPTY_SEVERITY,
+        stageResults,
+        contractErrors: [],
+      };
+    }
+    const vsr = mkSr(cfg.verifyCost ?? 0.2);
+    stageResults.push(vsr);
+    opts.recordStage?.(
+      "pr-review-verify",
+      vsr,
+      "2020-01-01T00:00:00.000Z",
+      cfg.severity ?? EMPTY_SEVERITY
+    );
+    opts.onStage?.(vsr);
+    return {
+      confirmed: cfg.confirmed ?? [],
+      rejected: cfg.rejected ?? [],
+      severity: cfg.severity ?? EMPTY_SEVERITY,
+      stageResults,
+      contractErrors: [],
+    };
+  };
+  return { fn, calls, invocationCount: () => invocations };
+}
+
+function readManifest(workspaceDir: string, runId: string): RunManifest {
+  return JSON.parse(
+    readFileSync(
+      join(workspaceDir, ".otto", "runs", runId, "manifest.json"),
+      "utf8"
+    )
+  ) as RunManifest;
+}
+
+const baseArgs = (fx: Fixture) => ({
+  workspaceDir: fx.workspaceDir,
+  packageDir: CORE_DIR,
+  revision: fx.revision,
+  agentId: "claude" as const,
+  autoSwitchOnLimit: false,
+  modelRouting: false,
+  tierLadder: {} as never,
+  tokenMode: "off" as const,
+  contextCompressor: "off" as const,
+  maxRetries: 0,
+  cooldownMs: 0,
+  verbose: false,
+});
+
+describe("runPullRequestReview", () => {
+  let fx: Fixture;
+  const out: string[] = [];
+  const stdout = (t: string): void => void out.push(t);
+  const now = () => new Date("2026-07-18T12:00:00.000Z");
+
+  beforeEach(() => {
+    fx = setupFixture();
+    out.length = 0;
+    mocks.executeStage.mockReset();
+    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const d of fx.cleanupDirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  it("(1) reviews an eligible PR end to end: input artifact, worktree, skill, analysis.json, review.md, text output, finalized manifest", async () => {
+    const fake = makeFakeAnalyze({
+      confirmed: [finding()],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+    });
+    const github = { getPullRequest: () => fx.revision };
+    const reviewInput = resolvedInput(fx);
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput,
+      config: makeConfig(),
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+
+    expect(res.status).toBe("succeeded");
+    expect(res.outcome).toBe("changes-requested");
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(existsSync(join(runDir, "review-input.md"))).toBe(true);
+    expect(existsSync(join(runDir, "pr.diff"))).toBe(true);
+    expect(existsSync(join(runDir, "analysis.json"))).toBe(true);
+    expect(existsSync(join(runDir, "review.md"))).toBe(true);
+    expect(existsSync(join(runDir, "report.md"))).toBe(true);
+    // text output surfaced to the operator.
+    expect(out.join("")).toContain("acme/widget#7");
+    // finalized manifest.
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(m.bin).toBe("otto-review");
+    expect(m.mode).toBe("github-pr-review");
+    expect(m.finishedAt).toBeTruthy();
+    expect((m.pullRequestReview as { outcome: string }).outcome).toBe(
+      "changes-requested"
+    );
+    expect((m.pullRequestReview as { confirmed: number }).confirmed).toBe(1);
+    const expectedInputPath = `.otto/runs/${res.runId}/review-input.md`;
+    const evidence = m.pullRequestReview as PullRequestReviewEvidence;
+    const inputArtifact = (m.artifacts as RunArtifact[]).find(
+      (artifact) => artifact.kind === "review-input"
+    );
+    expect(evidence.reviewInput.artifactPath).not.toBeNull();
+    expect(evidence.reviewInput.artifactPath).toBe(expectedInputPath);
+    expect(inputArtifact?.path).toBe(evidence.reviewInput.artifactPath);
+    expect(readFileSync(join(fx.workspaceDir, expectedInputPath), "utf8")).toBe(
+      renderReviewInputArtifact(reviewInput)
+    );
+    // analysis.json is schema-valid and identity-matched.
+    const a = JSON.parse(readFileSync(join(runDir, "analysis.json"), "utf8"));
+    expect(a.schemaVersion).toBe(2);
+    expect(a.diffSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(a.headSha).toBe(fx.headSha);
+    expect(a.confirmed).toHaveLength(1);
+    // analyze ran with the P32 read-only seam.
+    expect(fake.calls[0].verdictSource).toBe("result");
+    expect(fake.calls[0].mutationPolicy).toBe("fail");
+    expect(fake.calls[0].strictFindings).toBe(true);
+    expect(fake.calls[0].lensStage).toBe(STAGES.prReviewLens);
+    expect(fake.calls[0].verifyStage).toBe(STAGES.prReviewVerify);
+    expect(fake.calls[0].childEnv).toBeTruthy();
+    expect(fake.calls[0].safetyPolicy).toBeTruthy();
+  });
+
+  it("(2) markdown mode copies the canonical document to --output-file; deps carry NO GitHub write method", async () => {
+    const outFile = join(fx.workspaceDir, "review-out.md");
+    const fake = makeFakeAnalyze({});
+    const github = { getPullRequest: () => fx.revision };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "markdown", outputFile: outFile }),
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.outcome).toBe("approved");
+    expect(existsSync(outFile)).toBe(true);
+    expect(out.join("")).toContain("<!-- otto-review:");
+    // The Slice-1 deps only expose getPullRequest — a compile-time guarantee
+    // that no GitHub write path exists. Assert the shape at runtime too.
+    expect(Object.keys(github)).toEqual(["getPullRequest"]);
+  });
+
+  it("(3) an explicit invalid skill fails BEFORE analyze runs", async () => {
+    const fake = makeFakeAnalyze({});
+    const github = { getPullRequest: () => fx.revision };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ reviewSkill: "does-not-exist" }),
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(res.status).toBe("analysis-failed");
+    expect(fake.calls).toHaveLength(0);
+    expect(res.error).toMatch(/skill/i);
+    // no canonical review published.
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(existsSync(join(runDir, "review.md"))).toBe(false);
+    // but a harness failure report names the identity + next action.
+    expect(readFileSync(join(runDir, "report.md"), "utf8")).toContain(
+      "acme/widget"
+    );
+  });
+
+  it("(4) a contract failure finalizes analysis-failed, publishes nothing, and cleans the worktree", async () => {
+    const fake = makeFakeAnalyze({ throwContract: true });
+    const github = { getPullRequest: () => fx.revision };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig(),
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(res.status).toBe("analysis-failed");
+    expect(res.error).toMatch(/contract/i);
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(existsSync(join(runDir, "review.md"))).toBe(false);
+    expect(existsSync(join(runDir, "analysis.json"))).toBe(false);
+    // worktree removed.
+    expect(
+      existsSync(
+        join(fx.workspaceDir, ".otto-tmp", "pr-review-worktrees", res.runId)
+      )
+    ).toBe(false);
+    // manifest finalized as analysis-failed.
+    expect(readManifest(fx.workspaceDir, res.runId).exitReason).toBe(
+      "analysis-failed"
+    );
+
+    const fingerprint = resolvedInput(fx).fingerprint;
+    expect(
+      readReviewState(
+        fx.workspaceDir,
+        "acme/widget",
+        7,
+        fx.headSha,
+        fingerprint
+      )
+    ).toMatchObject({
+      status: "analysis-failed",
+      attempts: 1,
+      retryable: false,
+    });
+
+    // A watch invocation of the same permanently-failed identity is terminal:
+    // it must not pay for another analysis on every daemon poll.
+    const watchRetry = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ watch: true }),
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(watchRetry.status).toBe("analysis-failed");
+    expect(watchRetry.costUsd).toBe(0);
+    expect(watchRetry.reviewArtifact).toBeUndefined();
+    expect(existsSync(join(runDir, "review.md"))).toBe(false);
+    expect(fake.invocationCount()).toBe(1);
+
+    // After the operator fixes the contract issue, an explicit one-shot rerun
+    // remains available for the exact same identity.
+    const fixed = makeFakeAnalyze({});
+    const oneShotRetry = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ watch: false }),
+      deps: {
+        analyze: fixed.fn,
+        github,
+        stdout,
+        now: () => new Date("2026-07-18T12:30:00.000Z"),
+      },
+    });
+    expect(oneShotRetry.status).toBe("succeeded");
+    expect(fixed.invocationCount()).toBe(1);
+    expect(
+      readReviewState(
+        fx.workspaceDir,
+        "acme/widget",
+        7,
+        fx.headSha,
+        fingerprint
+      )
+    ).toMatchObject({ status: "succeeded", attempts: 2 });
+  });
+
+  it("persists transient analysis failures with bounded retry metadata", async () => {
+    const analyze = vi.fn(async () => {
+      throw new Error("temporary model transport failure");
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: analyze as never,
+        github: makeCommentGithub({ current: () => fx.revision }).github,
+        stdout,
+        now,
+      },
+    });
+    expect(res).toMatchObject({ status: "analysis-failed", retryable: true });
+    expect(res.nextRetryAt).toBeTruthy();
+    expect(
+      readReviewState(
+        fx.workspaceDir,
+        "acme/widget",
+        7,
+        fx.headSha,
+        resolvedInput(fx).fingerprint
+      )
+    ).toMatchObject({
+      status: "analysis-failed",
+      retryable: true,
+      nextRetryAt: res.nextRetryAt,
+    });
+
+    const blocked = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", watch: true }),
+      deps: {
+        analyze: analyze as never,
+        github: makeCommentGithub({ current: () => fx.revision }).github,
+        stdout,
+        now,
+      },
+    });
+    expect(blocked).toMatchObject({
+      status: "analysis-failed",
+      costUsd: 0,
+      nextRetryAt: res.nextRetryAt,
+    });
+    expect(blocked.reviewArtifact).toBeUndefined();
+    expect(
+      existsSync(join(fx.workspaceDir, ".otto", "runs", res.runId, "review.md"))
+    ).toBe(false);
+    expect(analyze).toHaveBeenCalledTimes(1);
+  });
+
+  it("(5a) a moved head after analysis is superseded with supersededBy and stale evidence", async () => {
+    const fake = makeFakeAnalyze({});
+    const newHead = "f".repeat(40);
+    const github = {
+      getPullRequest: () => ({ ...fx.revision, headSha: newHead }),
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig(),
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(res.status).toBe("superseded");
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(readFileSync(join(runDir, "review.md"), "utf8")).toMatch(/stale/i);
+    expect(
+      (
+        readManifest(fx.workspaceDir, res.runId).pullRequestReview as {
+          supersededBy?: string;
+        }
+      ).supersededBy
+    ).toBe(newHead);
+  });
+
+  it("(5b) a PR that went closed/draft/unlabelled after analysis is cancelled with stale evidence", async () => {
+    for (const mutate of [
+      (r: PullRequestRevision) => ({ ...r, state: "CLOSED" as const }),
+      (r: PullRequestRevision) => ({ ...r, isDraft: true }),
+      (r: PullRequestRevision) => ({ ...r, labels: [] }),
+    ]) {
+      const fake = makeFakeAnalyze({});
+      const github = { getPullRequest: () => mutate(fx.revision) };
+      const res = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig(),
+        deps: { analyze: fake.fn, github, stdout, now },
+      });
+      expect(res.status).toBe("cancelled");
+      const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+      expect(readFileSync(join(runDir, "review.md"), "utf8")).toMatch(/stale/i);
+    }
+  });
+
+  it("(6) every stage record carries cost, usage, runtime, review severity, skill usage, safety context, log path; manifest totals sum", async () => {
+    const fake = makeFakeAnalyze({
+      confirmed: [finding()],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+      lensCost: 0.1,
+      verifyCost: 0.2,
+    });
+    const github = { getPullRequest: () => fx.revision };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig(),
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    const stagesDir = join(
+      fx.workspaceDir,
+      ".otto",
+      "runs",
+      res.runId,
+      "stages"
+    );
+    const files = execFileSync("ls", [stagesDir], { encoding: "utf8" })
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    // 5 lenses + 1 verify.
+    expect(files).toHaveLength(6);
+    const verify = JSON.parse(
+      readFileSync(
+        join(stagesDir, files.find((f) => f.includes("pr-review-verify"))!),
+        "utf8"
+      )
+    );
+    expect(verify.reviewSeverity.major).toBe(1);
+    expect(verify.skillsUsed.length).toBeGreaterThan(0);
+    expect(
+      verify.safetyEvents.some(
+        (e: { kind: string }) => e.kind === "review-input"
+      )
+    ).toBe(true);
+    expect(
+      verify.safetyEvents.some(
+        (e: { kind: string }) => e.kind === "pull-request"
+      )
+    ).toBe(true);
+    expect(verify.logPath).toBeTruthy();
+    // manifest cost totals via addTokenUsage: 5*0.1 + 0.2 = 0.7, tokens 6*15.
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(m.costUsd).toBeCloseTo(0.7, 5);
+    expect((m.tokenUsage as { inputTokens: number }).inputTokens).toBe(60);
+  });
+
+  it("(7) budget exhaustion before verification is analysis-failed, never approved", async () => {
+    const fake = makeFakeAnalyze({ lensCost: 0.5 });
+    const github = { getPullRequest: () => fx.revision };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig(),
+      budgetUsd: 0.4, // exhausted after the first lens
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(res.status).toBe("analysis-failed");
+    expect(res.outcome).toBeUndefined();
+    expect(res.error).toMatch(/budget/i);
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(existsSync(join(runDir, "review.md"))).toBe(false);
+  });
+
+  it("(8) a RateLimitError switches ONCE to the explicit fallback only with autoSwitchOnLimit, recording both attempts", async () => {
+    const fake = makeFakeAnalyze({ rateLimitOnce: true, confirmed: [] });
+    const github = { getPullRequest: () => fx.revision };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig(),
+      fallbackAgentId: "codex",
+      autoSwitchOnLimit: true,
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    // two attempts: claude then codex.
+    expect(fake.invocationCount()).toBe(2);
+    expect(fake.calls[0].agentId).toBe("claude");
+    expect(fake.calls[1].agentId).toBe("codex");
+    // both attempts recorded evidence (partial claude lens + full codex run).
+    const stagesDir = join(
+      fx.workspaceDir,
+      ".otto",
+      "runs",
+      res.runId,
+      "stages"
+    );
+    const files = execFileSync("ls", [stagesDir], { encoding: "utf8" })
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    const runtimes = new Set(
+      files.map(
+        (f) =>
+          JSON.parse(readFileSync(join(stagesDir, f), "utf8"))
+            .runtimeId as string
+      )
+    );
+    expect(runtimes.has("claude")).toBe(true);
+    expect(runtimes.has("codex")).toBe(true);
+  });
+
+  it("(8b) does NOT switch when autoSwitchOnLimit is off", async () => {
+    const fake = makeFakeAnalyze({ rateLimitOnce: true });
+    const github = { getPullRequest: () => fx.revision };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig(),
+      fallbackAgentId: "codex",
+      autoSwitchOnLimit: false,
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(res.status).toBe("analysis-failed");
+    expect(fake.invocationCount()).toBe(1);
+  });
+
+  it("(9) each input kind round-trips byte-identical; worktree copy is byte-identical; both stages receive REVIEW_INPUT_PATH; direct prompt never appears inline", async () => {
+    const direct = resolveReviewInput({
+      workspaceDir: fx.workspaceDir,
+      repository: "acme/widget",
+      request: { kind: "prompt", text: PROMPT_SECRET },
+    });
+    const fake = makeFakeAnalyze({});
+    const github = { getPullRequest: () => fx.revision };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: direct,
+      config: makeConfig(),
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    // run artifact retains exact content.
+    const artifact = readFileSync(join(runDir, "review-input.md"), "utf8");
+    expect(artifact).toContain(PROMPT_SECRET);
+    // stage vars carry a PATH to the input, not its content; no direct text inline.
+    const vars = fake.calls[0].stageVars as Record<string, string>;
+    expect(vars.REVIEW_INPUT_PATH).toBeTruthy();
+    for (const v of Object.values(vars)) {
+      expect(v).not.toContain(PROMPT_SECRET);
+    }
+    // injectedContext (skill) also never leaks the direct prompt.
+    expect(String(fake.calls[0].injectedContext ?? "")).not.toContain(
+      PROMPT_SECRET
+    );
+    // operator text view shows source, not the secret.
+    expect(out.join("")).not.toContain(PROMPT_SECRET);
+  });
+
+  it("(10) the diff and review-input artifacts are byte-identical to the authoritative worktree/resolved values", async () => {
+    const input = resolveReviewInput({
+      workspaceDir: fx.workspaceDir,
+      repository: "acme/widget",
+      request: { kind: "prompt", text: "trailing space   \nand newline\n" },
+    });
+    let capturedDiffText = "";
+    const fake0 = makeFakeAnalyze({});
+    const fake = {
+      // Capture the worktree diff CONTENT during analysis, before `finally`
+      // cleans the worktree away.
+      fn: async (opts: Parameters<typeof analyzeReview>[0]) => {
+        const diffPath = (opts.stageVars as Record<string, string>).DIFF_PATH;
+        capturedDiffText = readFileSync(diffPath, "utf8");
+        return fake0.fn(opts);
+      },
+      calls: fake0.calls,
+      invocationCount: fake0.invocationCount,
+    };
+    const github = { getPullRequest: () => fx.revision };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: input,
+      config: makeConfig(),
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    // run-level diff artifact equals the worktree diff the stages read.
+    const runDiff = readFileSync(join(runDir, "pr.diff"), "utf8");
+    expect(runDiff).toBe(capturedDiffText);
+    expect(runDiff.length).toBeGreaterThan(0);
+    // review-input artifact preserves exact bytes (trailing whitespace/newline).
+    const artifact = readFileSync(join(runDir, "review-input.md"), "utf8");
+    expect(artifact).toContain("trailing space   \nand newline");
+  });
+
+  it("(11) finalizes the manifest and cleans the worktree on a thrown pipeline error", async () => {
+    const github = { getPullRequest: () => fx.revision };
+    const fake = {
+      fn: async () => {
+        throw new Error("boom in analysis");
+      },
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig(),
+      deps: { analyze: fake.fn as never, github, stdout, now },
+    });
+    expect(res.status).toBe("analysis-failed");
+    expect(res.error).toMatch(/boom/);
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(m.finishedAt).toBeTruthy();
+    expect(
+      existsSync(
+        join(fx.workspaceDir, ".otto-tmp", "pr-review-worktrees", res.runId)
+      )
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice 2 (Task 12): state-aware recovery + idempotent summary comment.
+// ---------------------------------------------------------------------------
+
+type CommentGithub = {
+  github: {
+    getPullRequest: () => PullRequestRevision;
+    viewer: () => { login: string };
+    listIssueComments: () => GitHubComment[];
+    createIssueComment: (r: string, n: number, b: string) => GitHubComment;
+    updateIssueComment: (r: string, id: number, b: string) => GitHubComment;
+  };
+  calls: { getPr: number; list: number; create: number; update: number };
+  store: GitHubComment[];
+};
+
+function makeCommentGithub(opts: {
+  current: () => PullRequestRevision;
+  viewerLogin?: string;
+  comments?: GitHubComment[];
+  createError?: Error;
+}): CommentGithub {
+  const login = opts.viewerLogin ?? "otto-bot";
+  const store: GitHubComment[] = [...(opts.comments ?? [])];
+  let nextId = 5000;
+  const calls = { getPr: 0, list: 0, create: 0, update: 0 };
+  const github = {
+    getPullRequest: () => {
+      calls.getPr++;
+      return opts.current();
+    },
+    viewer: () => ({ login }),
+    listIssueComments: () => {
+      calls.list++;
+      return store.map((c) => ({ ...c }));
+    },
+    createIssueComment: (_r: string, _n: number, body: string) => {
+      calls.create++;
+      if (opts.createError) throw opts.createError;
+      const c: GitHubComment = {
+        id: nextId++,
+        body,
+        author: login,
+        url: `https://github.com/acme/widget/issues/7#comment-${nextId}`,
+      };
+      store.push(c);
+      return c;
+    },
+    updateIssueComment: (_r: string, id: number, body: string) => {
+      calls.update++;
+      const found = store.find((c) => c.id === id);
+      if (!found) throw new Error(`no comment ${id}`);
+      found.body = body;
+      return { ...found };
+    },
+  };
+  return { github, calls, store };
+}
+
+const RECOVERY_SKILL: ReviewSkillSelection = {
+  name: "builtin:otto-code-review",
+  version: "1",
+  source: "builtin",
+  checksum: "deadbeef",
+  injection: "",
+  usage: {
+    name: "builtin:otto-code-review",
+    version: "1",
+    source: "builtin",
+    stage: "pr-review",
+    checksum: "deadbeef",
+  },
+};
+
+function recoveryReview(
+  headSha: string,
+  fingerprint: string,
+  over: Partial<CanonicalReview> = {}
+): CanonicalReview {
+  return {
+    repository: "acme/widget",
+    pullRequest: 7,
+    url: "https://github.com/acme/widget/pull/7",
+    title: "Add feature",
+    baseSha: "d".repeat(40),
+    headSha,
+    reviewInput: {
+      kind: "none",
+      source: "none",
+      fingerprint,
+      artifactPath: ".otto/runs/recovered/review-input.md",
+    },
+    runId: "recovered",
+    outcome: "approved",
+    confirmed: [],
+    rejectedCount: 0,
+    suppressedCount: 0,
+    skill: RECOVERY_SKILL,
+    diffArtifact: ".otto/runs/recovered/pr.diff",
+    analysisArtifact: ".otto/runs/recovered/analysis.json",
+    ...over,
+  };
+}
+
+/** The exact fixed-position canonical summary envelope used for recovery. */
+function summaryBody(
+  headSha: string,
+  fingerprint: string,
+  over: Partial<CanonicalReview> = {}
+): string {
+  return renderCanonicalReview(recoveryReview(headSha, fingerprint, over));
+}
+
+function formalRecoveryBody(headSha: string, fingerprint: string): string {
+  return renderFormalReviewBody(recoveryReview(headSha, fingerprint));
+}
+
+type MutableAnalysisArtifact = Record<string, any>;
+type AnalysisCorruption = (
+  artifact: MutableAnalysisArtifact,
+  runDir: string
+) => void;
+
+const ANALYSIS_CORRUPTIONS: Array<[string, AnalysisCorruption]> = [
+  ["run id", (a) => void (a.runId = "other-run")],
+  ["base SHA", (a) => void (a.baseSha = "f".repeat(40))],
+  ["URL type", (a) => void (a.url = 7)],
+  ["title type", (a) => void (a.title = { forged: true })],
+  ["review-input kind", (a) => void (a.reviewInput.kind = "forged")],
+  ["review-input source", (a) => void (a.reviewInput.source = "other")],
+  [
+    "review-input fingerprint",
+    (a) => void (a.reviewInput.fingerprint = "f".repeat(64)),
+  ],
+  [
+    "review-input path",
+    (a) => void (a.reviewInput.artifactPath = "../review-input.md"),
+  ],
+  ["outcome", (a) => void (a.outcome = "forged")],
+  [
+    "confirmed finding severity",
+    (a) =>
+      void (a.confirmed = [
+        {
+          severity: "critical",
+          file: "src/app.ts",
+          line: "1",
+          claim: "forged",
+          why: "forged",
+          inlineEligible: false,
+        },
+      ]),
+  ],
+  [
+    "confirmed finding location",
+    (a) =>
+      void (a.confirmed = [
+        {
+          severity: "major",
+          file: "src/app.ts",
+          line: "not-a-line",
+          claim: "forged",
+          why: "forged",
+          inlineEligible: false,
+        },
+      ]),
+  ],
+  [
+    "rejected finding schema",
+    (a) => void (a.rejected = [{ severity: "major" }]),
+  ],
+  ["severity tally", (a) => void (a.severity = { ...a.severity, major: "1" })],
+  ["skill selection", (a) => void (a.skill = { ...a.skill, usage: {} })],
+  ["diff path", (a) => void (a.diffArtifact = "../pr.diff")],
+  [
+    "missing diff artifact",
+    (_a, runDir) => rmSync(join(runDir, "pr.diff"), { force: true }),
+  ],
+  [
+    "non-regular diff artifact",
+    (_a, runDir) => {
+      const path = join(runDir, "pr.diff");
+      rmSync(path, { force: true });
+      mkdirSync(path);
+    },
+  ],
+  [
+    "mismatched diff integrity",
+    (_a, runDir) => writeFileSync(join(runDir, "pr.diff"), "tampered diff\n"),
+  ],
+];
+
+const RECOVERY_EVIDENCE_CASES: Array<
+  [string, CanonicalReview["outcome"], PublishedReviewFinding[], number]
+> = [
+  ["approved", "approved", [], 0],
+  [
+    "comment",
+    "comment",
+    [{ ...finding({ severity: "minor" }), inlineEligible: false }],
+    2,
+  ],
+  [
+    "changes-requested",
+    "changes-requested",
+    [{ ...finding({ severity: "major" }), inlineEligible: false }],
+    3,
+  ],
+];
+
+describe("runPullRequestReview — Slice 2 comment publication + recovery", () => {
+  let fx: Fixture;
+  const out: string[] = [];
+  const stdout = (t: string): void => void out.push(t);
+  const now = () => new Date("2026-07-18T12:00:00.000Z");
+  const later = () => new Date("2026-07-18T12:30:00.000Z");
+
+  beforeEach(() => {
+    fx = setupFixture();
+    out.length = 0;
+    mocks.executeStage.mockReset();
+    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const d of fx.cleanupDirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  const fp = () => resolvedInput(fx).fingerprint;
+
+  it("(S1) comment mode creates ONE summary comment and records a succeeded receipt", async () => {
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(gh.calls.create).toBe(1);
+    expect(gh.calls.update).toBe(0);
+    expect(res.commentId).toBe(gh.store[0].id);
+    // Comment body is the canonical markdown carrying all three markers.
+    expect(gh.store[0].body).toContain(summaryMarker("acme/widget", 7));
+    expect(gh.store[0].body).toContain(headMarker(fx.headSha));
+    // State persisted with the comment receipt.
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("succeeded");
+    expect(st?.outputs.comment?.commentId).toBe(gh.store[0].id);
+    // Local review.md still written; operator sees a text line.
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(existsSync(join(runDir, "review.md"))).toBe(true);
+    expect(out.join("")).toContain("acme/widget#7");
+  });
+
+  it("(S2) a moved head at re-query is superseded and writes NO comment", async () => {
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({
+      current: () => ({ ...fx.revision, headSha: "f".repeat(40) }),
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("superseded");
+    expect(gh.calls.create).toBe(0);
+    expect(gh.calls.update).toBe(0);
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(readFileSync(join(runDir, "review.md"), "utf8")).toMatch(/stale/i);
+  });
+
+  it("(S-race) a head that advances DURING listIssueComments is superseded at the write boundary and writes NO comment", async () => {
+    // The outer reconcile sees the ORIGINAL head (publishable); the head then
+    // advances while upsertSummaryComment is reading listIssueComments, so the
+    // write-boundary re-query must catch it and withhold the comment.
+    const moved = "a".repeat(40);
+    let advanced = false;
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const gh = makeCommentGithub({
+      current: () =>
+        advanced ? { ...fx.revision, headSha: moved } : fx.revision,
+    });
+    const origList = gh.github.listIssueComments;
+    gh.github.listIssueComments = () => {
+      // Advance the head only on the WRITE-PATH list read (after the outer
+      // reconcile's getPullRequest), never on recovery's earlier list read — so
+      // the OUTER reconcile still sees the original head and only the write
+      // boundary can catch the move.
+      if (gh.calls.getPr > 0) advanced = true;
+      return origList();
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("superseded");
+    expect(gh.calls.create).toBe(0);
+    expect(gh.calls.update).toBe(0);
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(readFileSync(join(runDir, "review.md"), "utf8")).toMatch(/stale/i);
+    expect(
+      (
+        readManifest(fx.workspaceDir, res.runId).pullRequestReview as {
+          supersededBy?: string;
+        }
+      ).supersededBy
+    ).toBe(moved);
+  });
+
+  it("(S3) a busy composite claim returns skipped without analysis", async () => {
+    // Another daemon already holds the LIVE lease for this identity.
+    const acq = await acquireReviewLease({
+      workspaceDir: fx.workspaceDir,
+      repository: "acme/widget",
+      pullRequest: 7,
+      headSha: fx.headSha,
+      inputFingerprint: fp(),
+      runId: "other-daemon",
+    });
+    expect(acq.acquired).toBe(true);
+    if (!acq.acquired) throw new Error("expected acquire");
+    try {
+      const fake = makeFakeAnalyze({});
+      const gh = makeCommentGithub({ current: () => fx.revision });
+      const res = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "comment" }),
+        deps: { analyze: fake.fn, github: gh.github, stdout, now },
+      });
+      expect(res.status).toBe("skipped");
+      // EXPLICIT busy reason — never inferred from costUsd.
+      expect(res.skipReason).toBe("busy");
+      expect(fake.invocationCount()).toBe(0);
+      expect(gh.calls.create).toBe(0);
+    } finally {
+      await acq.lease.release();
+    }
+  });
+
+  it("(S3b/#4) caller shutdown AFTER paid analysis withholds publication but PRESERVES the spend and finalizes a resumable run", async () => {
+    // The caller's shutdown signal trips while the review is in flight (after the
+    // paid analysis). Publication MUST be withheld — but the run already SPENT, so
+    // it must NOT report cost 0: it finalizes with the real accumulated cost and
+    // persists a RESUMABLE `running` state (retaining analysis) so a later run
+    // reuses the paid analysis. This is distinct from a busy skip (cost 0).
+    const controller = new AbortController();
+    const base = makeFakeAnalyze({
+      confirmed: [finding()],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+      lensCost: 0.1,
+      verifyCost: 0.2,
+    });
+    let analyzed = 0;
+    const analyze: typeof base.fn = async (opts) => {
+      const out = await base.fn(opts);
+      analyzed++;
+      controller.abort(); // caller shutdown: the shared signal aborts.
+      return out;
+    };
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      signal: controller.signal,
+      deps: { analyze, github: gh.github, stdout, now },
+    });
+    expect(analyzed).toBe(1);
+    expect(res.status).toBe("skipped");
+    // EXPLICIT interrupted reason — distinguishes this paid-but-unpublished skip
+    // from a busy skip WITHOUT relying on costUsd (Codex would report 0 here).
+    expect(res.skipReason).toBe("interrupted");
+    // The decisive guarantee: NO remote comment was published (no double-review).
+    expect(gh.calls.create).toBe(0);
+    // Cost is the REAL accumulated spend (5 lenses × 0.1 + verify 0.2 = 0.7), not 0.
+    expect(res.costUsd).toBeCloseTo(0.7, 5);
+    // The manifest is finalized with that same real cost.
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(m.finishedAt).toBeTruthy();
+    expect(m.costUsd).toBeCloseTo(0.7, 5);
+    // The persisted state is RESUMABLE: `running`, retaining the analysis artifact.
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("running");
+    expect(st?.analysisArtifact).toBe(`.otto/runs/${res.runId}/analysis.json`);
+  });
+
+  it("a missing prior analysis artifact does not suppress fresh transient failure state", async () => {
+    const priorRunId = "prior-missing-analysis";
+    writeReviewState(fx.workspaceDir, {
+      repository: "acme/widget",
+      pullRequest: 7,
+      headSha: fx.headSha,
+      inputFingerprint: fp(),
+      status: "publish-failed",
+      runId: priorRunId,
+      analysisArtifact: `.otto/runs/${priorRunId}/analysis.json`,
+      outputs: {},
+      attempts: 2,
+      retryable: true,
+      nextRetryAt: "2026-07-18T11:00:00.000Z",
+      error: "prior publication failure",
+      updatedAt: "2026-07-18T11:00:00.000Z",
+    });
+    const analyze = vi.fn(async () => {
+      throw new Error("fresh model transport failure");
+    });
+
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: analyze as never,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+      },
+    });
+
+    expect(res).toMatchObject({ status: "analysis-failed", retryable: true });
+    expect(res.runId).not.toBe(priorRunId);
+    expect(
+      readReviewState(fx.workspaceDir, "acme/widget", 7, fx.headSha, fp())
+    ).toMatchObject({
+      status: "analysis-failed",
+      runId: res.runId,
+      attempts: 3,
+      retryable: true,
+      nextRetryAt: res.nextRetryAt,
+      error: "review analysis failed: fresh model transport failure",
+    });
+  });
+
+  it.each(["cancelled", "superseded"] as const)(
+    "a runnable %s state with an old analysis pointer does not suppress fresh transient failure state",
+    async (status) => {
+      const priorRunId = `prior-${status}`;
+      writeReviewState(fx.workspaceDir, {
+        repository: "acme/widget",
+        pullRequest: 7,
+        headSha: fx.headSha,
+        inputFingerprint: fp(),
+        status,
+        runId: priorRunId,
+        analysisArtifact: `.otto/runs/${priorRunId}/analysis.json`,
+        outputs: {},
+        attempts: 4,
+        updatedAt: "2026-07-18T11:00:00.000Z",
+      });
+      const analyze = vi.fn(async () => {
+        throw new Error(`fresh failure after ${status}`);
+      });
+
+      const res = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "text" }),
+        deps: {
+          analyze: analyze as never,
+          github: { getPullRequest: () => fx.revision },
+          stdout,
+          now,
+        },
+      });
+
+      expect(res).toMatchObject({
+        status: "analysis-failed",
+        retryable: true,
+      });
+      expect(res.runId).not.toBe(priorRunId);
+      expect(
+        readReviewState(fx.workspaceDir, "acme/widget", 7, fx.headSha, fp())
+      ).toMatchObject({
+        status: "analysis-failed",
+        runId: res.runId,
+        attempts: 5,
+        retryable: true,
+        nextRetryAt: res.nextRetryAt,
+        error: `review analysis failed: fresh failure after ${status}`,
+      });
+    }
+  );
+
+  it("(S4) a transient comment error is publish-failed with retryable + nextRetryAt", async () => {
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({
+      current: () => fx.revision,
+      createError: new GitHubPrError(
+        "rate limited (HTTP 429)",
+        "rate-limit",
+        true,
+        429
+      ),
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(true);
+    expect(res.nextRetryAt).toBeTruthy();
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    expect(st?.retryable).toBe(true);
+    expect(st?.analysisArtifact).toBe(`.otto/runs/${res.runId}/analysis.json`);
+  });
+
+  it("turns an unexpected local failure after a durable comment receipt into coherent retryable publication state", async () => {
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: fake.fn,
+        github: gh.github,
+        stdout: () => {
+          throw new Error("local stdout write failed after publication");
+        },
+        now,
+      },
+    });
+
+    expect(res).toMatchObject({
+      status: "publish-failed",
+      retryable: true,
+      commentId: gh.store[0].id,
+    });
+    expect(res.nextRetryAt).toBeTruthy();
+    expect(res.costUsd).toBeCloseTo(0.7, 5);
+    expect(res.error).toMatch(/local stdout write failed after publication/);
+    expect(gh.calls.create).toBe(1);
+    expect(res.reviewArtifact).toBe(`.otto/runs/${res.runId}/review.md`);
+    expect(
+      readReviewState(fx.workspaceDir, "acme/widget", 7, fx.headSha, fp())
+    ).toMatchObject({
+      status: "publish-failed",
+      analysisArtifact: `.otto/runs/${res.runId}/analysis.json`,
+      outputs: {
+        comment: { status: "succeeded", commentId: gh.store[0].id },
+      },
+      attempts: 1,
+      retryable: true,
+      nextRetryAt: res.nextRetryAt,
+      error: expect.stringMatching(
+        /local stdout write failed after publication/
+      ),
+    });
+
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    const manifest = readManifest(fx.workspaceDir, res.runId);
+    expect(manifest.exitReason).toBe("publish-failed");
+    expect(manifest.costUsd).toBeCloseTo(0.7, 5);
+    expect(
+      (manifest.artifacts as RunArtifact[]).map((artifact) => artifact.kind)
+    ).toEqual(
+      expect.arrayContaining(["review-input", "diff", "analysis", "review"])
+    );
+    expect(manifest.pullRequestReview).toMatchObject({
+      outcome: "approved",
+      confirmed: 0,
+      rejected: 0,
+      githubReview: false,
+      commentId: gh.store[0].id,
+    });
+    expect(readFileSync(join(runDir, "report.md"), "utf8").trim()).toBe(
+      readFileSync(join(runDir, "review.md"), "utf8").trim()
+    );
+
+    const blocked = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", watch: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(blocked).toMatchObject({
+      status: "publish-failed",
+      costUsd: 0,
+      retryable: true,
+      nextRetryAt: res.nextRetryAt,
+      commentId: gh.store[0].id,
+      reviewArtifact: res.reviewArtifact,
+    });
+    expect(fake.invocationCount()).toBe(1);
+    expect(gh.calls.create).toBe(1);
+  });
+
+  it("(S5) an auth/validation comment error is a permanent publish-failed", async () => {
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({
+      current: () => fx.revision,
+      createError: new GitHubPrError(
+        "validation (HTTP 422)",
+        "validation",
+        false,
+        422
+      ),
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(false);
+    expect(res.nextRetryAt).toBeUndefined();
+  });
+
+  it("(S6) resumes publication from analysis.json after a crash WITHOUT re-analyzing", async () => {
+    // First attempt: analysis succeeds but the comment write throws transiently.
+    const fake1 = makeFakeAnalyze({});
+    const gh1 = makeCommentGithub({
+      current: () => fx.revision,
+      createError: new GitHubPrError(
+        "rate limited (HTTP 429)",
+        "rate-limit",
+        true,
+        429
+      ),
+    });
+    const res1 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake1.fn, github: gh1.github, stdout, now },
+    });
+    expect(res1.status).toBe("publish-failed");
+    expect(fake1.invocationCount()).toBe(1);
+
+    // Second attempt (past nextRetryAt): comment write now works. Analysis MUST
+    // NOT run again — the persisted analysis.json is reused.
+    const fake2 = {
+      fn: async () => {
+        throw new Error("analysis must not run on resume");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh2 = makeCommentGithub({ current: () => fx.revision });
+    const res2 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: fake2.fn as never,
+        github: gh2.github,
+        stdout,
+        now: later,
+      },
+    });
+    expect(res2.status).toBe("succeeded");
+    expect(res2.runId).toBe(res1.runId); // same run bundle, resumed
+    expect(gh2.calls.create).toBe(1);
+    expect(res2.commentId).toBe(gh2.store[0].id);
+  });
+
+  it.each(ANALYSIS_CORRUPTIONS)(
+    "rejects persisted analysis with corrupted %s and performs fresh analysis",
+    async (_label, corrupt) => {
+      const firstAnalyze = makeFakeAnalyze({});
+      const failingGithub = makeCommentGithub({
+        current: () => fx.revision,
+        createError: new GitHubPrError(
+          "rate limited (HTTP 429)",
+          "rate-limit",
+          true,
+          429
+        ),
+      });
+      const first = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "comment" }),
+        deps: {
+          analyze: firstAnalyze.fn,
+          github: failingGithub.github,
+          stdout,
+          now,
+        },
+      });
+      expect(first.status).toBe("publish-failed");
+
+      const runDir = join(fx.workspaceDir, ".otto", "runs", first.runId);
+      const analysisPath = join(runDir, "analysis.json");
+      const artifact = JSON.parse(
+        readFileSync(analysisPath, "utf8")
+      ) as MutableAnalysisArtifact;
+      corrupt(artifact, runDir);
+      writeFileSync(analysisPath, JSON.stringify(artifact, null, 2) + "\n");
+
+      const freshAnalyze = makeFakeAnalyze({});
+      const succeedingGithub = makeCommentGithub({
+        current: () => fx.revision,
+      });
+      const second = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "comment" }),
+        deps: {
+          analyze: freshAnalyze.fn,
+          github: succeedingGithub.github,
+          stdout,
+          now: later,
+        },
+      });
+
+      expect(freshAnalyze.invocationCount()).toBe(1);
+      expect(second.runId).not.toBe(first.runId);
+      expect(second.status).toBe("succeeded");
+    }
+  );
+
+  it("rejects a persisted run bundle relocated through a symlink and performs fresh analysis", async () => {
+    const firstAnalyze = makeFakeAnalyze({});
+    const first = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: firstAnalyze.fn,
+        github: makeCommentGithub({
+          current: () => fx.revision,
+          createError: new GitHubPrError(
+            "rate limited (HTTP 429)",
+            "rate-limit",
+            true,
+            429
+          ),
+        }).github,
+        stdout,
+        now,
+      },
+    });
+    expect(first.status).toBe("publish-failed");
+
+    const runDir = join(fx.workspaceDir, ".otto", "runs", first.runId);
+    const outsideRoot = mkdtempSync(join(tmpdir(), "otto-forged-run-"));
+    fx.cleanupDirs.push(outsideRoot);
+    const relocatedRun = join(outsideRoot, "relocated");
+    renameSync(runDir, relocatedRun);
+    symlinkSync(relocatedRun, runDir, "dir");
+
+    const freshAnalyze = makeFakeAnalyze({});
+    const second = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: freshAnalyze.fn,
+        github: makeCommentGithub({ current: () => fx.revision }).github,
+        stdout,
+        now: later,
+      },
+    });
+
+    expect(freshAnalyze.invocationCount()).toBe(1);
+    expect(second.runId).not.toBe(first.runId);
+    expect(second.status).toBe("succeeded");
+  });
+
+  it("rejects a run-directory component swap after opening analysis evidence", async () => {
+    const input = resolvedInput(fx);
+    const first = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: input,
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: makeFakeAnalyze({}).fn,
+        github: makeCommentGithub({
+          current: () => fx.revision,
+          createError: new GitHubPrError(
+            "rate limited (HTTP 429)",
+            "rate-limit",
+            true,
+            429
+          ),
+        }).github,
+        stdout,
+        now,
+      },
+    });
+    expect(first.status).toBe("publish-failed");
+
+    const runDir = join(fx.workspaceDir, ".otto", "runs", first.runId);
+    const outsideRoot = mkdtempSync(join(tmpdir(), "otto-swapped-run-"));
+    fx.cleanupDirs.push(outsideRoot);
+    const relocatedRun = join(outsideRoot, "relocated");
+    let swaps = 0;
+
+    const artifact = readReviewAnalysisArtifact({
+      workspaceDir: fx.workspaceDir,
+      runId: first.runId,
+      repository: "acme/widget",
+      pullRequest: 7,
+      baseSha: fx.baseSha,
+      headSha: fx.headSha,
+      inputFingerprint: input.fingerprint,
+      reviewInput: input,
+      githubReview: false,
+      hooks: {
+        afterAnalysisOpened: () => {
+          swaps++;
+          renameSync(runDir, relocatedRun);
+          symlinkSync(relocatedRun, runDir, "dir");
+        },
+      },
+    });
+
+    expect(swaps).toBe(1);
+    expect(artifact).toBeNull();
+  });
+
+  it("a resume with a missing input and failed rematerialization emits neither input reference", async () => {
+    const fake1 = makeFakeAnalyze({});
+    const gh1 = makeCommentGithub({
+      current: () => fx.revision,
+      createError: new GitHubPrError(
+        "rate limited (HTTP 429)",
+        "rate-limit",
+        true,
+        429
+      ),
+    });
+    const res1 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake1.fn, github: gh1.github, stdout, now },
+    });
+    expect(res1.status).toBe("publish-failed");
+
+    const expectedInputPath = `.otto/runs/${res1.runId}/review-input.md`;
+    rmSync(join(fx.workspaceDir, expectedInputPath));
+    let rematerializeAttempts = 0;
+    const fake2 = {
+      fn: async () => {
+        throw new Error("analysis must not run on resume");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh2 = makeCommentGithub({ current: () => fx.revision });
+    const res2 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: fake2.fn as never,
+        github: gh2.github,
+        stdout,
+        now: later,
+        writeReviewInput: () => {
+          rematerializeAttempts++;
+          throw new Error("run dir is unwritable");
+        },
+      },
+    });
+    expect(res2.status).toBe("succeeded");
+    expect(res2.runId).toBe(res1.runId);
+    const manifest = readManifest(fx.workspaceDir, res2.runId);
+    expect(
+      (manifest.pullRequestReview as PullRequestReviewEvidence).reviewInput
+        .artifactPath
+    ).toBeNull();
+    expect(
+      (manifest.artifacts as RunArtifact[]).some(
+        (artifact) => artifact.kind === "review-input"
+      )
+    ).toBe(false);
+    expect(JSON.stringify(manifest)).not.toContain(expectedInputPath);
+    expect(existsSync(join(fx.workspaceDir, expectedInputPath))).toBe(false);
+    expect(rematerializeAttempts).toBe(1);
+  });
+
+  it("(S6b/#5) a resumed publication PRESERVES the prior invocation's cost/token evidence in the finalized manifest (not overwritten to zero)", async () => {
+    // First attempt: analysis PAYS (0.7, tokens 60/30) then the comment write
+    // throws transiently → publish-failed with a resumable state + manifest.
+    const fake1 = makeFakeAnalyze({});
+    const gh1 = makeCommentGithub({
+      current: () => fx.revision,
+      createError: new GitHubPrError(
+        "rate limited (HTTP 429)",
+        "rate-limit",
+        true,
+        429
+      ),
+    });
+    const res1 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake1.fn, github: gh1.github, stdout, now },
+    });
+    expect(res1.status).toBe("publish-failed");
+    const m1 = readManifest(fx.workspaceDir, res1.runId);
+    expect(m1.costUsd).toBeCloseTo(0.7, 5);
+    expect((m1.tokenUsage as { inputTokens: number }).inputTokens).toBe(60);
+    expect((m1.tokenUsage as { outputTokens: number }).outputTokens).toBe(30);
+
+    // Second attempt: resume WITHOUT re-analyzing (this invocation spends 0), the
+    // comment now publishes and the run succeeds under the SAME runId.
+    const fake2 = {
+      fn: async () => {
+        throw new Error("analysis must not run on resume");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh2 = makeCommentGithub({ current: () => fx.revision });
+    const res2 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: fake2.fn as never,
+        github: gh2.github,
+        stdout,
+        now: later,
+      },
+    });
+    expect(res2.status).toBe("succeeded");
+    expect(res2.runId).toBe(res1.runId);
+    // The daemon's per-invocation watch-budget counts ONLY this run's spend (0).
+    expect(res2.costUsd).toBe(0);
+    // But the finalized manifest must RETAIN the prior paid analysis's evidence —
+    // cumulative, not overwritten to zero.
+    const m2 = readManifest(fx.workspaceDir, res2.runId);
+    expect(m2.costUsd).toBeCloseTo(0.7, 5);
+    expect((m2.tokenUsage as { inputTokens: number }).inputTokens).toBe(60);
+    expect((m2.tokenUsage as { outputTokens: number }).outputTokens).toBe(30);
+  });
+
+  it("(S7) comment mode reuses an existing remote comment when local state was lost (no analysis, no pay)", async () => {
+    const body = summaryBody(fx.headSha, fp());
+    const existing: GitHubComment = {
+      id: 4242,
+      body,
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when the remote comment already exists"
+        );
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeCommentGithub({
+      current: () => fx.revision,
+      comments: [existing],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.commentId).toBe(4242);
+    expect(res.costUsd).toBe(0);
+    expect(gh.calls.create).toBe(0);
+    expect(gh.calls.update).toBe(0);
+    // The remote body is persisted locally as the recovered run's review.md.
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(readFileSync(join(runDir, "review.md"), "utf8")).toBe(body);
+  });
+
+  it.each(RECOVERY_EVIDENCE_CASES)(
+    "records truthful %s outcome/count evidence during lost-state recovery",
+    async (_label, outcome, confirmed, rejectedCount) => {
+      const body = summaryBody(fx.headSha, fp(), {
+        outcome,
+        confirmed,
+        rejectedCount,
+      });
+      const existing: GitHubComment = {
+        id: 4343,
+        body,
+        author: "otto-bot",
+        url: "https://github.com/acme/widget/issues/7#comment-4343",
+      };
+      const fake = {
+        fn: async () => {
+          throw new Error("valid remote recovery must not re-run analysis");
+        },
+        calls: [] as unknown[],
+        invocationCount: () => 0,
+      };
+      const gh = makeCommentGithub({
+        current: () => fx.revision,
+        comments: [existing],
+      });
+
+      const result = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "comment" }),
+        deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+      });
+
+      const evidence = readManifest(fx.workspaceDir, result.runId)
+        .pullRequestReview as PullRequestReviewEvidence;
+      expect(result.outcome).toBe(outcome);
+      expect(evidence.outcome).toBe(outcome);
+      expect(evidence.confirmed).toBe(confirmed.length);
+      expect(evidence.rejected).toBe(rejectedCount);
+    }
+  );
+
+  it("does not recover a future identity from reserved markers embedded in another canonical body", async () => {
+    const previousFingerprint = "e".repeat(64);
+    const poisonedBody = `${summaryBody(
+      fx.headSha,
+      previousFingerprint
+    )}\n${inputMarker(fp())}`;
+    const poisoned: GitHubComment = {
+      id: 4444,
+      body: poisonedBody,
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4444",
+    };
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({
+      current: () => fx.revision,
+      comments: [poisoned],
+    });
+
+    const result = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(fake.invocationCount()).toBe(1);
+    expect(result.costUsd).toBeGreaterThan(0);
+    expect(gh.calls.create).toBe(1);
+    expect(gh.calls.update).toBe(0);
+  });
+
+  it("(S8) an owned marker with an OLDER head is UPDATED in place (same comment id), never duplicated", async () => {
+    // Remote has our marker but for a previous head → not proof; analysis runs,
+    // then the SAME comment id is updated (no new comment).
+    const stale: GitHubComment = {
+      id: 900,
+      body: summaryBody("e".repeat(40), fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-900",
+    };
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({
+      current: () => fx.revision,
+      comments: [stale],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(gh.calls.create).toBe(0);
+    expect(gh.calls.update).toBe(1);
+    expect(res.commentId).toBe(900);
+  });
+
+  it("(S9) a prior succeeded identity is skipped: no re-analysis and no repeated comment write", async () => {
+    const fake1 = makeFakeAnalyze({});
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const first = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake1.fn, github: gh.github, stdout, now },
+    });
+    expect(first.status).toBe("succeeded");
+    expect(gh.calls.create).toBe(1);
+
+    const fake2 = {
+      fn: async () => {
+        throw new Error("analysis must not repeat for a succeeded identity");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const second = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake2.fn as never, github: gh.github, stdout, now },
+    });
+    expect(second.status).toBe("succeeded");
+    // No second create/update — the successful output is never repeated.
+    expect(gh.calls.create).toBe(1);
+    expect(gh.calls.update).toBe(0);
+  });
+
+  it("(O1/#defect1) a terminal recovery path with an unwritable run dir does NOT finalize a manifest referencing a missing review-input.md", async () => {
+    // FRESH run, caller already shut down (pre-abort) → interruptedBeforeWorkResult,
+    // which materializes the referenced input then finalizes a manifest via
+    // artifactList. If writeReviewInput throws (run dir unwritable), the input was
+    // NEVER durably written: the finalized manifest must NOT reference it.
+    const controller = new AbortController();
+    controller.abort();
+    const fake = makeFakeAnalyze({});
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      signal: controller.signal,
+      deps: {
+        analyze: fake.fn,
+        github: gh.github,
+        stdout,
+        now,
+        writeReviewInput: () => {
+          throw new Error("run dir is unwritable");
+        },
+      },
+    });
+    // The terminal outcome is STILL recorded (no crash, no masking).
+    expect(res.status).toBe("skipped");
+    expect(res.skipReason).toBe("aborted-before-work");
+    // The manifest is finalized...
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(m.finishedAt).toBeTruthy();
+    // ...but it must NOT reference the review-input.md that was never written.
+    const artifacts =
+      (m.artifacts as Array<{ kind: string; path: string }>) ?? [];
+    expect(artifacts.some((a) => a.kind === "review-input")).toBe(false);
+    const evidence = m.pullRequestReview as PullRequestReviewEvidence;
+    expect(evidence.reviewInput.artifactPath).toBeNull();
+    expect(JSON.stringify(m)).not.toContain(
+      `.otto/runs/${res.runId}/review-input.md`
+    );
+    // And the file genuinely does not exist on disk.
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(existsSync(join(runDir, "review-input.md"))).toBe(false);
+  });
+
+  it("a fresh review-input write failure finalizes without either input reference", async () => {
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: makeFakeAnalyze({}).fn,
+        github: makeCommentGithub({ current: () => fx.revision }).github,
+        stdout,
+        now,
+        writeReviewInput: () => {
+          throw new Error("run dir is unwritable");
+        },
+      },
+    });
+    expect(res.status).toBe("analysis-failed");
+    const manifest = readManifest(fx.workspaceDir, res.runId);
+    expect(
+      (manifest.pullRequestReview as PullRequestReviewEvidence).reviewInput
+        .artifactPath
+    ).toBeNull();
+    expect(
+      (manifest.artifacts as RunArtifact[]).some(
+        (artifact) => artifact.kind === "review-input"
+      )
+    ).toBe(false);
+  });
+
+  it("(O3b/#defect3) a publication-phase getPullRequest failure on a fresh run whose analysis succeeded is publish-failed, NOT analysis-failed", async () => {
+    // Analysis succeeds; the INITIAL publication re-query (before any write)
+    // throws. That is a publication read failure — the completed analysis must be
+    // preserved and finalized as publish-failed, never misclassified as
+    // analysis-failed by the outer analysis catch.
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    gh.github.getPullRequest = () => {
+      // The FIRST getPullRequest is the outer publication re-query (:850). Throw a
+      // transient error there.
+      throw new GitHubPrError("upstream 503 (HTTP 503)", "network", true, 503);
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(true);
+    // The paid analysis is preserved (resumable state + analysis artifact).
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    expect(st?.analysisArtifact).toBe(`.otto/runs/${res.runId}/analysis.json`);
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(m.exitReason).toBe("publish-failed");
+    const artifacts = m.artifacts as Array<{ kind: string }>;
+    expect(artifacts.some((a) => a.kind === "analysis")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice 3 (Task 14): exact diff mapping + formal GitHub reviews.
+// ---------------------------------------------------------------------------
+
+type ReviewGithub = {
+  github: {
+    getPullRequest: () => PullRequestRevision;
+    viewer: () => { login: string };
+    listReviews: () => GitHubReview[];
+    createReview: (input: CreateGitHubReviewInput) => GitHubReview;
+    listIssueComments: () => GitHubComment[];
+    createIssueComment: (r: string, n: number, b: string) => GitHubComment;
+    updateIssueComment: (r: string, id: number, b: string) => GitHubComment;
+  };
+  calls: {
+    getPr: number;
+    listReviews: number;
+    createReview: CreateGitHubReviewInput[];
+    createComment: number;
+  };
+  reviewStore: GitHubReview[];
+};
+
+function makeReviewGithub(opts: {
+  current: () => PullRequestRevision;
+  viewerLogin?: string;
+  reviews?: GitHubReview[];
+  comments?: GitHubComment[];
+  createReviewError?: Error;
+}): ReviewGithub {
+  const login = opts.viewerLogin ?? "otto-bot";
+  const reviewStore: GitHubReview[] = [...(opts.reviews ?? [])];
+  const commentStore: GitHubComment[] = [...(opts.comments ?? [])];
+  let nextReviewId = 6000;
+  let nextCommentId = 7000;
+  const calls = {
+    getPr: 0,
+    listReviews: 0,
+    createReview: [] as CreateGitHubReviewInput[],
+    createComment: 0,
+  };
+  const github = {
+    getPullRequest: () => {
+      calls.getPr++;
+      return opts.current();
+    },
+    viewer: () => ({ login }),
+    listReviews: () => {
+      calls.listReviews++;
+      return reviewStore.map((r) => ({ ...r }));
+    },
+    createReview: (input: CreateGitHubReviewInput): GitHubReview => {
+      calls.createReview.push(input);
+      if (opts.createReviewError) throw opts.createReviewError;
+      const r: GitHubReview = {
+        id: nextReviewId++,
+        body: input.body,
+        author: login,
+        commitId: input.commitId,
+        state: input.event === "APPROVE" ? "APPROVED" : input.event,
+      };
+      reviewStore.push(r);
+      return r;
+    },
+    listIssueComments: () => commentStore.map((c) => ({ ...c })),
+    createIssueComment: (_r: string, _n: number, body: string) => {
+      calls.createComment++;
+      const c: GitHubComment = {
+        id: nextCommentId++,
+        body,
+        author: login,
+        url: `https://github.com/acme/widget/issues/7#comment-${nextCommentId}`,
+      };
+      commentStore.push(c);
+      return c;
+    },
+    updateIssueComment: (_r: string, id: number, body: string) => {
+      const found = commentStore.find((c) => c.id === id);
+      if (!found) throw new Error(`no comment ${id}`);
+      found.body = body;
+      return { ...found };
+    },
+  };
+  return { github, calls, reviewStore };
+}
+
+const INLINE_PLACEMENT_CORRUPTIONS: Array<
+  [string, Finding, (artifact: MutableAnalysisArtifact) => void]
+> = [
+  [
+    "wrong side",
+    finding({ file: "src/app.ts", line: "1" }),
+    (artifact) => {
+      const persisted = artifact.confirmed[0];
+      persisted.side = persisted.side === "RIGHT" ? "LEFT" : "RIGHT";
+    },
+  ],
+  [
+    "positive line absent from the diff",
+    finding({ file: "src/app.ts", line: "1" }),
+    (artifact) => void (artifact.confirmed[0].mappedLine = 999),
+  ],
+  [
+    "body-only finding changed to inline-eligible",
+    finding({ file: "src/not-changed.ts", line: "1" }),
+    (artifact) => {
+      artifact.confirmed[0].inlineEligible = true;
+      artifact.confirmed[0].side = "RIGHT";
+      artifact.confirmed[0].mappedLine = 1;
+    },
+  ],
+];
+
+describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
+  let fx: Fixture;
+  const out: string[] = [];
+  const stdout = (t: string): void => void out.push(t);
+  const now = () => new Date("2026-07-18T12:00:00.000Z");
+  const later = () => new Date("2026-07-18T12:30:00.000Z");
+
+  beforeEach(() => {
+    fx = setupFixture();
+    out.length = 0;
+    mocks.executeStage.mockReset();
+    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const d of fx.cleanupDirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  const fp = () => resolvedInput(fx).fingerprint;
+
+  it.each(INLINE_PLACEMENT_CORRUPTIONS)(
+    "rejects persisted inline placement with %s and performs fresh analysis",
+    async (_label, initialFinding, corrupt) => {
+      const firstAnalyze = makeFakeAnalyze({
+        confirmed: [initialFinding],
+        severity: { ...EMPTY_SEVERITY, major: 1 },
+      });
+      const first = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "text", githubReview: true }),
+        deps: {
+          analyze: firstAnalyze.fn,
+          github: makeReviewGithub({
+            current: () => fx.revision,
+            createReviewError: new GitHubPrError(
+              "rate limited (HTTP 429)",
+              "rate-limit",
+              true,
+              429
+            ),
+          }).github,
+          stdout,
+          now,
+        },
+      });
+      expect(first.status).toBe("publish-failed");
+
+      const analysisPath = join(
+        fx.workspaceDir,
+        ".otto",
+        "runs",
+        first.runId,
+        "analysis.json"
+      );
+      const artifact = JSON.parse(
+        readFileSync(analysisPath, "utf8")
+      ) as MutableAnalysisArtifact;
+      corrupt(artifact);
+      writeFileSync(analysisPath, JSON.stringify(artifact, null, 2) + "\n");
+
+      const freshAnalyze = makeFakeAnalyze({});
+      const second = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "text", githubReview: true }),
+        deps: {
+          analyze: freshAnalyze.fn,
+          github: makeReviewGithub({ current: () => fx.revision }).github,
+          stdout,
+          now: later,
+        },
+      });
+
+      expect(freshAnalyze.invocationCount()).toBe(1);
+      expect(second.runId).not.toBe(first.runId);
+      expect(second.status).toBe("succeeded");
+    }
+  );
+
+  it("(G1) --github-review posts ONE formal review independently of text output (no summary comment)", async () => {
+    // The seed diff changes src/app.ts line 1, so a src/app.ts:1 finding maps
+    // to an exact RIGHT line → an inline comment.
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+    });
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    // Exactly one formal review, no summary comment (text is the primary output).
+    expect(gh.calls.createReview).toHaveLength(1);
+    expect(gh.calls.createComment).toBe(0);
+    const input = gh.calls.createReview[0];
+    expect(input.event).toBe("REQUEST_CHANGES");
+    expect(input.commitId).toBe(fx.headSha);
+    expect(
+      input.body.startsWith(reviewMarker("acme/widget", 7, fx.headSha, fp()))
+    ).toBe(true);
+    // The mapped finding is an inline comment at the exact head line.
+    expect(input.comments).toHaveLength(1);
+    expect(input.comments[0]).toMatchObject({
+      path: "src/app.ts",
+      line: 1,
+      side: "RIGHT",
+    });
+    // Receipt persisted; manifest evidence flags the formal review.
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.githubReview?.reviewId).toBe(gh.reviewStore[0].id);
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(
+      (m.pullRequestReview as { githubReview: boolean }).githubReview
+    ).toBe(true);
+    expect((m.pullRequestReview as { reviewId?: number }).reviewId).toBe(
+      gh.reviewStore[0].id
+    );
+  });
+
+  it("(G2) an unmappable finding stays in the review body, not an inline comment", async () => {
+    const fake = makeFakeAnalyze({
+      confirmed: [
+        finding({ file: "src/app.ts", line: "1", claim: "mapped bug" }),
+        finding({
+          file: "src/app.ts",
+          line: undefined,
+          claim: "whole file smell",
+        }),
+      ],
+      severity: { ...EMPTY_SEVERITY, major: 2 },
+    });
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    const input = gh.calls.createReview[0];
+    // Only the mapped finding is inline; the whole-file finding is in the body.
+    expect(input.comments).toHaveLength(1);
+    expect(input.comments[0].body).toContain("mapped bug");
+    expect(input.body).toContain("whole file smell");
+  });
+
+  it("(G3) a moved head at re-query is superseded and posts NO formal review", async () => {
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const gh = makeReviewGithub({
+      current: () => ({ ...fx.revision, headSha: "f".repeat(40) }),
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("superseded");
+    expect(gh.calls.createReview).toHaveLength(0);
+  });
+
+  it("(G-race) a head that advances DURING listReviews is superseded at the write boundary; the review is withheld and the already-published comment receipt is preserved", async () => {
+    // comment + githubReview: the summary comment publishes first (its own gate
+    // sees the ORIGINAL head), then the head advances while publishFormalReview
+    // reads listReviews, so the formal-review write boundary must catch it and
+    // withhold the review WITHOUT discarding the comment receipt.
+    const moved = "a".repeat(40);
+    let advanced = false;
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const gh = makeReviewGithub({
+      current: () =>
+        advanced ? { ...fx.revision, headSha: moved } : fx.revision,
+    });
+    const origListReviews = gh.github.listReviews;
+    gh.github.listReviews = () => {
+      advanced = true; // the head moves during the formal review's list read
+      return origListReviews();
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("superseded");
+    // The formal review was withheld at its write boundary.
+    expect(gh.calls.createReview).toHaveLength(0);
+    // The earlier summary comment DID publish and its receipt is preserved.
+    expect(gh.calls.createComment).toBe(1);
+    expect(typeof res.commentId).toBe("number");
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.comment?.commentId).toBe(res.commentId);
+    expect(st?.outputs.githubReview).toBeUndefined();
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(
+      (m.pullRequestReview as { supersededBy?: string }).supersededBy
+    ).toBe(moved);
+    expect((m.pullRequestReview as { commentId?: number }).commentId).toBe(
+      res.commentId
+    );
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(readFileSync(join(runDir, "review.md"), "utf8")).toMatch(/stale/i);
+  });
+
+  it("(G4) GitHub refusing self-approval is a permanent publish-failed", async () => {
+    const fake = makeFakeAnalyze({ confirmed: [] }); // clean → APPROVE
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      createReviewError: new GitHubPrError(
+        "Can not approve your own pull request (HTTP 422)",
+        "validation",
+        false,
+        422
+      ),
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(false);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    expect(st?.outputs.githubReview).toBeUndefined();
+  });
+
+  it("(G5) a formal-review failure keeps an already-succeeded summary comment receipt intact", async () => {
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      createReviewError: new GitHubPrError(
+        "validation (HTTP 422)",
+        "validation",
+        false,
+        422
+      ),
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    // The summary comment succeeded and its receipt survives the review failure.
+    expect(gh.calls.createComment).toBe(1);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.comment?.status).toBe("succeeded");
+    expect(st?.outputs.githubReview).toBeUndefined();
+  });
+
+  it("(G6) restart with lost local state never posts a duplicate formal review", async () => {
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const fake1 = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const first = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: fake1.fn, github: gh.github, stdout, now },
+    });
+    expect(first.status).toBe("succeeded");
+    expect(gh.calls.createReview).toHaveLength(1);
+
+    // Simulate a crash that lost ALL local state (state + run bundle).
+    rmSync(join(fx.workspaceDir, ".otto", "review-state"), {
+      recursive: true,
+      force: true,
+    });
+    rmSync(join(fx.workspaceDir, ".otto", "runs"), {
+      recursive: true,
+      force: true,
+    });
+
+    // A second run re-analyzes (local proof gone) but the composite marker on the
+    // existing remote review means publishFormalReview REUSES it — no duplicate.
+    const fake2 = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const second = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: fake2.fn, github: gh.github, stdout, now },
+    });
+    expect(second.status).toBe("succeeded");
+    // Still exactly one formal review across BOTH runs.
+    expect(gh.calls.createReview).toHaveLength(1);
+    expect(gh.reviewStore).toHaveLength(1);
+  });
+
+  it("(G7) a head that moves AFTER the comment write but BEFORE the formal review preserves the comment and withholds the review as superseded", async () => {
+    // The comment publishes under a fresh (original-head) gate; the head then
+    // advances before the formal review, whose OWN fresh gate must withhold it.
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const moved = "f".repeat(40);
+    let commentWritten = false;
+    const gh = makeReviewGithub({
+      current: () =>
+        commentWritten ? { ...fx.revision, headSha: moved } : fx.revision,
+    });
+    // The head advances the moment the comment is written — i.e. AFTER the
+    // comment's own fresh gate passed but BEFORE the formal review's gate.
+    const origCreateComment = gh.github.createIssueComment;
+    gh.github.createIssueComment = (r: string, n: number, b: string) => {
+      const c = origCreateComment(r, n, b);
+      commentWritten = true;
+      return c;
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    // The summary comment WAS validly published under the first fresh gate.
+    expect(gh.calls.createComment).toBe(1);
+    // The formal review is withheld — its own fresh gate saw the moved head.
+    expect(gh.calls.createReview).toHaveLength(0);
+    expect(res.status).toBe("superseded");
+    // The comment receipt is preserved in the returned result AND persisted state.
+    expect(res.commentId).toBeDefined();
+    expect(res.reviewId).toBeUndefined();
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("superseded");
+    expect(st?.outputs.comment?.status).toBe("succeeded");
+    expect(st?.outputs.comment?.commentId).toBe(res.commentId);
+    expect(st?.outputs.githubReview).toBeUndefined();
+    // Evidence records the supersession against the new head.
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(
+      (m.pullRequestReview as { supersededBy?: string }).supersededBy
+    ).toBe(moved);
+    expect((m.pullRequestReview as { commentId?: number }).commentId).toBe(
+      res.commentId
+    );
+  });
+
+  it("(G8) recovery does NOT declare success when --github-review is on but the owned formal review is absent (comment only)", async () => {
+    // Lost local state: an owned summary comment exists for this exact identity,
+    // but NO owned formal review. Recovery must fall through so the normal path
+    // runs analysis and completes the missing formal review.
+    const existingComment: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [existingComment],
+      reviews: [],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    // Recovery fell through: analysis ran and the missing review was completed.
+    expect(fake.invocationCount()).toBe(1);
+    expect(res.costUsd).toBeGreaterThan(0);
+    expect(gh.calls.createReview).toHaveLength(1);
+  });
+
+  it("(G9) recovery declares success with BOTH receipts when the owned comment AND owned formal review are present (cost 0, no analysis)", async () => {
+    const existingComment: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const existingReview: GitHubReview = {
+      id: 6161,
+      body: formalRecoveryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      commitId: fx.headSha,
+      state: "CHANGES_REQUESTED",
+    };
+    const fake = {
+      fn: async () => {
+        throw new Error("analysis must not run when both remote outputs exist");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [existingComment],
+      reviews: [existingReview],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.costUsd).toBe(0);
+    expect(res.commentId).toBe(4242);
+    expect(res.reviewId).toBe(6161);
+    // No new remote writes: both outputs were already complete.
+    expect(gh.calls.createReview).toHaveLength(0);
+    expect(gh.calls.createComment).toBe(0);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("succeeded");
+    expect(st?.outputs.comment?.commentId).toBe(4242);
+    expect(st?.outputs.githubReview?.reviewId).toBe(6161);
+  });
+
+  it("(G10) recovery still declares success from a comment alone when --github-review is OFF", async () => {
+    const existingComment: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when the comment already exists"
+        );
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [existingComment],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: false }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.costUsd).toBe(0);
+    expect(res.commentId).toBe(4242);
+    expect(gh.calls.createReview).toHaveLength(0);
+  });
+
+  it("(#2) caller shutdown between the comment write and the formal-review write: comment written, review WITHHELD, resumable", async () => {
+    // With flock, ownership cannot change under a live holder — but a caller
+    // SHUTDOWN abort can still fire between the two INDEPENDENT remote writes. The
+    // per-write fence before the formal review sees the abort → the review is NOT
+    // written, publication stops, and the comment receipt is preserved.
+    const controller = new AbortController();
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const origCreate = gh.github.createIssueComment;
+    gh.github.createIssueComment = (r: string, n: number, b: string) => {
+      const c = origCreate(r, n, b);
+      // Caller shutdown fires right after the comment lands, before the formal
+      // review's own write.
+      controller.abort();
+      return c;
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      signal: controller.signal,
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    // The comment WAS written (fence passed while still authorized)…
+    expect(gh.calls.createComment).toBe(1);
+    // …but the formal review was WITHHELD (fence failed after the abort).
+    expect(gh.calls.createReview).toHaveLength(0);
+    // The comment receipt survives and the run persists RESUMABLE `running`.
+    expect(res.commentId).toBeDefined();
+    expect(res.reviewId).toBeUndefined();
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("running");
+    expect(st?.outputs.comment?.status).toBe("succeeded");
+    expect(st?.outputs.githubReview).toBeUndefined();
+  });
+
+  it("(#2b) caller shutdown DURING the summary-comment helper's reads publishes NO comment (write-boundary fence)", async () => {
+    // The write-boundary fence is threaded INTO upsertSummaryComment and invoked
+    // AFTER its viewer/list reconciliation, IMMEDIATELY before the create write.
+    // A caller shutdown that fires during those reads — after the pipeline's
+    // pre-helper fence already passed — must still withhold the write. Without the
+    // threaded fence the pre-helper check would have passed and the comment would
+    // be published; with it, nothing is written and the run is resumable.
+    const controller = new AbortController();
+    let analyzed = false;
+    const base = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const analyze: typeof base.fn = async (opts) => {
+      const out = await base.fn(opts);
+      analyzed = true;
+      return out;
+    };
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const origList = gh.github.listIssueComments;
+    gh.github.listIssueComments = () => {
+      // Recovery lists BEFORE analysis (analyzed===false) and must not abort; the
+      // list inside upsertSummaryComment runs AFTER analysis — abort there, during
+      // the helper's own reads.
+      if (analyzed && !controller.signal.aborted) controller.abort();
+      return origList();
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      signal: controller.signal,
+      deps: { analyze, github: gh.github, stdout, now },
+    });
+    // NO comment (and no review) was written — the boundary fence withheld it.
+    expect(gh.calls.createComment).toBe(0);
+    expect(gh.calls.createReview).toHaveLength(0);
+    expect(res.commentId).toBeUndefined();
+    // Paid analysis is preserved in a resumable `running` state (not cost 0).
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("running");
+    expect(st?.outputs.comment).toBeUndefined();
+    expect(st?.analysisArtifact).toBe(`.otto/runs/${res.runId}/analysis.json`);
+  });
+
+  it("(#3a) recovery with >1 owned summary comment is a permanent publish-failed, NOT a silent success", async () => {
+    // Two comments carry the exact composite (marker + head + input) for the
+    // viewer. Recovery must NOT silently accept the first — the shared zero/one/
+    // many reconciliation raises the same permanent validation error the publish
+    // helpers do, surfaced as a non-retryable publish-failed.
+    const dup = (id: number): GitHubComment => ({
+      id,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: `https://github.com/acme/widget/issues/7#comment-${id}`,
+    });
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when recovery hits a >1 conflict"
+        );
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [dup(4242), dup(4243)],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(false);
+    expect(gh.calls.createComment).toBe(0);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    expect(st?.retryable).toBe(false);
+  });
+
+  it("(#3b) recovery with >1 owned formal review is a permanent publish-failed, NOT a silent success", async () => {
+    const existingComment: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const dupReview = (id: number): GitHubReview => ({
+      id,
+      body: formalRecoveryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      commitId: fx.headSha,
+      state: "CHANGES_REQUESTED",
+    });
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when recovery hits a >1 conflict"
+        );
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [existingComment],
+      reviews: [dupReview(6161), dupReview(6162)],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(false);
+    expect(gh.calls.createReview).toHaveLength(0);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+  });
+
+  it("(#3c) recovery uniqueness is by author+summaryMarker (like publication): a current comment PLUS a stale-head owned comment is a permanent >1, NOT a silent success", async () => {
+    // Publication (upsertSummaryComment) enforces uniqueness over EVERY owned
+    // stable PR summary marker and rejects `>1`. Recovery MUST reconcile the same
+    // way — resolve by author + summaryMarker FIRST, then validate head/input — so
+    // ONE current-identity comment plus ONE stale-head owned summary comment is the
+    // same permanent reconciliation error, never a head+input first-match success.
+    const current: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const staleHead: GitHubComment = {
+      id: 4243,
+      body: summaryBody("e".repeat(40), fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4243",
+    };
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when recovery hits a >1 conflict"
+        );
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [current, staleHead],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(false);
+    expect(gh.calls.createComment).toBe(0);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    expect(st?.retryable).toBe(false);
+  });
+
+  it("(#3d) recovery with a SINGLE owned comment whose input does NOT match current falls through (returns null), it never declares success", async () => {
+    // A single owned summary comment carrying a DIFFERENT input fingerprint is not
+    // proof THIS composite identity is published: recovery must return null so the
+    // normal analysis path runs and UPDATES that same comment in place.
+    const otherInput: GitHubComment = {
+      id: 4300,
+      body: summaryBody(fx.headSha, "a".repeat(64)),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4300",
+    };
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+    });
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [otherInput],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    // Recovery fell through: analysis ran and the SAME comment was updated in place.
+    expect(res.status).toBe("succeeded");
+    expect(res.commentId).toBe(4300);
+    expect(gh.calls.createComment).toBe(0);
+    expect(fake.invocationCount()).toBeGreaterThan(0);
+  });
+
+  it("(#3e) a recovered run writes the review-input artifact it references and emits a run report (no dangling reference; evidence present)", async () => {
+    // Recovery reconstructs local artifacts from remote proof. The finalized
+    // manifest references review-input.md, so that artifact MUST actually exist,
+    // and a run report MUST be emitted so otto-explain / evidence tooling works.
+    const existingComment: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when the comment already exists"
+        );
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [existingComment],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: false }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.costUsd).toBe(0);
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    // The referenced review-input artifact is actually present…
+    expect(existsSync(join(runDir, "review-input.md"))).toBe(true);
+    // …and a run report was emitted (consistent with the normal finish path).
+    expect(existsSync(join(runDir, "report.md"))).toBe(true);
+    // The manifest references review-input.md and it exists on disk (no dangling).
+    const m = readManifest(fx.workspaceDir, res.runId);
+    const artifacts = m.artifacts as Array<{ kind: string; path: string }>;
+    const inputArtifact = artifacts.find((a) => a.kind === "review-input");
+    expect(inputArtifact).toBeDefined();
+    expect(existsSync(join(fx.workspaceDir, inputArtifact!.path))).toBe(true);
+  });
+
+  it("(#3f) recovery: a valid single comment + >1 owned formal reviews is publish-failed but PRESERVES the proven comment receipt (result/state/evidence) and writes the referenced input + a report", async () => {
+    // A single owned summary comment carrying THIS composite identity proves the
+    // comment is published (its receipt is KNOWN) BEFORE the duplicate formal
+    // reviews are discovered. The permanent >1-review failure must NOT zero that
+    // proven receipt to a misleading "no output delivered", and must not leave a
+    // dangling review-input reference or an absent run report.
+    const existingComment: GitHubComment = {
+      id: 4242,
+      body: summaryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      url: "https://github.com/acme/widget/issues/7#comment-4242",
+    };
+    const dupReview = (id: number): GitHubReview => ({
+      id,
+      body: formalRecoveryBody(fx.headSha, fp()),
+      author: "otto-bot",
+      commitId: fx.headSha,
+      state: "CHANGES_REQUESTED",
+    });
+    const fake = {
+      fn: async () => {
+        throw new Error(
+          "analysis must not run when recovery hits a >1 conflict"
+        );
+      },
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({
+      current: () => fx.revision,
+      comments: [existingComment],
+      reviews: [dupReview(6161), dupReview(6162)],
+    });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    // Permanent failure — but the proven comment receipt is CARRIED, not zeroed.
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(false);
+    expect(res.commentId).toBe(4242);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    // NOT outputs:{} — the proven comment receipt survives.
+    expect(st?.outputs.comment?.commentId).toBe(4242);
+    // Evidence retains the receipt.
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect((m.pullRequestReview as { commentId?: number }).commentId).toBe(
+      4242
+    );
+    // Referenced review-input artifact + a run report exist (no dangling ref).
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(existsSync(join(runDir, "review-input.md"))).toBe(true);
+    expect(existsSync(join(runDir, "report.md"))).toBe(true);
+    const artifacts = m.artifacts as Array<{ kind: string; path: string }>;
+    const inputArtifact = artifacts.find((a) => a.kind === "review-input");
+    expect(inputArtifact).toBeDefined();
+    expect(existsSync(join(fx.workspaceDir, inputArtifact!.path))).toBe(true);
+  });
+
+  it("(#pre-abort) an acquired lease with an ALREADY-aborted caller signal is interrupted (NOT busy), finalizes evidence, and releases the lease", async () => {
+    // The lease WAS acquired (no other holder), then the caller shut down before
+    // ANY work. That is a caller-abort, NOT lock contention: it must not claim
+    // "another process is already reviewing this revision", and it must finalize
+    // evidence and release the acquired lease.
+    const controller = new AbortController();
+    controller.abort();
+    const fake = {
+      fn: async () => {
+        throw new Error("aborted-before-work must not analyze");
+      },
+      invocationCount: () => 0,
+    };
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      signal: controller.signal,
+      deps: { analyze: fake.fn as never, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("skipped");
+    // Aborted-before-work (caller-abort pre-analysis), NOT busy ("another
+    // process") and NOT the after-analysis "interrupted" reason — no analysis
+    // ran and no resumable state was persisted here.
+    expect(res.skipReason).toBe("aborted-before-work");
+    expect(res.skipReason).not.toBe("busy");
+    expect(res.skipReason).not.toBe("interrupted");
+    // Evidence finalized (manifest written, referenced input present — no dangling).
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(m.exitReason).toBe("aborted");
+    const runDir = join(fx.workspaceDir, ".otto", "runs", res.runId);
+    expect(existsSync(join(runDir, "review-input.md"))).toBe(true);
+    // The acquired lease was released → a fresh acquire for the same identity
+    // succeeds (a busy path would have left it held elsewhere; here WE held it).
+    const acq = await acquireReviewLease({
+      workspaceDir: fx.workspaceDir,
+      repository: "acme/widget",
+      pullRequest: 7,
+      headSha: fx.headSha,
+      inputFingerprint: fp(),
+      runId: "after-abort",
+    });
+    expect(acq.acquired).toBe(true);
+    if (acq.acquired) await acq.lease.release();
+  });
+
+  it("(#7) a successful review detaches its caller-signal listener in finally — N runs against one long-lived signal do not accumulate listeners", async () => {
+    // The caller's `signal` is a long-lived daemon signal reused across every
+    // watch iteration. Each run forwards it into a run-scoped abort via an
+    // `addEventListener`; a successful run (abort never fires) MUST still detach
+    // that listener in `finally`, or listeners accumulate on the daemon signal
+    // (memory growth + a MaxListeners warning). Assert the listener count returns
+    // to baseline after every run. RED before the fix (count grows 1,2,3…).
+    const controller = new AbortController();
+    const baseline = getEventListeners(controller.signal, "abort").length;
+    const noAnalyze = {
+      fn: async () => {
+        throw new Error("recovery-success path must not analyze");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    for (let iter = 0; iter < 3; iter++) {
+      // Distinct head → distinct composite identity (fresh state, reaches the
+      // abort attach), recovered from an already-published comment (no worktree,
+      // no analysis).
+      const head = String(iter).repeat(40);
+      const existing: GitHubComment = {
+        id: 8100 + iter,
+        body: summaryBody(head, fp()),
+        author: "otto-bot",
+        url: `https://github.com/acme/widget/issues/7#comment-${8100 + iter}`,
+      };
+      const gh = makeReviewGithub({
+        current: () => ({ ...fx.revision, headSha: head }),
+        comments: [existing],
+      });
+      const res = await runPullRequestReview({
+        ...baseArgs(fx),
+        revision: { ...fx.revision, headSha: head },
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "comment", githubReview: false }),
+        signal: controller.signal,
+        deps: {
+          analyze: noAnalyze.fn as never,
+          github: gh.github,
+          stdout,
+          now,
+        },
+      });
+      expect(res.status).toBe("succeeded");
+      // The forward listener was detached in finally → back to baseline.
+      expect(getEventListeners(controller.signal, "abort").length).toBe(
+        baseline
+      );
+    }
+  });
+
+  it("(O2/#defect2) a RESUMED run pre-aborted PRESERVES the prior paid evidence — it is NOT overwritten with zero-cost aborted-before-work", async () => {
+    const later = () => new Date("2026-07-18T12:30:00.000Z");
+    // First run: analysis PAYS, the summary comment publishes (receipt), then the
+    // formal review fails transiently → resumable publish-failed retaining the
+    // paid analysis + the comment receipt.
+    const fake1 = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+    });
+    const gh1 = makeReviewGithub({
+      current: () => fx.revision,
+      createReviewError: new GitHubPrError(
+        "rate limited (HTTP 429)",
+        "rate-limit",
+        true,
+        429
+      ),
+    });
+    const res1 = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake1.fn, github: gh1.github, stdout, now },
+    });
+    expect(res1.status).toBe("publish-failed");
+    expect(res1.commentId).toBeTypeOf("number");
+    const priorCommentId = res1.commentId;
+    const m1 = readManifest(fx.workspaceDir, res1.runId);
+    expect(m1.costUsd).toBeCloseTo(0.7, 5);
+    const analysisPath = `.otto/runs/${res1.runId}/analysis.json`;
+    const reviewPath = `.otto/runs/${res1.runId}/review.md`;
+    const priorAnalysisIndex = 1;
+    const exactToolUsage: ToolUsage = {
+      name: "headroom",
+      kind: "sdk",
+      stage: "pr-review",
+      tokensSaved: 123,
+      reasons: ["compress PR body"],
+    };
+    const distinctToolUsage: ToolUsage = {
+      ...exactToolUsage,
+      tokensSaved: 456,
+    };
+    const seeded: RunManifest = {
+      ...m1,
+      runtime: { id: "claude", displayName: "Claude" },
+      startedAt: "2026-07-18T00:00:00.000Z",
+      toolsUsed: [
+        exactToolUsage,
+        { ...exactToolUsage, reasons: [...(exactToolUsage.reasons ?? [])] },
+        distinctToolUsage,
+      ],
+      artifacts: [
+        { kind: "review", path: reviewPath },
+        {
+          kind: "analysis",
+          path: analysisPath,
+          description: "prior analysis payload",
+        },
+        ...m1.artifacts.filter(
+          (artifact) =>
+            !(artifact.kind === "analysis" && artifact.path === analysisPath)
+        ),
+      ],
+    };
+    writeManifest(fx.workspaceDir, seeded);
+
+    // Second run: the caller has ALREADY shut down (pre-abort) BEFORE any work.
+    // Because a resumed run reuses the prior runId, finalizing "aborted-before-
+    // work" here would clobber the paid manifest. The resumed evidence must be
+    // preserved instead (interrupted/resumable), and NO publication re-attempted.
+    const controller = new AbortController();
+    controller.abort();
+    const fake2 = {
+      fn: async () => {
+        throw new Error("analysis must not run on a resumed pre-abort");
+      },
+      calls: [] as unknown[],
+      invocationCount: () => 0,
+    };
+    const gh2 = makeReviewGithub({ current: () => fx.revision });
+    const res2 = await runPullRequestReview({
+      ...baseArgs(fx),
+      agentId: "codex",
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      signal: controller.signal,
+      deps: {
+        analyze: fake2.fn as never,
+        github: gh2.github,
+        stdout,
+        now: later,
+      },
+    });
+    // Same run bundle, resumed — NOT a zero-cost aborted-before-work skip.
+    expect(res2.runId).toBe(res1.runId);
+    expect(res2.status).toBe("skipped");
+    expect(res2.skipReason).toBe("interrupted");
+    expect(res2.skipReason).not.toBe("aborted-before-work");
+    // The prior comment receipt is carried into the result.
+    expect(res2.commentId).toBe(priorCommentId);
+    // No publication was re-attempted (pre-aborted before the write boundary).
+    expect(gh2.calls.createComment).toBe(0);
+    expect(gh2.calls.createReview).toHaveLength(0);
+    // The finalized manifest RETAINS the prior paid evidence (cost + receipt +
+    // analysis artifacts), not zeroed aborted-before-work evidence.
+    const m2 = readManifest(fx.workspaceDir, res2.runId);
+    expect(m2.startedAt).toBe(seeded.startedAt);
+    expect(m2.runtime).toEqual(seeded.runtime);
+    // Full-record tool identity: only the JSON-identical duplicate collapses;
+    // a materially distinct invocation remains in stable prior order.
+    expect(m2.toolsUsed).toEqual([exactToolUsage, distinctToolUsage]);
+    expect(m2.artifacts).toEqual(
+      expect.arrayContaining([{ kind: "review", path: reviewPath }])
+    );
+    // Artifact identity is (kind, path): the current analysis payload replaces
+    // the distinguishable prior payload exactly once without moving the prior
+    // key's insertion position.
+    const analysisEntries = m2.artifacts.filter(
+      (artifact) =>
+        artifact.kind === "analysis" && artifact.path === analysisPath
+    );
+    expect(analysisEntries).toEqual([{ kind: "analysis", path: analysisPath }]);
+    expect(m2.artifacts[priorAnalysisIndex]).toEqual(analysisEntries[0]);
+    expect(m2.costUsd).toBe(seeded.costUsd);
+    expect(m2.tokenUsage).toEqual(seeded.tokenUsage);
+    expect(res2.costUsd).toBe(0);
+    const pr2 = m2.pullRequestReview as {
+      outcome?: string;
+      commentId?: number;
+    };
+    expect(pr2.outcome).toBe("changes-requested");
+    expect(pr2.commentId).toBe(priorCommentId);
+    const artifacts = m2.artifacts as Array<{ kind: string }>;
+    expect(artifacts.some((a) => a.kind === "analysis")).toBe(true);
+    // The persisted state stays resumable and retains the comment receipt.
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("running");
+    expect(st?.outputs.comment?.commentId).toBe(priorCommentId);
+  });
+
+  it("(O3a/#defect3) a pre-review getPullRequest failure AFTER the comment was written is publish-failed with the comment receipt PRESERVED (not lost, not analysis-failed)", async () => {
+    // Analysis succeeds; the summary comment publishes (proven receipt); then the
+    // pre-formal-review re-query (:1089) throws transiently. The comment receipt
+    // must be persisted + carried, and the run finalized publish-failed — never
+    // analysis-failed (analysis succeeded) and never an unfinalized escape.
+    const fake = makeFakeAnalyze({
+      confirmed: [finding({ file: "src/app.ts", line: "1" })],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+    });
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const origGetPr = gh.github.getPullRequest;
+    let getPrCount = 0;
+    gh.github.getPullRequest = () => {
+      getPrCount++;
+      // Calls: 1 = outer reconcile (:850), 2 = comment write-boundary (:977),
+      // 3 = pre-formal-review re-query (:1089). Throw a transient error on #3,
+      // AFTER the comment has already been created.
+      if (getPrCount === 3) {
+        throw new GitHubPrError(
+          "rate limited (HTTP 429)",
+          "rate-limit",
+          true,
+          429
+        );
+      }
+      return origGetPr();
+    };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: fake.fn, github: gh.github, stdout, now },
+    });
+    // Publication read failure — NOT analysis-failed.
+    expect(res.status).toBe("publish-failed");
+    expect(res.retryable).toBe(true);
+    // The comment WAS written and its receipt survives in the result.
+    expect(gh.calls.createComment).toBe(1);
+    expect(res.commentId).toBeTypeOf("number");
+    // The receipt is persisted (immediately after the write) — not lost.
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.status).toBe("publish-failed");
+    expect(st?.outputs.comment?.status).toBe("succeeded");
+    expect(st?.outputs.comment?.commentId).toBe(res.commentId);
+    // The manifest is finalized publish-failed and preserves the analysis.
+    const m = readManifest(fx.workspaceDir, res.runId);
+    expect(m.exitReason).toBe("publish-failed");
+    expect((m.pullRequestReview as { commentId?: number }).commentId).toBe(
+      res.commentId
+    );
+  });
+});
+
+// The critical Task-3 deferral closure: the REAL analyzeReview must supply LENS
+// (per-lens) and CANDIDATE_FINDINGS (per-verify), and the pipeline's stageVars
+// must supply every remaining contract var, so the rendered pr-review-lens.md
+// and pr-review-verify.md prompts contain the real values and NO literal `{{`.
+describe("P32 template variable wiring (analyzeReview + pr-review templates)", () => {
+  let ws: string;
+  const rendered: Array<{ stage: string; prompt: string }> = [];
+
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), "otto-render-"));
+    rendered.length = 0;
+    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    mocks.executeStage
+      .mockReset()
+      .mockImplementation(
+        async (o: {
+          stage: { name: string; template: string };
+          vars: Record<string, string>;
+          workspaceDir: string;
+        }) => {
+          const spillHostDir = mkdtempSync(join(tmpdir(), "otto-spill-"));
+          const prompt = renderTemplate(
+            join(CORE_DIR, "templates", o.stage.template),
+            o.vars,
+            {
+              cwd: o.workspaceDir,
+              spillHostDir,
+              spillRefPath: ".otto-tmp/spill",
+            }
+          );
+          rendered.push({ stage: o.stage.name, prompt });
+          rmSync(spillHostDir, { recursive: true, force: true });
+          if (o.vars.LENS)
+            return {
+              result: "major | src/app.ts:1 | real bug | why",
+              costUsd: 0.1,
+              isError: false,
+              apiErrorStatus: null,
+              usage: emptyTokenUsage(),
+              runtimeId: "claude",
+            };
+          return {
+            result:
+              "CONFIRMED major | src/app.ts:1 | real bug | verified\n<verify>done</verify>",
+            costUsd: 0.2,
+            isError: false,
+            apiErrorStatus: null,
+            usage: emptyTokenUsage(),
+            runtimeId: "claude",
+          };
+        }
+      );
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("renders lens + verify prompts with real diff/input/context/candidate values and NO unreplaced {{", async () => {
+    const stageVars = {
+      REPO_INSTRUCTIONS_PATH: "/wt/.otto-tmp/pr-review/repo-instructions.md",
+      BASE_SHA: "a".repeat(40),
+      HEAD_SHA: "b".repeat(40),
+      DIFF_PATH: "/wt/.otto-tmp/pr-review/diff.patch",
+      REVIEW_INPUT_PATH: "/wt/.otto-tmp/pr-review/review-input.md",
+      REVIEW_CONTEXT:
+        "<untrusted-pull-request>PR #7 body</untrusted-pull-request>",
+    };
+    await analyzeReview({
+      workspaceDir: ws,
+      packageDir: CORE_DIR,
+      iteration: 1,
+      maxRetries: 0,
+      cooldownMs: 0,
+      lenses: ["correctness"],
+      lensStage: STAGES.prReviewLens,
+      verifyStage: STAGES.prReviewVerify,
+      stageVars,
+      verdictSource: "result",
+      strictFindings: true,
+      onStage: () => ({ stop: false, cooldownFactor: 1 }),
+    });
+
+    const lens = rendered.find((r) => r.stage === "pr-review-lens");
+    const verify = rendered.find((r) => r.stage === "pr-review-verify");
+    expect(lens).toBeTruthy();
+    expect(verify).toBeTruthy();
+
+    // No unreplaced template variables anywhere.
+    expect(lens!.prompt).not.toContain("{{");
+    expect(verify!.prompt).not.toContain("{{");
+
+    // The lens prompt carries the real contract + context values.
+    expect(lens!.prompt).toContain("correctness lens");
+    expect(lens!.prompt).toContain("/wt/.otto-tmp/pr-review/diff.patch");
+    expect(lens!.prompt).toContain("/wt/.otto-tmp/pr-review/review-input.md");
+    expect(lens!.prompt).toContain("PR #7 body");
+    expect(lens!.prompt).toContain("a".repeat(40));
+
+    // The verify prompt inlines the merged candidate findings + still reads the
+    // review input path.
+    expect(verify!.prompt).toContain("src/app.ts:1");
+    expect(verify!.prompt).toContain("/wt/.otto-tmp/pr-review/review-input.md");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P32 Task 2: serialize shared publication + revalidate state/output under lease
+// ---------------------------------------------------------------------------
+
+describe("runPullRequestReview — P32 Task 2: serialized publication + under-lock decision", () => {
+  let fx: Fixture;
+  const out: string[] = [];
+  const stdout = (t: string): void => void out.push(t);
+  const now = () => new Date("2026-07-18T12:00:00.000Z");
+
+  beforeEach(() => {
+    fx = setupFixture();
+    out.length = 0;
+    mocks.executeStage.mockReset();
+    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const d of fx.cleanupDirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  const fp = (input: ResolvedReviewInput = resolvedInput(fx)) =>
+    input.fingerprint;
+
+  /** Run a first text-only review so a later invocation has a `succeeded` state
+   *  plus a validated `analysis.json` to resume from (no re-payment). */
+  async function seedSucceededTextRun(
+    input: ResolvedReviewInput = resolvedInput(fx)
+  ): Promise<string> {
+    const fake = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: input,
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: fake.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    return res.runId;
+  }
+
+  // (1) Two fingerprints hold independent composite leases, but their summary
+  //     list/create serialize on the PR-scoped publication flock: exactly ONE
+  //     summary comment exists and the second publisher UPDATES/reuses the first.
+  it("(#1) two fingerprints serialize the shared summary comment on the publication lease — exactly one comment, second updates the first", async () => {
+    const inputA = resolveReviewInput({
+      workspaceDir: fx.workspaceDir,
+      repository: "acme/widget",
+      request: { kind: "prompt", text: "criteria A" },
+    });
+    const inputB = resolveReviewInput({
+      workspaceDir: fx.workspaceDir,
+      repository: "acme/widget",
+      request: { kind: "prompt", text: "criteria B" },
+    });
+    expect(inputA.fingerprint).not.toBe(inputB.fingerprint);
+
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const events: string[] = [];
+    const wrapGithub = {
+      ...gh.github,
+      listIssueComments: () => {
+        events.push("list");
+        return gh.github.listIssueComments();
+      },
+      createIssueComment: (r: string, n: number, b: string) => {
+        events.push("create");
+        return gh.github.createIssueComment(r, n, b);
+      },
+      updateIssueComment: (r: string, id: number, b: string) => {
+        events.push("update");
+        return gh.github.updateIssueComment(r, id, b);
+      },
+    };
+    // Observe the PR-scoped publication lease acquire/release around the summary
+    // write. The REAL blocking flock still backs it (serialize-then-proceed).
+    const acquirePub: typeof acquirePublicationLease = (o) => {
+      events.push("pub:acquire");
+      const lease = acquirePublicationLease(o);
+      return {
+        ownsClaim: () => lease.ownsClaim(),
+        release: () => {
+          events.push("pub:release");
+          lease.release();
+        },
+      };
+    };
+
+    const runOne = (input: ResolvedReviewInput) =>
+      runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: input,
+        config: makeConfig({ output: "comment" }),
+        deps: {
+          analyze: makeFakeAnalyze({}).fn,
+          github: wrapGithub,
+          stdout,
+          now,
+          acquirePublicationLease: acquirePub,
+        },
+      });
+
+    const resA = await runOne(inputA);
+    const resB = await runOne(inputB);
+
+    expect(resA.status).toBe("succeeded");
+    expect(resB.status).toBe("succeeded");
+    // Exactly ONE shared summary comment; B updated (reused) A's comment.
+    expect(gh.store.length).toBe(1);
+    expect(gh.calls.create).toBe(1);
+    expect(gh.calls.update).toBe(1);
+    expect(resB.commentId).toBe(resA.commentId);
+
+    // Two acquire/release pairs, and each never overlaps: A releases before B
+    // acquires (serialized on the PR flock).
+    const acquires = events
+      .map((e, i) => (e === "pub:acquire" ? i : -1))
+      .filter((i) => i >= 0);
+    const releases = events
+      .map((e, i) => (e === "pub:release" ? i : -1))
+      .filter((i) => i >= 0);
+    expect(acquires.length).toBe(2);
+    expect(releases.length).toBe(2);
+    expect(releases[0]).toBeLessThan(acquires[1]);
+
+    // The create AND the update each happen strictly UNDER the publication lease
+    // (bracketed by pub:acquire … pub:release, with no release in between).
+    const underLock = (op: string): void => {
+      const i = events.indexOf(op);
+      const acq = events.lastIndexOf("pub:acquire", i);
+      const rel = events.indexOf("pub:release", i);
+      expect(acq).toBeGreaterThanOrEqual(0);
+      expect(rel).toBeGreaterThan(i);
+      expect(events.slice(acq + 1, i)).not.toContain("pub:release");
+    };
+    underLock("create");
+    underLock("update");
+  });
+
+  // (2) A waiter that observed NO state before the lease re-reads AFTER
+  //     acquisition. If the first holder reached `succeeded`, it returns cost 0
+  //     and never analyzes or emits local output.
+  it("(#2) re-reads state under the lease: a first holder that reached succeeded makes the waiter return cost 0 with no analysis or output", async () => {
+    const holderState: PullRequestReviewState = {
+      repository: "acme/widget",
+      pullRequest: 7,
+      headSha: fx.headSha,
+      inputFingerprint: fp(),
+      status: "succeeded",
+      runId: "holder-a-run",
+      outputs: { text: { status: "succeeded" } },
+      attempts: 1,
+      updatedAt: now().toISOString(),
+    };
+    // Simulate the first holder finishing WHILE we waited: no state is visible
+    // to the pre-lock hint, but the succeeded record appears exactly when the
+    // lease is acquired, so ONLY the under-lock re-read can observe it.
+    const acquireLease: typeof acquireReviewLease = (o) => {
+      const res = acquireReviewLease(o);
+      writeReviewState(fx.workspaceDir, holderState);
+      return res;
+    };
+    const fake = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: fake.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+        acquireLease,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe("holder-a-run");
+    expect(res.costUsd).toBe(0);
+    // Never analyzed and never emitted local output.
+    expect(fake.invocationCount()).toBe(0);
+    expect(out.join("")).toBe("");
+  });
+
+  // (3) A waiter that discovers running/publish-failed + valid analysis UNDER
+  //     the lease resumes the prior run id without any model work.
+  it("(#3) resumes a prior run id from a publish-failed state discovered under the lease, with no model rerun", async () => {
+    const priorRunId = await seedSucceededTextRun();
+    // Clear the composite state (pre-lock read now sees nothing) but keep the
+    // paid analysis.json under .otto/runs.
+    rmSync(join(fx.workspaceDir, ".otto", "review-state"), {
+      recursive: true,
+      force: true,
+    });
+    const resumable: PullRequestReviewState = {
+      repository: "acme/widget",
+      pullRequest: 7,
+      headSha: fx.headSha,
+      inputFingerprint: fp(),
+      status: "publish-failed",
+      runId: priorRunId,
+      analysisArtifact: `.otto/runs/${priorRunId}/analysis.json`,
+      outputs: {},
+      attempts: 1,
+      retryable: true,
+      nextRetryAt: "2020-01-01T00:00:00.000Z",
+      error: "transient publication failure",
+      updatedAt: now().toISOString(),
+    };
+    const acquireLease: typeof acquireReviewLease = (o) => {
+      const res = acquireReviewLease(o);
+      writeReviewState(fx.workspaceDir, resumable);
+      return res;
+    };
+    const second = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: second.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+        acquireLease,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe(priorRunId);
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
+  });
+
+  // (4) A previously succeeded TEXT run invoked as comment / comment-plus-review
+  //     / markdown / +formal-review resumes ONLY the missing current sinks from
+  //     the validated analysis — existing receipts preserved, cost 0, no rerun.
+  it("(#4a) succeeded text resumed as comment publishes the comment at cost 0 with no model rerun", async () => {
+    const runId = await seedSucceededTextRun();
+    out.length = 0;
+    const second = makeFakeAnalyze({});
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: second.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe(runId); // resumed the prior run, no new bundle
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
+    expect(gh.calls.create).toBe(1);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.text?.status).toBe("succeeded"); // prior receipt kept
+    expect(st?.outputs.comment?.commentId).toBe(res.commentId);
+  });
+
+  it("(#4b) succeeded text resumed as markdown emits markdown at cost 0 with no model rerun", async () => {
+    const runId = await seedSucceededTextRun();
+    out.length = 0;
+    const second = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "markdown" }),
+      deps: {
+        analyze: second.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe(runId);
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.text?.status).toBe("succeeded");
+    expect(st?.outputs.markdown?.status).toBe("succeeded");
+  });
+
+  it("(#4c) succeeded text resumed as comment-plus-review publishes both at cost 0 with no model rerun", async () => {
+    const runId = await seedSucceededTextRun();
+    out.length = 0;
+    const second = makeFakeAnalyze({});
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: second.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe(runId);
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
+    expect(gh.calls.createComment).toBe(1);
+    expect(gh.calls.createReview.length).toBe(1);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.text?.status).toBe("succeeded");
+    expect(st?.outputs.comment?.commentId).toBe(res.commentId);
+    expect(st?.outputs.githubReview?.reviewId).toBe(res.reviewId);
+  });
+
+  it("(#4d) succeeded text invoked with --github-review adds ONLY the formal review, preserving the text receipt", async () => {
+    const runId = await seedSucceededTextRun();
+    out.length = 0;
+    const second = makeFakeAnalyze({});
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: second.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe(runId);
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
+    expect(gh.calls.createReview.length).toBe(1);
+    expect(gh.calls.createComment).toBe(0); // comment is NOT a required sink
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.text?.status).toBe("succeeded");
+    expect(st?.outputs.githubReview?.reviewId).toBe(res.reviewId);
+  });
+
+  // (5) A success whose currently-requested sinks are ALL complete still
+  //     short-circuits cost-free (no lease work, no analysis, no output).
+  it("(#5) a success whose current sinks are already complete short-circuits at cost 0", async () => {
+    const runId = await seedSucceededTextRun();
+    out.length = 0;
+    const second = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: second.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe(runId);
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P32 Task 3 — fail closed on durable-state write failures.
+// ---------------------------------------------------------------------------
+
+/**
+ * A `writeState` seam that delegates to the real writer but throws a typed
+ * {@link ReviewStatePersistenceError} the FIRST time `shouldFail(state)` holds,
+ * modelling a durable-state write fault without a genuinely unwritable disk.
+ */
+function failingWriteState(
+  shouldFail: (state: PullRequestReviewState) => boolean
+): { fn: typeof writeReviewState; failed: () => boolean } {
+  let failed = false;
+  const fn = (ws: string, state: PullRequestReviewState): void => {
+    if (!failed && shouldFail(state)) {
+      failed = true;
+      throw new ReviewStatePersistenceError(
+        "simulated durable-state write failure",
+        { path: `${ws}/.otto/review-state/simulated.json` }
+      );
+    }
+    writeReviewState(ws, state);
+  };
+  return { fn, failed: () => failed };
+}
+
+/** Read the sole finalized run manifest under a workspace, or throw. */
+function soleRunManifest(workspaceDir: string): RunManifest {
+  const runsDir = join(workspaceDir, ".otto", "runs");
+  for (const id of readdirSync(runsDir)) {
+    const p = join(runsDir, id, "manifest.json");
+    if (existsSync(p))
+      return JSON.parse(readFileSync(p, "utf8")) as RunManifest;
+  }
+  throw new Error("no finalized run manifest found");
+}
+
+describe("runPullRequestReview — Task 3 fail-closed durable state", () => {
+  let fx: Fixture;
+  const out: string[] = [];
+  const stdout = (t: string): void => void out.push(t);
+  const now = () => new Date("2026-07-18T12:00:00.000Z");
+
+  beforeEach(() => {
+    fx = setupFixture();
+    out.length = 0;
+    mocks.executeStage.mockReset();
+    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const d of fx.cleanupDirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  it("(FC1) a failed INITIAL running-state write stops BEFORE analysis and propagates a typed storage failure", async () => {
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const github = { getPullRequest: () => fx.revision };
+    // The first persisted record is the pre-analysis `running` state (no
+    // analysisArtifact yet); fail exactly that one.
+    const writer = failingWriteState(
+      (s) => s.status === "running" && s.analysisArtifact === undefined
+    );
+    await expect(
+      runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig(),
+        deps: {
+          analyze: fake.fn,
+          github,
+          stdout,
+          now,
+          writeState: writer.fn as never,
+        },
+      })
+    ).rejects.toBeInstanceOf(ReviewStatePersistenceError);
+    // FAIL CLOSED: analysis was never paid for.
+    expect(fake.calls).toHaveLength(0);
+    expect(writer.failed()).toBe(true);
+  });
+
+  it("(FC2) a failed comment-receipt write finalizes local evidence with the proven receipt, WITHHOLDS the next remote write, and throws a typed storage failure", async () => {
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    // Fail the immediate receipt persist (status running, comment receipt set) —
+    // the earlier receipt-free running writes succeed.
+    const writer = failingWriteState(
+      (s) => s.status === "running" && s.outputs.comment !== undefined
+    );
+    await expect(
+      runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "comment", githubReview: true }),
+        deps: {
+          analyze: fake.fn,
+          github: gh.github,
+          stdout,
+          now,
+          writeState: writer.fn as never,
+        },
+      })
+    ).rejects.toBeInstanceOf(ReviewStatePersistenceError);
+    // The comment WAS published (the in-memory proven receipt)...
+    expect(gh.calls.createComment).toBe(1);
+    // ...but the NEXT remote write (the formal review) is never performed.
+    expect(gh.calls.createReview).toHaveLength(0);
+    // Local evidence was finalized (manifest on disk) carrying the comment.
+    const m = soleRunManifest(fx.workspaceDir);
+    expect(m.exitReason).toBe("publish-failed");
+    expect((m.pullRequestReview as { commentId?: number }).commentId).toBe(
+      7000
+    );
+  });
+
+  it("(FC3) a failed TERMINAL succeeded-state write NEVER returns success and throws a typed storage failure", async () => {
+    const fake = makeFakeAnalyze({}); // approved, text mode
+    const github = { getPullRequest: () => fx.revision };
+    const writer = failingWriteState((s) => s.status === "succeeded");
+    await expect(
+      runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "text" }),
+        deps: {
+          analyze: fake.fn,
+          github,
+          stdout,
+          now,
+          writeState: writer.fn as never,
+        },
+      })
+    ).rejects.toBeInstanceOf(ReviewStatePersistenceError);
+    // No `succeeded` state was ever durably recorded.
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      resolvedInput(fx).fingerprint
+    );
+    expect(st?.status).not.toBe("succeeded");
+    // Coherent evidence was still finalized from the in-memory analysis.
+    const m = soleRunManifest(fx.workspaceDir);
+    expect(m.finishedAt).toBeTruthy();
+  });
+});

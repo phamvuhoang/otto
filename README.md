@@ -573,6 +573,28 @@ otto-afk --review-panel --adaptive-router --model-routing --explain-routing "./d
 otto-explain latest                                  # render the report for a non-engineer
 ```
 
+### 10. Automated pull-request code review (`otto-review`, P32)
+
+`otto-review` reviews one GitHub pull request — read-only, isolated to the exact `base...head` revision GitHub reports — and publishes its verdict as a plain terminal report, a Markdown file, or an idempotent PR comment/formal review. It never edits source, commits, pushes, or touches GitHub write credentials; it only reads the diff (plus an optional spec) and reports.
+
+```bash
+gh label create otto-review --repo owner/name
+otto-review --repo owner/name --pr 123
+otto-review --repo owner/name --pr 123 --spec-issue 456
+otto-review --repo owner/name --pr 123 --spec-file docs/feature.md
+otto-review --repo owner/name --pr 123 --prompt "focus on cancellation"
+otto-review --repo owner/name --watch --detach --notify
+otto-review --repo owner/name --watch --github-review
+```
+
+One-shot (`--pr <number|url>`) reviews exactly one PR and exits; watch (`--watch`) polls the repo's open, non-draft pull requests carrying the `otto-review` label (default; `--label`/`OTTO_REVIEW_LABEL` overrides it) and reviews each newly-eligible one in turn, forever. Default output is `text` for a one-shot run and `comment` for `--watch` (override with `--output` / `OTTO_REVIEW_OUTPUT`).
+
+Zero or one extra review intent may be attached — a GitHub issue (`--spec-issue`), a workspace `.txt`/`.md`/`.markdown` file (`--spec-file`), or a direct string (`--prompt`) — at most one of the three, and **none of the three has an environment-variable or `.otto/config.json` equivalent**: they are invocation-only flags, resolved fresh on every run (and, in `--watch`, on every poll), fingerprinted, and persisted as an exact `.otto/runs/<run-id>/review-input.md` artifact. A `--prompt`'s text is never echoed — `--print-config` and every log line show only its length (`direct (<N> chars)`), never its content. Every review is composite-identity-scoped to `(repository, pull request, head SHA, review-input fingerprint)`: the same head is reviewed exactly once per fingerprint, and a changed issue/file/prompt on an unchanged head is a NEW review, not a duplicate.
+
+State/run dedup is a real OS `flock` lease; the one shared per-PR summary comment across different fingerprints is additionally serialized by its own PR-scoped publication lock. Both persisted analysis and any remote comment/review body are strictly re-validated (schema, markers, diff integrity) before either is ever resumed from or trusted, and a state write that can't be durably persisted fails the run closed rather than reporting a false `succeeded`. A prior success missing a now-requested sink (e.g. re-running with `--github-review` added) resumes just that sink at zero additional model cost.
+
+`otto-review` never publishes a fix — only a report. `--github-review` additionally posts one formal GitHub PR review (deterministic `APPROVE`/`COMMENT`/`REQUEST_CHANGES`, with inline comments on exactly the diff lines that map). GitHub's own refusal to let a bot approve its own pull request surfaces as a permanent (non-retryable) publish failure, not an infinite retry loop. Full precedence table, mutual-exclusion rules, and the trust-boundary detail: **[docs/CLI.md](./docs/CLI.md#otto-review--automated-pull-request-code-review)**.
+
 Full flag reference and more recipes: **[docs/CLI.md](./docs/CLI.md)**.
 
 ---

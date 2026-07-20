@@ -13,6 +13,7 @@ Commands, flags, and modes for the two Otto bins. For environment variables, run
 - [Verify & apply-review modes](#verify--apply-review-modes)
 - [Watch mode](#watch-mode-otto-ghafk-only)
 - [Single-issue mode](#single-issue-mode-otto-ghafk-only)
+- [`otto-review` — automated pull-request code review](#otto-review--automated-pull-request-code-review)
 - [Branch strategy](./CONFIG.md#branch-strategy)
 - [Stopping a run](#stopping-a-run)
 - [Troubleshooting](#troubleshooting)
@@ -568,6 +569,125 @@ The renderer (`packages/core/src/render.ts`) expands tags in a fixed order: `@in
 ### Change feedback loops or task priority
 
 The agent playbooks are self-contained: `prompt.md` (plan/PRD source + progress recording, for `otto-afk`) and `ghprompt.md` (issue triage + close/comment, for `otto-ghafk`). Each carries its own task-priority ladder, feedback loops, commit rules, and final rules. `afk.md` / `ghafk.md` each `@include` their respective playbook. Edit the playbook to change a loop's behavior.
+
+---
+
+## `otto-review` — automated pull-request code review
+
+```bash
+otto-review --repo <owner/name> --pr <number|url> [flags]
+otto-review --repo <owner/name> --watch [flags]
+```
+
+`otto-review` reviews an EXACT pull-request revision — the `base...head` diff GitHub reports, isolated in a disposable git worktree — and publishes only a report. It never edits, commits, or pushes source, and never calls `gh`/the network with a live credential from the review stage itself (see [Trust boundary](#trust-boundary) below). One-shot (`--pr`) reviews exactly one PR and exits; `--watch` polls the repo's open, non-draft pull requests carrying a label (default `otto-review`) and reviews each newly-eligible one, forever. Exactly one of `--pr` / `--watch` is required.
+
+### Flags, environment, and config
+
+| Flag                                | Env                         | `.otto/config.json` `pullRequestReview.` | Default                                    | What it does                                                                                                                     |
+| ----------------------------------- | --------------------------- | ---------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `--repo <owner/name>`               | —                           | —                                        | _(required)_                               | The GitHub repository to review.                                                                                                 |
+| `--pr <n\|url>`                     | —                           | —                                        | _(exactly one of `--pr`/`--watch`)_        | A PR number or GitHub PR URL (one-shot mode).                                                                                    |
+| `--watch`                           | —                           | —                                        | off                                        | Poll for eligible PRs instead of reviewing one (exactly one of `--pr`/`--watch`).                                                |
+| `--watch-interval <sec>`            | —                           | —                                        | `300`                                      | Seconds between polls; only valid with `--watch`. Rejected if the equivalent milliseconds would overflow Node's max timer delay. |
+| `--label <name>`                    | `OTTO_REVIEW_LABEL`         | `label`                                  | `otto-review`                              | Label a PR must carry to be eligible.                                                                                            |
+| `--review-skill <name>`             | `OTTO_REVIEW_SKILL`         | `skill`                                  | none (built-in `builtin:otto-code-review`) | Named repo skill (`.otto/skills/<name>/`) to apply instead of the built-in.                                                      |
+| `--spec-issue <ref>`                | _(none — invocation-only)_  | _(none — invocation-only)_               | none                                       | Spec/context from a GitHub issue.                                                                                                |
+| `--spec-file <path>`                | _(none — invocation-only)_  | _(none — invocation-only)_               | none                                       | Spec/context from a workspace file.                                                                                              |
+| `--prompt <text>`                   | _(none — invocation-only)_  | _(none — invocation-only)_               | none                                       | Spec/context from a direct string.                                                                                               |
+| `--output <mode>`                   | `OTTO_REVIEW_OUTPUT`        | `output`                                 | `text` one-shot, `comment` in `--watch`    | `text` \| `markdown` \| `comment`.                                                                                               |
+| `--output-file <path>`              | —                           | —                                        | none                                       | Copy the Markdown output here too. Requires `--output markdown`.                                                                 |
+| `--github-review`                   | —                           | `githubReview`                           | off                                        | Additionally post one formal (native) GitHub PR review.                                                                          |
+| `--agent <runtime>`                 | `OTTO_AGENT`                | `agent`                                  | `claude`                                   | Agent CLI runtime: `claude` \| `codex`.                                                                                          |
+| `--fallback-agent <runtime>`        | `OTTO_FALLBACK_AGENT`       | —                                        | none                                       | Runtime to switch to on a usage/rate limit.                                                                                      |
+| `--auto-switch-on-limit`            | `OTTO_AUTO_SWITCH_ON_LIMIT` | —                                        | off                                        | Switch to the fallback runtime automatically on a limit.                                                                         |
+| `--model-routing`                   | —                           | —                                        | off                                        | Route each stage to a model tier by difficulty/change risk.                                                                      |
+| `--token-mode <mode>`               | —                           | —                                        | `off`                                      | `off` \| `measure` \| `reduce`.                                                                                                  |
+| `--context-compressor <mode>`       | `OTTO_CONTEXT_COMPRESSOR`   | —                                        | `off`                                      | `off` \| `headroom` — compresses the PR **body** only (never review-input; see [Evidence](#durable-evidence--input-artifacts)).  |
+| `--budget <usd>`                    | —                           | —                                        | none                                       | Stop when cumulative cost reaches this USD ceiling.                                                                              |
+| `--cooldown <ms>`                   | —                           | —                                        | `0`                                        | Wait this many milliseconds between iterations. Rejected if it overflows Node's max timer delay.                                 |
+| `--max-retries <n>`                 | —                           | —                                        | (shared default)                           | Per-stage retry budget on transient failure. `0` is a valid fail-fast value (retries disabled), not an error.                    |
+| `--detach`                          | —                           | —                                        | off                                        | Fork into a background process. Only valid with `--watch`.                                                                       |
+| `--log <path>`                      | —                           | —                                        | none                                       | Override the detached log path. Only valid with `--detach`.                                                                      |
+| `--notify`                          | —                           | —                                        | off                                        | OS notification + terminal bell on completion.                                                                                   |
+| `--verbose`                         | —                           | —                                        | off                                        | Print the full in-run event firehose.                                                                                            |
+| `--print-config`                    | —                           | —                                        | —                                          | Print the resolved config + a local-only preflight, then exit.                                                                   |
+| `--help` / `-h`, `--version` / `-V` | —                           | —                                        | —                                          | Standard help/version.                                                                                                           |
+
+Precedence for `--label`/`--review-skill`/`--output`: **flag → env → config → default**. `--repo`/`--pr`/`--watch` and the review-input trio are **invocation-only** — `--spec-issue`, `--spec-file`, and `--prompt` have **no environment variable or `.otto/config.json` equivalent at all**; they are resolved fresh from argv on every single run (and, in `--watch`, freshly on every poll), never persisted as a default.
+
+`--print-config` performs **local probes only** — it never fetches a GitHub label/issue or calls a model. It reports the resolved config (redacting a `--prompt`'s text — only its character count, e.g. `direct (<N> chars)`, is ever shown), then labels the remote checks explicitly as **deferred**: `review label` and `review input` both print `deferred — checked/resolved on a real run`.
+
+`--watch-interval` (seconds) and `--cooldown` (milliseconds) are timer-backed delays validated as safe, non-negative integers whose millisecond value fits Node's `setTimeout` range (`2^31 - 1` ms ≈ 24.8 days); a value that overflows it is **rejected with an actionable error** rather than silently clamped by Node into hot polling. `--max-retries` accepts any non-negative safe integer — `--max-retries 0` is a **valid fail-fast value** (retries disabled), not an error.
+
+### Review input: `--spec-issue` / `--spec-file` / `--prompt`
+
+At most one of `--spec-issue`, `--spec-file`, or `--prompt` may be given; passing more than one is a validation error before any run starts. All three are optional — the default (`--pr`/`--watch` with none of the three) reviews the diff alone.
+
+- **`--spec-issue <ref>`** — a bare positive integer (`456`) or a same-repository issue URL `https://github.com/<owner>/<repo>/issues/<n>` whose `owner/repo` matches `--repo` case-insensitively. A cross-repository issue URL, a PR URL, a URL with a query string/fragment, or a non-GitHub host is rejected **before any GitHub call**.
+- **`--spec-file <path>`** — a workspace-relative path to a `.txt`, `.md`, or `.markdown` file. Rejected before any read: an absolute path, `..` traversal, a symlink (checked via `lstat` before `realpath`), a real target that escapes the workspace, a non-regular file (directory/FIFO/etc.), an unsupported extension, invalid UTF-8, or an empty file.
+- **`--prompt <text>`** — a direct string. Rejected when empty or whitespace-only. Never echoed anywhere — logs, `--print-config`, and every rendered stage variable carry only a **path** to the persisted artifact, never the text inline.
+
+Every accepted input becomes an exact, deterministic snapshot — `kind`, canonical `source`, and verbatim `content` — fingerprinted with SHA-256 and written atomically to **`.otto/runs/<run-id>/review-input.md`** (provenance `kind`/`source`/`fingerprint`/`artifactPath` is rendered in every output; the raw `content` itself is rendered nowhere except that one artifact and the model's own read of it). The review-input artifact is retained **byte-for-byte and uncompressed** — `--context-compressor headroom` only ever compresses the PR body, never review-input.
+
+In `--watch` mode the configured review input is **re-resolved fresh on every poll** — an edited issue, a changed workspace file, or updated prompt text yields a new fingerprint, which is new work; a resolution failure is treated as a poll failure (retried next interval), never a silently empty queue.
+
+### One review per (head, input) — composite identity and reruns
+
+Otto reviews each **composite identity** `(repository, pull request, head SHA, review-input fingerprint)` exactly once. A force-push (new head SHA) or a changed issue/file/prompt (new fingerprint) on the SAME head is a **new** composite review — unchanged content on an unchanged head is skipped with no re-analysis and no repeated remote write. State is durable, one JSON record per composite identity, gitignored under:
+
+```
+.otto/review-state/github/<owner>/<repo>/<pr>/<head-sha>/<fingerprint>.json
+```
+
+A transient publish failure (rate limit, network) is retried with a bounded exponential backoff (60s → 120s → 240s… capped at 15 minutes); a permanent failure (auth, validation, GitHub's self-approval refusal — see below) is terminal and never retried automatically.
+
+Concurrency safety uses **two** persistent, stable-inode OS `flock` locks (real advisory locks via the optional native `fs-ext`, never a heartbeat/PID/tombstone scheme), always acquired in the SAME fixed order:
+
+1. **Composite lease** (`<state-path>.lock`, keyed by `repository/pr/head-sha/fingerprint`) — a non-blocking exclusive flock taken FIRST, for the whole run. A busy composite identity (another live process already reviewing it) is `skipped` with no work; this is the same lease `acquireReviewLease` has always returned.
+2. **Publication lock** (`.otto/review-state/github/<owner>/<repo>/<pr>/publication.lock`, keyed ONLY by `repository/pr` — the same file for every head SHA and fingerprint of that PR) — a BLOCKING exclusive flock taken SECOND, held ONLY across the shared summary comment's list→create/update and released immediately afterward. It serializes the ONE mutable summary comment across the DIFFERENT composite identities (distinct input fingerprints) that legitimately publish to it, while formal (`--github-review`) reviews stay scoped to the composite lease alone. The fixed composite-first/publication-second order is deadlock-free by construction.
+
+State writes are **fail-closed**: a durable-persistence failure (full disk, unwritable run dir, EIO) never reports a run `succeeded`, and never lets the run proceed to a further remote write, with lost local state — `writeReviewState` raises a typed `ReviewStatePersistenceError` (carrying the state path) instead of swallowing the failure, and any receipt already proven remotely (e.g. a summary comment that did post) is finalized into local evidence first. `otto-review --watch` runs the identical GitHub viewer/auth, exact-label, and origin/repository preflight as a one-shot run — before it starts polling, not per-poll. During polling, a missing/broken native `fs-ext` module, a non-busy flock failure (e.g. `ENOTSUP` — advisory `flock` needs a LOCAL filesystem), or a `ReviewStatePersistenceError` is treated as a FATAL daemon error: the daemon attempts that one revision, releases its keep-alive and signal listeners, notifies/reports once, and **exits** rather than spinning forever. An ordinary transient revision failure (a single bad GitHub call, a model error) still logs, backs off one interval, and keeps polling.
+
+Before either lock's decision is trusted, a persisted `analysis.json` (schema `v2`) or a remote comment/formal-review body is strictly validated — canonical markers at their documented fixed positions, each reserved `<!-- otto-review` marker occurring **exactly once** (any occurrence a model authors in a finding/title/etc. is HTML-escaped before rendering, so it can never forge one), the diff artifact's SHA-256 digest, and run-root/same-inode/`O_NOFOLLOW` checks on every artifact path — before it is ever trusted for resume or recovery. Anything that fails validation is treated as absent: fresh analysis runs rather than publishing unverified content, never trust-and-publish.
+
+A prior `succeeded` state is terminal only when **every** sink the CURRENT invocation requests already has a receipt — the configured `--output` plus, when set, `--github-review`. A success that is missing a now-requested sink (e.g. a prior `--output text` run re-invoked with `--github-review` added) resumes just the missing sink(s) from the validated `analysis.json` at **zero additional model cost**; already-satisfied sinks are left untouched.
+
+### Review skill
+
+By default every review runs the template-owned built-in contract `builtin:otto-code-review`. `--review-skill <name>` (or `OTTO_REVIEW_SKILL` / config `skill`) selects one repo skill from `.otto/skills/<name>/` instead — subject to the SAME governance ladder used elsewhere: the skill must exist, its status must be **`validated`**, and its static compatibility must be **`afk-safe`** or **`stage-scoped`** with `"review"` in its declared stages (a `blocked`/`interactive-only`/undeclared/checksum-drifted skill is rejected). An explicit `--review-skill` request that fails **never falls back to the built-in** — the run fails closed rather than silently substituting a different contract.
+
+### Trust boundary
+
+The lens and verifier stages run with `access: "read-only"` and `permissionMode: "plan"` — no edit, no commit, no push, no fix commit is ever produced. Before either stage runs, the child environment is stripped of `GH_TOKEN`/`GITHUB_TOKEN`/`GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN`/`SSH_AUTH_SOCK`/`GIT_ASKPASS`/`SSH_ASKPASS`, `gh` is redirected to a harness-owned empty config directory, and git's own credential helper/ambient config is neutralized — so even a model that tried to shell out to `gh` or push over the network would have no GitHub credential or network reach available to it. Any mutation the model makes anyway — a tracked edit, a new untracked file, or a commit inside the isolated worktree — is detected and fails the run closed (`analysis-failed`, nothing published) rather than silently reverted or ignored. Every GitHub **write** (the summary comment, the formal review) is issued only by the harness's own publisher, never by the model.
+
+### Idempotency, markers, and watch limitations
+
+Every canonical review carries three stable Markdown-comment markers (never rendered inside a code fence, so GitHub still recognizes them):
+
+- `<!-- otto-review:<owner>/<repo>#<pr> -->` — the per-PR summary marker.
+- `<!-- otto-review-head:<head-sha> -->` — the exact reviewed revision.
+- `<!-- otto-review-input:<fingerprint> -->` — the exact review-input fingerprint.
+- `<!-- otto-review:<owner>/<repo>#<pr>@<head-sha>:<fingerprint> -->` — the composite formal-review idempotency key (used only by `--github-review`'s own review body).
+
+The summary comment (`--output comment`) is created-or-updated **idempotently by marker**, not by any locally-remembered comment id: a restart that lost local state re-queries the PR's comments, finds the single comment it owns (authored by the viewer, carrying the marker), and updates that same comment instead of duplicating it. `--github-review` submits exactly one formal review per composite identity the same way. **GitHub refusing to let the bot approve its own pull request is a permanent (non-retryable) `publish-failed`** — it never spins in the retry backoff.
+
+Immediately before every remote write the pipeline **re-queries the live PR**: a head that advanced during analysis is `superseded`, and a PR that went closed/merged, draft, or lost the required label is `cancelled` — either way, no comment and no formal review are ever posted for a stale revision.
+
+`--watch`'s composite-identity state and advisory claim are **local to one workspace** — only run **one `--watch` daemon per workspace** against a given repository at a time. Two independent workspaces (e.g. two separate clones) polling the same repository do not share `.otto/review-state/` and are not coordinated with each other; run a single daemon per repository, in one workspace.
+
+### Durable evidence & input artifacts
+
+Every run leaves the same evidence bundle shape as the other bins, under `.otto/runs/<run-id>/`:
+
+| Artifact                      | Contents                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| `review-input.md`             | The exact, uncompressed review-input snapshot (provenance header + content).                |
+| `pr.diff`                     | The exact `base...head` unified diff (byte-for-byte, including binary hunks).               |
+| `analysis.json`               | The schema-validated confirmed/rejected findings, severity tally, and skill used.           |
+| `review.md`                   | The canonical Markdown review (also the `--github-review` body, minus the per-run markers). |
+| `report.md` / `manifest.json` | The standard harness report + evidence manifest.                                            |
+
+Otto never edits a target repository's tracked `.gitignore` for its own scratch/state paths. Instead it resolves the repository's **local** `.git/info/exclude` (via `git rev-parse --git-path info/exclude`) and atomically appends `.otto-tmp/`, `.otto/runs/`, and `.otto/review-state/` there — a change that is per-clone, untracked, and never shows up in `git status` or a diff of the target repo.
 
 ---
 

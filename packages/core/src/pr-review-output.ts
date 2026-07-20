@@ -398,6 +398,7 @@ function escapeReservedMarkers(value: string): string {
  */
 export function renderCanonicalReview(review: CanonicalReview): string {
   const lines: string[] = [];
+  const safeUrl = escapeReservedMarkers(review.url);
 
   if (review.staleReason !== undefined) {
     lines.push(
@@ -414,7 +415,7 @@ export function renderCanonicalReview(review: CanonicalReview): string {
     inputMarker(review.reviewInput.fingerprint),
     "",
     `Repository: ${review.repository}`,
-    `Pull request: #${review.pullRequest} — ${escapeReservedMarkers(review.title)} (${escapeReservedMarkers(review.url)})`,
+    `Pull request: #${review.pullRequest} — ${escapeReservedMarkers(review.title)} (${safeUrl})`,
     `Head SHA: ${review.headSha}`,
     `Review input: ${review.reviewInput.kind} (${escapeReservedMarkers(review.reviewInput.source)}), fingerprint ${review.reviewInput.fingerprint}`,
     ""
@@ -480,7 +481,7 @@ export function renderCanonicalReview(review: CanonicalReview): string {
     `Run ID: ${review.runId}`,
     `Base SHA: ${review.baseSha}`,
     `Head SHA: ${review.headSha}`,
-    `Pull request: ${review.url}`
+    `Pull request: ${safeUrl}`
   );
 
   return lines.join("\n");

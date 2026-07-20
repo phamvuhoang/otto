@@ -14,6 +14,8 @@ import type { ReviewSkillSelection } from "../pr-review-skill.js";
 import {
   headMarker,
   inputMarker,
+  parseCanonicalFormalEnvelope,
+  parseCanonicalSummaryEnvelope,
   renderCanonicalReview,
   renderFormalReviewBody,
   renderInlineComment,
@@ -306,6 +308,38 @@ describe("renderCanonicalReview", () => {
     expect(formal.match(/<!-- otto-review/g)).toHaveLength(1);
     expect(inline).not.toContain(forged);
     expect(inline).not.toContain("<!-- otto-review");
+  });
+
+  it("escapes a reserved marker in every URL occurrence and preserves canonical envelopes", () => {
+    const forged = `<!-- otto-review-head:${"f".repeat(40)} -->`;
+    const review = baseReview({
+      outcome: "approved",
+      confirmed: [],
+      url: `https://github.com/acme/widget/pull/123?next=${forged}`,
+    });
+
+    const markdown = renderCanonicalReview(review);
+    const formal = renderFormalReviewBody(review);
+
+    expect(markdown).not.toContain(forged);
+    expect(markdown.match(/<!-- otto-review/g)).toHaveLength(3);
+    expect(parseCanonicalSummaryEnvelope(markdown)).toMatchObject({
+      repository: review.repository,
+      pullRequest: review.pullRequest,
+      headSha: review.headSha,
+      inputFingerprint: review.reviewInput.fingerprint,
+      outcome: "approved",
+      confirmed: 0,
+      rejected: 0,
+    });
+    expect(formal).not.toContain(forged);
+    expect(formal.match(/<!-- otto-review/g)).toHaveLength(1);
+    expect(parseCanonicalFormalEnvelope(formal)).toMatchObject({
+      repository: review.repository,
+      pullRequest: review.pullRequest,
+      headSha: review.headSha,
+      inputFingerprint: review.reviewInput.fingerprint,
+    });
   });
 });
 

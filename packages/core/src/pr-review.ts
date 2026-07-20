@@ -7,9 +7,13 @@
  * GitHub write capability (its `deps.github` is `getPullRequest`-only).
  */
 import {
+  closeSync,
+  constants as fsConstants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -370,6 +374,31 @@ function parseFinding(value: unknown, published: boolean): Finding | null {
   return value as unknown as Finding;
 }
 
+function withoutPublishedPlacement(finding: PublishedReviewFinding): Finding {
+  return {
+    severity: finding.severity,
+    file: finding.file,
+    ...(finding.line !== undefined ? { line: finding.line } : {}),
+    claim: finding.claim,
+    why: finding.why,
+    ...(finding.suggestedFix !== undefined
+      ? { suggestedFix: finding.suggestedFix }
+      : {}),
+    ...(finding.lens !== undefined ? { lens: finding.lens } : {}),
+  };
+}
+
+function hasSamePublishedPlacement(
+  persisted: PublishedReviewFinding,
+  derived: PublishedReviewFinding
+): boolean {
+  return (
+    persisted.inlineEligible === derived.inlineEligible &&
+    persisted.side === derived.side &&
+    persisted.mappedLine === derived.mappedLine
+  );
+}
+
 function parseSkill(value: unknown): ReviewSkillSelection | null {
   if (!isRecord(value)) return null;
   if (
@@ -411,8 +440,128 @@ function parseSkill(value: unknown): ReviewSkillSelection | null {
   return value as unknown as ReviewSkillSelection;
 }
 
-function fileSha256(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+type OpenedReviewEvidence = {
+  analysisJson: string;
+  diffBytes: Buffer;
+};
+
+type ReviewEvidenceReadHooks = {
+  /** Deterministic race-injection seam; production callers omit this. */
+  afterAnalysisOpened?: () => void;
+};
+
+function sameFileIdentity(
+  left: ReturnType<typeof fstatSync>,
+  right: ReturnType<typeof fstatSync>
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function readOpenedReviewEvidence(opts: {
+  workspaceDir: string;
+  runId: string;
+  hooks?: ReviewEvidenceReadHooks;
+}): OpenedReviewEvidence | null {
+  const ottoDir = join(opts.workspaceDir, ".otto");
+  const runsRoot = join(ottoDir, "runs");
+  const runDir = join(runsRoot, opts.runId);
+  const analysisPath = join(runDir, "analysis.json");
+  const diffPath = join(runDir, "pr.diff");
+  let runFd: number | undefined;
+  let analysisFd: number | undefined;
+  let diffFd: number | undefined;
+
+  try {
+    const workspaceReal = realpathSync(opts.workspaceDir);
+    const expectedOttoReal = join(workspaceReal, ".otto");
+    const expectedRunsReal = join(expectedOttoReal, "runs");
+    const expectedRunReal = join(expectedRunsReal, opts.runId);
+    const ottoStat = lstatSync(ottoDir);
+    const runsStat = lstatSync(runsRoot);
+    const runPathStat = lstatSync(runDir);
+    if (
+      !ottoStat.isDirectory() ||
+      !runsStat.isDirectory() ||
+      !runPathStat.isDirectory() ||
+      realpathSync(ottoDir) !== expectedOttoReal ||
+      realpathSync(runsRoot) !== expectedRunsReal ||
+      realpathSync(runDir) !== expectedRunReal
+    ) {
+      return null;
+    }
+
+    const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+    const directory = fsConstants.O_DIRECTORY ?? 0;
+    // Windows cannot open directory handles through fs.openSync. The opened
+    // file descriptors and repeated path/inode checks below still detect a
+    // swapped component there; POSIX additionally pins the run directory.
+    if (process.platform !== "win32") {
+      runFd = openSync(runDir, fsConstants.O_RDONLY | noFollow | directory);
+      const openedRunStat = fstatSync(runFd);
+      if (
+        !openedRunStat.isDirectory() ||
+        !sameFileIdentity(openedRunStat, runPathStat)
+      ) {
+        return null;
+      }
+    }
+
+    const runBindingIntact = (): boolean => {
+      const current = lstatSync(runDir);
+      if (
+        !current.isDirectory() ||
+        !sameFileIdentity(current, runPathStat) ||
+        realpathSync(runDir) !== expectedRunReal
+      ) {
+        return false;
+      }
+      return runFd === undefined
+        ? true
+        : sameFileIdentity(fstatSync(runFd), current);
+    };
+    const fileBindingIntact = (
+      path: string,
+      opened: ReturnType<typeof fstatSync>
+    ): boolean => {
+      const current = lstatSync(path);
+      return (
+        current.isFile() &&
+        sameFileIdentity(current, opened) &&
+        dirname(realpathSync(path)) === expectedRunReal
+      );
+    };
+    const fileFlags = fsConstants.O_RDONLY | noFollow;
+
+    analysisFd = openSync(analysisPath, fileFlags);
+    const analysisStat = fstatSync(analysisFd);
+    if (!analysisStat.isFile()) return null;
+    opts.hooks?.afterAnalysisOpened?.();
+    if (!runBindingIntact() || !fileBindingIntact(analysisPath, analysisStat)) {
+      return null;
+    }
+    const analysisJson = readFileSync(analysisFd, "utf8");
+
+    diffFd = openSync(diffPath, fileFlags);
+    const diffStat = fstatSync(diffFd);
+    if (!diffStat.isFile()) return null;
+    if (!runBindingIntact() || !fileBindingIntact(diffPath, diffStat)) {
+      return null;
+    }
+    const diffBytes = readFileSync(diffFd);
+
+    if (
+      !runBindingIntact() ||
+      !fileBindingIntact(analysisPath, analysisStat) ||
+      !fileBindingIntact(diffPath, diffStat)
+    ) {
+      return null;
+    }
+    return { analysisJson, diffBytes };
+  } finally {
+    if (diffFd !== undefined) closeSync(diffFd);
+    if (analysisFd !== undefined) closeSync(analysisFd);
+    if (runFd !== undefined) closeSync(runFd);
+  }
 }
 
 /**
@@ -430,6 +579,8 @@ export function readReviewAnalysisArtifact(opts: {
   headSha: string;
   inputFingerprint: string;
   reviewInput: ResolvedReviewInput;
+  githubReview: boolean;
+  hooks?: ReviewEvidenceReadHooks;
 }): PullRequestReviewAnalysisArtifact | null {
   try {
     if (
@@ -442,10 +593,9 @@ export function readReviewAnalysisArtifact(opts: {
     ) {
       return null;
     }
-    const runDir = runReportDir(opts.workspaceDir, opts.runId);
-    const path = join(runDir, "analysis.json");
-    if (!lstatSync(path).isFile()) return null;
-    const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+    const opened = readOpenedReviewEvidence(opts);
+    if (!opened) return null;
+    const raw: unknown = JSON.parse(opened.analysisJson);
     if (!isRecord(raw)) return null;
     if (
       !hasKeys(raw, [
@@ -550,12 +700,28 @@ export function readReviewAnalysisArtifact(opts: {
     ) {
       return null;
     }
-    const diffPath = join(opts.workspaceDir, expectedDiffPath);
-    if (!lstatSync(diffPath).isFile()) return null;
-    const realRunDir = realpathSync(runDir);
-    const realDiffPath = realpathSync(diffPath);
-    if (dirname(realDiffPath) !== realRunDir) return null;
-    if (fileSha256(diffPath) !== raw.diffSha256) return null;
+    if (
+      createHash("sha256").update(opened.diffBytes).digest("hex") !==
+      raw.diffSha256
+    )
+      return null;
+
+    const persistedFindings = confirmed as PublishedReviewFinding[];
+    const unplacedFindings = persistedFindings.map(withoutPublishedPlacement);
+    const derivedFindings = opts.githubReview
+      ? mapFindingsToDiff(unplacedFindings, opened.diffBytes.toString("utf8"))
+      : unplacedFindings.map((finding) => ({
+          ...finding,
+          inlineEligible: false,
+        }));
+    if (
+      persistedFindings.some(
+        (finding, index) =>
+          !hasSamePublishedPlacement(finding, derivedFindings[index])
+      )
+    ) {
+      return null;
+    }
 
     if (raw.outcome !== outcomeForFindings(confirmed as Finding[])) {
       return null;
@@ -755,6 +921,7 @@ export async function runPullRequestReview(opts: {
       headSha,
       inputFingerprint,
       reviewInput,
+      githubReview: config.githubReview,
     });
     if (resumed) {
       resumedAnalysis = resumed;

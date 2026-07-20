@@ -5,7 +5,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,7 +33,10 @@ import {
   type ResolvedReviewInput,
 } from "../pr-review-input.js";
 import type { PullRequestRevision } from "../pr-review.js";
-import { runPullRequestReview } from "../pr-review.js";
+import {
+  readReviewAnalysisArtifact,
+  runPullRequestReview,
+} from "../pr-review.js";
 import {
   acquireReviewLease,
   readReviewState,
@@ -1572,6 +1577,106 @@ describe("runPullRequestReview — Slice 2 comment publication + recovery", () =
     }
   );
 
+  it("rejects a persisted run bundle relocated through a symlink and performs fresh analysis", async () => {
+    const firstAnalyze = makeFakeAnalyze({});
+    const first = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: firstAnalyze.fn,
+        github: makeCommentGithub({
+          current: () => fx.revision,
+          createError: new GitHubPrError(
+            "rate limited (HTTP 429)",
+            "rate-limit",
+            true,
+            429
+          ),
+        }).github,
+        stdout,
+        now,
+      },
+    });
+    expect(first.status).toBe("publish-failed");
+
+    const runDir = join(fx.workspaceDir, ".otto", "runs", first.runId);
+    const outsideRoot = mkdtempSync(join(tmpdir(), "otto-forged-run-"));
+    fx.cleanupDirs.push(outsideRoot);
+    const relocatedRun = join(outsideRoot, "relocated");
+    renameSync(runDir, relocatedRun);
+    symlinkSync(relocatedRun, runDir, "dir");
+
+    const freshAnalyze = makeFakeAnalyze({});
+    const second = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: freshAnalyze.fn,
+        github: makeCommentGithub({ current: () => fx.revision }).github,
+        stdout,
+        now: later,
+      },
+    });
+
+    expect(freshAnalyze.invocationCount()).toBe(1);
+    expect(second.runId).not.toBe(first.runId);
+    expect(second.status).toBe("succeeded");
+  });
+
+  it("rejects a run-directory component swap after opening analysis evidence", async () => {
+    const input = resolvedInput(fx);
+    const first = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: input,
+      config: makeConfig({ output: "comment" }),
+      deps: {
+        analyze: makeFakeAnalyze({}).fn,
+        github: makeCommentGithub({
+          current: () => fx.revision,
+          createError: new GitHubPrError(
+            "rate limited (HTTP 429)",
+            "rate-limit",
+            true,
+            429
+          ),
+        }).github,
+        stdout,
+        now,
+      },
+    });
+    expect(first.status).toBe("publish-failed");
+
+    const runDir = join(fx.workspaceDir, ".otto", "runs", first.runId);
+    const outsideRoot = mkdtempSync(join(tmpdir(), "otto-swapped-run-"));
+    fx.cleanupDirs.push(outsideRoot);
+    const relocatedRun = join(outsideRoot, "relocated");
+    let swaps = 0;
+
+    const artifact = readReviewAnalysisArtifact({
+      workspaceDir: fx.workspaceDir,
+      runId: first.runId,
+      repository: "acme/widget",
+      pullRequest: 7,
+      baseSha: fx.baseSha,
+      headSha: fx.headSha,
+      inputFingerprint: input.fingerprint,
+      reviewInput: input,
+      githubReview: false,
+      hooks: {
+        afterAnalysisOpened: () => {
+          swaps++;
+          renameSync(runDir, relocatedRun);
+          symlinkSync(relocatedRun, runDir, "dir");
+        },
+      },
+    });
+
+    expect(swaps).toBe(1);
+    expect(artifact).toBeNull();
+  });
+
   it("a resume with a missing input and failed rematerialization emits neither input reference", async () => {
     const fake1 = makeFakeAnalyze({});
     const gh1 = makeCommentGithub({
@@ -2055,11 +2160,39 @@ function makeReviewGithub(opts: {
   return { github, calls, reviewStore };
 }
 
+const INLINE_PLACEMENT_CORRUPTIONS: Array<
+  [string, Finding, (artifact: MutableAnalysisArtifact) => void]
+> = [
+  [
+    "wrong side",
+    finding({ file: "src/app.ts", line: "1" }),
+    (artifact) => {
+      const persisted = artifact.confirmed[0];
+      persisted.side = persisted.side === "RIGHT" ? "LEFT" : "RIGHT";
+    },
+  ],
+  [
+    "positive line absent from the diff",
+    finding({ file: "src/app.ts", line: "1" }),
+    (artifact) => void (artifact.confirmed[0].mappedLine = 999),
+  ],
+  [
+    "body-only finding changed to inline-eligible",
+    finding({ file: "src/not-changed.ts", line: "1" }),
+    (artifact) => {
+      artifact.confirmed[0].inlineEligible = true;
+      artifact.confirmed[0].side = "RIGHT";
+      artifact.confirmed[0].mappedLine = 1;
+    },
+  ],
+];
+
 describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
   let fx: Fixture;
   const out: string[] = [];
   const stdout = (t: string): void => void out.push(t);
   const now = () => new Date("2026-07-18T12:00:00.000Z");
+  const later = () => new Date("2026-07-18T12:30:00.000Z");
 
   beforeEach(() => {
     fx = setupFixture();
@@ -2074,6 +2207,66 @@ describe("runPullRequestReview — Slice 3 formal GitHub review", () => {
   });
 
   const fp = () => resolvedInput(fx).fingerprint;
+
+  it.each(INLINE_PLACEMENT_CORRUPTIONS)(
+    "rejects persisted inline placement with %s and performs fresh analysis",
+    async (_label, initialFinding, corrupt) => {
+      const firstAnalyze = makeFakeAnalyze({
+        confirmed: [initialFinding],
+        severity: { ...EMPTY_SEVERITY, major: 1 },
+      });
+      const first = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "text", githubReview: true }),
+        deps: {
+          analyze: firstAnalyze.fn,
+          github: makeReviewGithub({
+            current: () => fx.revision,
+            createReviewError: new GitHubPrError(
+              "rate limited (HTTP 429)",
+              "rate-limit",
+              true,
+              429
+            ),
+          }).github,
+          stdout,
+          now,
+        },
+      });
+      expect(first.status).toBe("publish-failed");
+
+      const analysisPath = join(
+        fx.workspaceDir,
+        ".otto",
+        "runs",
+        first.runId,
+        "analysis.json"
+      );
+      const artifact = JSON.parse(
+        readFileSync(analysisPath, "utf8")
+      ) as MutableAnalysisArtifact;
+      corrupt(artifact);
+      writeFileSync(analysisPath, JSON.stringify(artifact, null, 2) + "\n");
+
+      const freshAnalyze = makeFakeAnalyze({});
+      const second = await runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "text", githubReview: true }),
+        deps: {
+          analyze: freshAnalyze.fn,
+          github: makeReviewGithub({ current: () => fx.revision }).github,
+          stdout,
+          now: later,
+        },
+      });
+
+      expect(freshAnalyze.invocationCount()).toBe(1);
+      expect(second.runId).not.toBe(first.runId);
+      expect(second.status).toBe("succeeded");
+    }
+  );
 
   it("(G1) --github-review posts ONE formal review independently of text output (no summary comment)", async () => {
     // The seed diff changes src/app.ts line 1, so a src/app.ts:1 finding maps

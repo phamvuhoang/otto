@@ -783,9 +783,11 @@ export {
 } from "./pr-review-publish.js";
 export {
   reviewStatePath,
+  reviewPublicationLockPath,
   readReviewState,
   writeReviewState,
   acquireReviewLease,
+  acquirePublicationLease,
   isStateRunnable,
   type PullRequestReviewState,
   type PullRequestReviewOutputState,

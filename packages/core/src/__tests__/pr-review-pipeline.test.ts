@@ -39,8 +39,11 @@ import {
 } from "../pr-review.js";
 import {
   acquireReviewLease,
+  acquirePublicationLease,
   readReviewState,
   writeReviewState,
+  type PullRequestReviewState,
+  type ReviewLease,
 } from "../pr-review-state.js";
 import {
   headMarker,
@@ -3467,5 +3470,383 @@ describe("P32 template variable wiring (analyzeReview + pr-review templates)", (
     // review input path.
     expect(verify!.prompt).toContain("src/app.ts:1");
     expect(verify!.prompt).toContain("/wt/.otto-tmp/pr-review/review-input.md");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P32 Task 2: serialize shared publication + revalidate state/output under lease
+// ---------------------------------------------------------------------------
+
+describe("runPullRequestReview — P32 Task 2: serialized publication + under-lock decision", () => {
+  let fx: Fixture;
+  const out: string[] = [];
+  const stdout = (t: string): void => void out.push(t);
+  const now = () => new Date("2026-07-18T12:00:00.000Z");
+
+  beforeEach(() => {
+    fx = setupFixture();
+    out.length = 0;
+    mocks.executeStage.mockReset();
+    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const d of fx.cleanupDirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  const fp = (input: ResolvedReviewInput = resolvedInput(fx)) =>
+    input.fingerprint;
+
+  /** Run a first text-only review so a later invocation has a `succeeded` state
+   *  plus a validated `analysis.json` to resume from (no re-payment). */
+  async function seedSucceededTextRun(
+    input: ResolvedReviewInput = resolvedInput(fx)
+  ): Promise<string> {
+    const fake = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: input,
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: fake.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    return res.runId;
+  }
+
+  // (1) Two fingerprints hold independent composite leases, but their summary
+  //     list/create serialize on the PR-scoped publication flock: exactly ONE
+  //     summary comment exists and the second publisher UPDATES/reuses the first.
+  it("(#1) two fingerprints serialize the shared summary comment on the publication lease — exactly one comment, second updates the first", async () => {
+    const inputA = resolveReviewInput({
+      workspaceDir: fx.workspaceDir,
+      repository: "acme/widget",
+      request: { kind: "prompt", text: "criteria A" },
+    });
+    const inputB = resolveReviewInput({
+      workspaceDir: fx.workspaceDir,
+      repository: "acme/widget",
+      request: { kind: "prompt", text: "criteria B" },
+    });
+    expect(inputA.fingerprint).not.toBe(inputB.fingerprint);
+
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const events: string[] = [];
+    const wrapGithub = {
+      ...gh.github,
+      listIssueComments: () => {
+        events.push("list");
+        return gh.github.listIssueComments();
+      },
+      createIssueComment: (r: string, n: number, b: string) => {
+        events.push("create");
+        return gh.github.createIssueComment(r, n, b);
+      },
+      updateIssueComment: (r: string, id: number, b: string) => {
+        events.push("update");
+        return gh.github.updateIssueComment(r, id, b);
+      },
+    };
+    // Observe the PR-scoped publication lease acquire/release around the summary
+    // write. The REAL blocking flock still backs it (serialize-then-proceed).
+    const acquirePub: typeof acquirePublicationLease = (o) => {
+      events.push("pub:acquire");
+      const lease = acquirePublicationLease(o);
+      return {
+        ownsClaim: () => lease.ownsClaim(),
+        release: () => {
+          events.push("pub:release");
+          lease.release();
+        },
+      };
+    };
+
+    const runOne = (input: ResolvedReviewInput) =>
+      runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: input,
+        config: makeConfig({ output: "comment" }),
+        deps: {
+          analyze: makeFakeAnalyze({}).fn,
+          github: wrapGithub,
+          stdout,
+          now,
+          acquirePublicationLease: acquirePub,
+        },
+      });
+
+    const resA = await runOne(inputA);
+    const resB = await runOne(inputB);
+
+    expect(resA.status).toBe("succeeded");
+    expect(resB.status).toBe("succeeded");
+    // Exactly ONE shared summary comment; B updated (reused) A's comment.
+    expect(gh.store.length).toBe(1);
+    expect(gh.calls.create).toBe(1);
+    expect(gh.calls.update).toBe(1);
+    expect(resB.commentId).toBe(resA.commentId);
+
+    // Two acquire/release pairs, and each never overlaps: A releases before B
+    // acquires (serialized on the PR flock).
+    const acquires = events
+      .map((e, i) => (e === "pub:acquire" ? i : -1))
+      .filter((i) => i >= 0);
+    const releases = events
+      .map((e, i) => (e === "pub:release" ? i : -1))
+      .filter((i) => i >= 0);
+    expect(acquires.length).toBe(2);
+    expect(releases.length).toBe(2);
+    expect(releases[0]).toBeLessThan(acquires[1]);
+
+    // The create AND the update each happen strictly UNDER the publication lease
+    // (bracketed by pub:acquire … pub:release, with no release in between).
+    const underLock = (op: string): void => {
+      const i = events.indexOf(op);
+      const acq = events.lastIndexOf("pub:acquire", i);
+      const rel = events.indexOf("pub:release", i);
+      expect(acq).toBeGreaterThanOrEqual(0);
+      expect(rel).toBeGreaterThan(i);
+      expect(events.slice(acq + 1, i)).not.toContain("pub:release");
+    };
+    underLock("create");
+    underLock("update");
+  });
+
+  // (2) A waiter that observed NO state before the lease re-reads AFTER
+  //     acquisition. If the first holder reached `succeeded`, it returns cost 0
+  //     and never analyzes or emits local output.
+  it("(#2) re-reads state under the lease: a first holder that reached succeeded makes the waiter return cost 0 with no analysis or output", async () => {
+    const holderState: PullRequestReviewState = {
+      repository: "acme/widget",
+      pullRequest: 7,
+      headSha: fx.headSha,
+      inputFingerprint: fp(),
+      status: "succeeded",
+      runId: "holder-a-run",
+      outputs: { text: { status: "succeeded" } },
+      attempts: 1,
+      updatedAt: now().toISOString(),
+    };
+    // Simulate the first holder finishing WHILE we waited: no state is visible
+    // to the pre-lock hint, but the succeeded record appears exactly when the
+    // lease is acquired, so ONLY the under-lock re-read can observe it.
+    const acquireLease: typeof acquireReviewLease = (o) => {
+      const res = acquireReviewLease(o);
+      writeReviewState(fx.workspaceDir, holderState);
+      return res;
+    };
+    const fake = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: fake.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+        acquireLease,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe("holder-a-run");
+    expect(res.costUsd).toBe(0);
+    // Never analyzed and never emitted local output.
+    expect(fake.invocationCount()).toBe(0);
+    expect(out.join("")).toBe("");
+  });
+
+  // (3) A waiter that discovers running/publish-failed + valid analysis UNDER
+  //     the lease resumes the prior run id without any model work.
+  it("(#3) resumes a prior run id from a publish-failed state discovered under the lease, with no model rerun", async () => {
+    const priorRunId = await seedSucceededTextRun();
+    // Clear the composite state (pre-lock read now sees nothing) but keep the
+    // paid analysis.json under .otto/runs.
+    rmSync(join(fx.workspaceDir, ".otto", "review-state"), {
+      recursive: true,
+      force: true,
+    });
+    const resumable: PullRequestReviewState = {
+      repository: "acme/widget",
+      pullRequest: 7,
+      headSha: fx.headSha,
+      inputFingerprint: fp(),
+      status: "publish-failed",
+      runId: priorRunId,
+      analysisArtifact: `.otto/runs/${priorRunId}/analysis.json`,
+      outputs: {},
+      attempts: 1,
+      retryable: true,
+      nextRetryAt: "2020-01-01T00:00:00.000Z",
+      error: "transient publication failure",
+      updatedAt: now().toISOString(),
+    };
+    const acquireLease: typeof acquireReviewLease = (o) => {
+      const res = acquireReviewLease(o);
+      writeReviewState(fx.workspaceDir, resumable);
+      return res;
+    };
+    const second = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: second.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+        acquireLease,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe(priorRunId);
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
+  });
+
+  // (4) A previously succeeded TEXT run invoked as comment / comment-plus-review
+  //     / markdown / +formal-review resumes ONLY the missing current sinks from
+  //     the validated analysis — existing receipts preserved, cost 0, no rerun.
+  it("(#4a) succeeded text resumed as comment publishes the comment at cost 0 with no model rerun", async () => {
+    const runId = await seedSucceededTextRun();
+    out.length = 0;
+    const second = makeFakeAnalyze({});
+    const gh = makeCommentGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment" }),
+      deps: { analyze: second.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe(runId); // resumed the prior run, no new bundle
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
+    expect(gh.calls.create).toBe(1);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.text?.status).toBe("succeeded"); // prior receipt kept
+    expect(st?.outputs.comment?.commentId).toBe(res.commentId);
+  });
+
+  it("(#4b) succeeded text resumed as markdown emits markdown at cost 0 with no model rerun", async () => {
+    const runId = await seedSucceededTextRun();
+    out.length = 0;
+    const second = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "markdown" }),
+      deps: {
+        analyze: second.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe(runId);
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.text?.status).toBe("succeeded");
+    expect(st?.outputs.markdown?.status).toBe("succeeded");
+  });
+
+  it("(#4c) succeeded text resumed as comment-plus-review publishes both at cost 0 with no model rerun", async () => {
+    const runId = await seedSucceededTextRun();
+    out.length = 0;
+    const second = makeFakeAnalyze({});
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "comment", githubReview: true }),
+      deps: { analyze: second.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe(runId);
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
+    expect(gh.calls.createComment).toBe(1);
+    expect(gh.calls.createReview.length).toBe(1);
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.text?.status).toBe("succeeded");
+    expect(st?.outputs.comment?.commentId).toBe(res.commentId);
+    expect(st?.outputs.githubReview?.reviewId).toBe(res.reviewId);
+  });
+
+  it("(#4d) succeeded text invoked with --github-review adds ONLY the formal review, preserving the text receipt", async () => {
+    const runId = await seedSucceededTextRun();
+    out.length = 0;
+    const second = makeFakeAnalyze({});
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text", githubReview: true }),
+      deps: { analyze: second.fn, github: gh.github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe(runId);
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
+    expect(gh.calls.createReview.length).toBe(1);
+    expect(gh.calls.createComment).toBe(0); // comment is NOT a required sink
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      fp()
+    );
+    expect(st?.outputs.text?.status).toBe("succeeded");
+    expect(st?.outputs.githubReview?.reviewId).toBe(res.reviewId);
+  });
+
+  // (5) A success whose currently-requested sinks are ALL complete still
+  //     short-circuits cost-free (no lease work, no analysis, no output).
+  it("(#5) a success whose current sinks are already complete short-circuits at cost 0", async () => {
+    const runId = await seedSucceededTextRun();
+    out.length = 0;
+    const second = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: second.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe(runId);
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
   });
 });

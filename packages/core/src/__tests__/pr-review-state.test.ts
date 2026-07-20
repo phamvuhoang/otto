@@ -28,9 +28,11 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 import {
   reviewStatePath,
+  reviewPublicationLockPath,
   readReviewState,
   writeReviewState,
   acquireReviewLease,
+  acquirePublicationLease,
   isStateRunnable,
   _resolveFlockSync,
   _setFlockSyncForTest,
@@ -359,6 +361,149 @@ describe("acquireReviewLease", () => {
 
   it("rejects a bad runId before touching disk", () => {
     expect(() => acquireReviewLease(leaseOpts({ runId: "bad id!" }))).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR-scoped SHARED publication lease (second lock)
+//
+// A SECOND persistent stable-inode flock keyed ONLY by repository/PR guards the
+// mutable summary-comment reconcile/write. It exists to SERIALIZE — not skip —
+// distinct input fingerprints onto the ONE shared summary comment, so it takes a
+// BLOCKING exclusive flock (`ex`), unlike the per-composite lease's `exnb`.
+// ---------------------------------------------------------------------------
+
+function pubLockFile(repository = REPO, pr = PR): string {
+  return join(
+    ws,
+    ".otto",
+    "review-state",
+    "github",
+    "owner",
+    "repo",
+    String(pr),
+    "publication.lock"
+  );
+}
+
+describe("reviewPublicationLockPath", () => {
+  it("is PR-scoped: identical for every head SHA and fingerprint of a PR", () => {
+    const a = reviewPublicationLockPath(ws, REPO, PR);
+    const b = reviewPublicationLockPath(ws, REPO, PR);
+    expect(a).toBe(b);
+    expect(a).toBe(pubLockFile());
+    // A sibling of the per-head composite state dirs (never nested under a head).
+    expect(a).not.toContain(HEAD);
+    expect(a).not.toContain(FP);
+  });
+
+  it("gives a different PR / repository an independent lock path", () => {
+    const p1 = reviewPublicationLockPath(ws, REPO, PR);
+    const p2 = reviewPublicationLockPath(ws, REPO, 99);
+    const p3 = reviewPublicationLockPath(ws, "Other/Repo", PR);
+    expect(new Set([p1, p2, p3]).size).toBe(3);
+  });
+
+  it("rejects a bad repository / PR before disk I/O", () => {
+    expect(() => reviewPublicationLockPath(ws, "no-slash", PR)).toThrow();
+    expect(() => reviewPublicationLockPath(ws, REPO, 0)).toThrow();
+  });
+});
+
+describe("acquirePublicationLease", () => {
+  it("acquires the PR-scoped lock, holds it, and reports ownership", () => {
+    const lease = acquirePublicationLease({
+      workspaceDir: ws,
+      repository: REPO,
+      pullRequest: PR,
+      runId: RUN,
+    });
+    held.push(lease);
+    expect(lease.ownsClaim()).toBe(true);
+    expect(existsSync(pubLockFile())).toBe(true);
+  });
+
+  it("release frees the lock and leaves the lock FILE on disk (stable inode)", () => {
+    const lease = acquirePublicationLease({
+      workspaceDir: ws,
+      repository: REPO,
+      pullRequest: PR,
+      runId: RUN,
+    });
+    lease.release();
+    expect(lease.ownsClaim()).toBe(false);
+    // Persistent lock file survives release so exclusion survives.
+    expect(existsSync(pubLockFile())).toBe(true);
+    // A subsequent acquire re-locks the same inode.
+    const again = acquirePublicationLease({
+      workspaceDir: ws,
+      repository: REPO,
+      pullRequest: PR,
+      runId: "next",
+    });
+    held.push(again);
+    expect(again.ownsClaim()).toBe(true);
+  });
+
+  it("takes a BLOCKING exclusive flock ('ex'), never the composite lease's non-blocking 'exnb'", () => {
+    // The op string is the whole serialize-vs-skip decision: `ex` WAITS for a
+    // live holder (serialize-then-proceed), `exnb` would reject it as busy
+    // (skip). Assert the publication lease chose the blocking op.
+    const ops: string[] = [];
+    const spy: FlockSyncFn = (_fd, op) => {
+      ops.push(op);
+    };
+    _setFlockSyncForTest(spy);
+    try {
+      const lease = acquirePublicationLease({
+        workspaceDir: ws,
+        repository: REPO,
+        pullRequest: PR,
+        runId: RUN,
+      });
+      lease.release();
+    } finally {
+      _setFlockSyncForTest(undefined);
+    }
+    expect(ops[0]).toBe("ex");
+    expect(ops).not.toContain("exnb");
+    expect(ops).toContain("un");
+  });
+
+  it("rejects a bad runId before touching disk", () => {
+    expect(() =>
+      acquirePublicationLease({
+        workspaceDir: ws,
+        repository: REPO,
+        pullRequest: PR,
+        runId: "bad id!",
+      })
+    ).toThrow();
+  });
+
+  it("wraps a non-busy flock failure (ENOTSUP) in an actionable ReviewLeaseError", () => {
+    const notsup: FlockSyncFn = () => {
+      const err = new Error("flock: not supported") as NodeJS.ErrnoException;
+      err.code = "ENOTSUP";
+      throw err;
+    };
+    _setFlockSyncForTest(notsup);
+    let thrown: unknown;
+    try {
+      acquirePublicationLease({
+        workspaceDir: ws,
+        repository: REPO,
+        pullRequest: PR,
+        runId: "notsup",
+      });
+    } catch (e) {
+      thrown = e;
+    } finally {
+      _setFlockSyncForTest(undefined);
+    }
+    expect(thrown).toBeInstanceOf(ReviewLeaseError);
+    expect((thrown as ReviewLeaseError).code).toBe("ENOTSUP");
+    expect((thrown as ReviewLeaseError).message).toContain(pubLockFile());
   });
 });
 

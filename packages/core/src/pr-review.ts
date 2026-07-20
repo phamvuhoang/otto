@@ -72,6 +72,7 @@ import {
   readReviewState,
   writeReviewState,
   acquireReviewLease,
+  acquirePublicationLease,
   isStateRunnable,
   type PullRequestReviewState,
   type PullRequestReviewOutputState,
@@ -757,6 +758,19 @@ export type PullRequestReviewDeps = {
   createWorktree: typeof createPullRequestWorktree;
   writeReviewInput: typeof writeReviewInputArtifact;
   readReviewInput: typeof readReviewInputArtifact;
+  /**
+   * The per-composite-identity NON-BLOCKING run lease. Injectable so a test can
+   * model the under-lock re-read race — e.g. wrap the real acquire to write the
+   * first holder's terminal/resumable state at acquisition time, proving the
+   * AUTHORITATIVE decision is made from the state read AFTER the lock is held.
+   */
+  acquireLease: typeof acquireReviewLease;
+  /**
+   * The PR-scoped BLOCKING publication lease that serializes the shared summary
+   * comment across fingerprints. Injectable so a test can observe its
+   * acquire/release ordering around the summary reconcile/write.
+   */
+  acquirePublicationLease: typeof acquirePublicationLease;
   env: NodeJS.ProcessEnv;
   now: () => Date;
   stdout: (text: string) => void;
@@ -786,6 +800,47 @@ function buildReviewCompressor(
   if (!gate.allowed) return null;
   const compressor = createHeadroomSyncCompressor();
   return compressor.available ? compressor : null;
+}
+
+/** One publication sink whose receipt a run may need to prove. */
+type RequiredSink = "text" | "markdown" | "comment" | "githubReview";
+
+/**
+ * The sinks THIS invocation requires: the configured local/remote output plus,
+ * when `--github-review` is on, the additional formal review. A `succeeded`
+ * state is terminal only when EVERY one of these receipts exists; a prior
+ * success missing a now-requested sink resumes just that sink from the
+ * validated analysis (no model rerun).
+ */
+function currentRequiredSinks(config: PullRequestReviewConfig): RequiredSink[] {
+  const sinks: RequiredSink[] = [config.output];
+  if (config.githubReview) sinks.push("githubReview");
+  return sinks;
+}
+
+/** Whether a persisted receipt exists for one required sink. */
+function sinkReceiptPresent(
+  outputs: PullRequestReviewOutputState,
+  sink: RequiredSink
+): boolean {
+  switch (sink) {
+    case "text":
+      return outputs.text?.status === "succeeded";
+    case "markdown":
+      return outputs.markdown?.status === "succeeded";
+    case "comment":
+      return outputs.comment?.status === "succeeded";
+    case "githubReview":
+      return outputs.githubReview?.status === "succeeded";
+  }
+}
+
+/** Whether every currently-required sink already has a persisted receipt. */
+function currentSinksComplete(
+  outputs: PullRequestReviewOutputState,
+  requiredSinks: readonly RequiredSink[]
+): boolean {
+  return requiredSinks.every((sink) => sinkReceiptPresent(outputs, sink));
 }
 
 /**
@@ -844,6 +899,9 @@ export async function runPullRequestReview(opts: {
     createWorktree: opts.deps?.createWorktree ?? createPullRequestWorktree,
     writeReviewInput: opts.deps?.writeReviewInput ?? writeReviewInputArtifact,
     readReviewInput: opts.deps?.readReviewInput ?? readReviewInputArtifact,
+    acquireLease: opts.deps?.acquireLease ?? acquireReviewLease,
+    acquirePublicationLease:
+      opts.deps?.acquirePublicationLease ?? acquirePublicationLease,
     env: opts.deps?.env ?? process.env,
     now: opts.deps?.now ?? (() => new Date()),
     stdout: opts.deps?.stdout ?? ((t) => process.stdout.write(t)),
@@ -855,31 +913,61 @@ export async function runPullRequestReview(opts: {
   const headSha = revision.headSha;
   const requestedOutput = config.output;
 
-  // --- Stateful dedup (Slice 2): a terminal composite identity short-circuits.
-  //     `succeeded` is done; watch mode also blocks permanent/not-yet-eligible
-  //     failures, while an explicit one-shot may retry a permanent analysis
-  //     failure after an operator fix. A prior `running`/`publish-failed` run
-  //     with persisted analysis is RESUMED from `analysis.json` (no re-payment).
-  const priorState = readReviewState(
-    workspaceDir,
-    repository,
-    pullRequest,
-    headSha,
-    inputFingerprint
-  );
-  const oneShotPermanentAnalysisRetry =
+  // --- Stateful dedup (Slice 2 / P32 Task 2): the AUTHORITATIVE terminal /
+  //     resume / fresh decision is made UNDER the composite flock (see below).
+  //     The pre-lock read here is only a fast-path HINT; the record is read
+  //     AGAIN once the lease is held so a waiter that saw no state before the
+  //     lock — while the first holder raced to `succeeded` — never re-analyzes.
+  //
+  //     `succeeded` is terminal ONLY when EVERY currently-required sink receipt
+  //     exists (config.output plus, when asked, the formal review). A prior
+  //     text-only success invoked now as comment / review / markdown RESUMES
+  //     just the missing sink(s) from the validated `analysis.json` at cost 0.
+  //     A `running`/`publish-failed` run with persisted analysis likewise
+  //     resumes from `analysis.json` (no re-payment).
+  const requiredSinks = currentRequiredSinks(config);
+
+  /** A prior PERMANENT analysis failure MAY be retried by an explicit one-shot
+   *  (operator fixed the cause); watch mode still treats it as terminal. */
+  const oneShotPermanentAnalysisRetry = (
+    state: PullRequestReviewState | null
+  ): boolean =>
     !config.watch &&
-    priorState?.status === "analysis-failed" &&
-    priorState.retryable !== true;
-  if (
-    priorState &&
-    !isStateRunnable(priorState, deps.now()) &&
-    !oneShotPermanentAnalysisRetry
-  ) {
-    const reviewArtifact = `.otto/runs/${priorState.runId}/review.md`;
+    state?.status === "analysis-failed" &&
+    state.retryable !== true;
+
+  /** Whether a state ends THIS invocation with no work: a success whose current
+   *  sinks are all present, or a non-success that is not runnable. */
+  const isTerminalForInvocation = (
+    state: PullRequestReviewState | null
+  ): boolean => {
+    if (!state) return false;
+    if (state.status === "succeeded")
+      return currentSinksComplete(state.outputs, requiredSinks);
+    if (oneShotPermanentAnalysisRetry(state)) return false;
+    return !isStateRunnable(state, deps.now());
+  };
+
+  /** Whether a state should RESUME publication from a persisted analysis (no
+   *  model rerun): a crashed/failed run, OR a success still missing a
+   *  now-requested sink. Requires a recorded analysis artifact pointer. */
+  const isResumable = (state: PullRequestReviewState | null): boolean => {
+    if (!state || !state.analysisArtifact) return false;
+    if (state.status === "running" || state.status === "publish-failed")
+      return true;
+    if (state.status === "succeeded")
+      return !currentSinksComplete(state.outputs, requiredSinks);
+    return false;
+  };
+
+  /** The cost-0 short-circuit result for an already-terminal identity. */
+  const terminalResult = (
+    state: PullRequestReviewState
+  ): PullRequestReviewRunResult => {
+    const reviewArtifact = `.otto/runs/${state.runId}/review.md`;
     return {
-      status: priorState.status as PullRequestReviewRunStatus,
-      runId: priorState.runId,
+      status: state.status as PullRequestReviewRunStatus,
+      runId: state.runId,
       repository,
       pullRequest,
       headSha,
@@ -888,64 +976,49 @@ export async function runPullRequestReview(opts: {
       ...(existsSync(join(workspaceDir, reviewArtifact))
         ? { reviewArtifact }
         : {}),
-      ...(priorState.outputs.comment
-        ? { commentId: priorState.outputs.comment.commentId }
+      ...(state.outputs.comment
+        ? { commentId: state.outputs.comment.commentId }
         : {}),
-      ...(priorState.outputs.githubReview
-        ? { reviewId: priorState.outputs.githubReview.reviewId }
+      ...(state.outputs.githubReview
+        ? { reviewId: state.outputs.githubReview.reviewId }
         : {}),
-      ...(priorState.retryable !== undefined
-        ? { retryable: priorState.retryable }
-        : {}),
-      ...(priorState.nextRetryAt
-        ? { nextRetryAt: priorState.nextRetryAt }
-        : {}),
-      ...(priorState.error ? { error: priorState.error } : {}),
+      ...(state.retryable !== undefined ? { retryable: state.retryable } : {}),
+      ...(state.nextRetryAt ? { nextRetryAt: state.nextRetryAt } : {}),
+      ...(state.error ? { error: state.error } : {}),
     };
-  }
+  };
+
+  // Late-bound run identity + derived paths. A PROVISIONAL id backs the lease
+  // evidence; the AUTHORITATIVE id is bound after the under-lock decision — a
+  // fresh run reuses the provisional id, a resume rebinds to the prior run's id
+  // (NEVER finalizing into the provisional bundle). Every closure below captures
+  // these by reference and only runs after they are bound.
+  // A PROVISIONAL run id backs the lease evidence and every derived path until
+  // the under-lock decision rebinds to the authoritative id (a fresh run keeps
+  // this id; a resume rebinds to the prior run's id).
+  const provisionalRunId = allocateRunId(deps.now());
+  let runId = provisionalRunId;
+  let runDir = runReportDir(workspaceDir, provisionalRunId);
+  let expectedInputPath = `.otto/runs/${provisionalRunId}/review-input.md`;
+  let analysisArtifactRel = `.otto/runs/${provisionalRunId}/analysis.json`;
+  const bindRunPaths = (id: string): void => {
+    runId = id;
+    runDir = runReportDir(workspaceDir, id);
+    expectedInputPath = `.otto/runs/${id}/review-input.md`;
+    analysisArtifactRel = `.otto/runs/${id}/analysis.json`;
+  };
 
   let resumedAnalysis: PullRequestReviewAnalysisArtifact | null = null;
-  let runId: string;
-  if (
-    priorState &&
-    (priorState.status === "running" ||
-      priorState.status === "publish-failed") &&
-    priorState.analysisArtifact
-  ) {
-    const resumed = readReviewAnalysisArtifact({
-      workspaceDir,
-      runId: priorState.runId,
-      repository,
-      pullRequest,
-      baseSha: revision.baseSha,
-      headSha,
-      inputFingerprint,
-      reviewInput,
-      githubReview: config.githubReview,
-    });
-    if (resumed) {
-      resumedAnalysis = resumed;
-      runId = priorState.runId;
-    } else {
-      // A tampered/missing analysis artifact is never trusted for resume — a
-      // fresh analysis is run under a new run id.
-      runId = allocateRunId(deps.now());
-    }
-  } else {
-    runId = allocateRunId(deps.now());
-  }
-  const priorOutputs: PullRequestReviewOutputState = priorState?.outputs ?? {};
-  const priorAttempts = priorState?.attempts ?? 0;
+  let priorOutputs: PullRequestReviewOutputState = {};
+  let priorAttempts = 0;
   // These track only analysis that was validated and ACTUALLY resumed in this
   // invocation (or freshly persisted below). An old state's mere pointer is not
   // authority to suppress a new failure record.
-  let durableAnalysisForInvocation = resumedAnalysis;
-  let durableAnalysisOutputs: PullRequestReviewOutputState | null =
-    resumedAnalysis ? { ...priorOutputs } : null;
+  let durableAnalysisForInvocation: PullRequestReviewAnalysisArtifact | null =
+    null;
+  let durableAnalysisOutputs: PullRequestReviewOutputState | null = null;
 
-  const startedAt = deps.now().toISOString();
-  const runDir = runReportDir(workspaceDir, runId);
-  const expectedInputPath = `.otto/runs/${runId}/review-input.md`;
+  let startedAt = deps.now().toISOString();
   let inputArtifactDurable = false;
 
   let activeAgentId: AgentRuntimeId = opts.agentId;
@@ -963,12 +1036,11 @@ export async function runPullRequestReview(opts: {
   // a resume we reuse the original runId and re-init this invocation's totals to
   // zero; without carrying the prior paid analysis's manifest, finalization
   // would erase the first (paying) invocation's provenance and evidence. Null on
-  // a fresh run, so behavior is unchanged there.
-  const priorManifest = resumedAnalysis
-    ? readManifest(workspaceDir, runId)
-    : null;
-  const priorManifestCost = priorManifest?.costUsd ?? 0;
-  const priorManifestUsage = priorManifest?.tokenUsage ?? emptyTokenUsage();
+  // a fresh run, so behavior is unchanged there. Bound in the under-lock
+  // decision alongside the resumed run id.
+  let priorManifest: RunManifest | null = null;
+  let priorManifestCost = 0;
+  let priorManifestUsage: TokenUsage = emptyTokenUsage();
   const stageRecords: StageRecord[] = [];
   const runToolsUsed: ToolUsage[] = [];
   let seq = 0;
@@ -1137,7 +1209,7 @@ export async function runPullRequestReview(opts: {
     };
   };
 
-  const analysisArtifactRel = `.otto/runs/${runId}/analysis.json`;
+  // `analysisArtifactRel` is late-bound with the run id (see `bindRunPaths`).
 
   // Run-scoped abort: fed ONLY by the caller's shutdown `signal`. Passed to the
   // analysis pass and checked before any remote write so an aborted run stops.
@@ -1569,6 +1641,13 @@ export async function runPullRequestReview(opts: {
         // comment: a HARNESS-OWNED remote write, only after a passing reconcile.
         if (!outputs.comment) {
           const github = commentClient();
+          // The PR-scoped publication lease, held ONLY across the summary
+          // list→create/update so it serializes across DISTINCT fingerprints
+          // (each holds its own composite lease) onto the ONE shared comment.
+          // Acquisition order is ALWAYS composite lease first, publication lease
+          // second; it is released in the `finally` below immediately after this
+          // reconcile/write — never held across the independent formal review.
+          let pubLease: ReviewLease | undefined;
           try {
             if (!github) {
               throw new GitHubPrError(
@@ -1583,6 +1662,16 @@ export async function runPullRequestReview(opts: {
             if (runAbort.signal.aborted || !lease.ownsClaim()) {
               return abortedResumable(outputs);
             }
+            // SERIALIZE the shared summary comment: block until any concurrent
+            // publisher's summary section completes, then re-list under the lock
+            // so the second publisher updates/reuses the first comment (exactly
+            // one summary comment exists across fingerprints).
+            pubLease = deps.acquirePublicationLease({
+              workspaceDir,
+              repository,
+              pullRequest,
+              runId,
+            });
             const receipt = upsertSummaryComment({
               github,
               repository,
@@ -1609,6 +1698,13 @@ export async function runPullRequestReview(opts: {
                 });
                 if (!freshRec.publishable) {
                   throw new ReviewWriteSupersededError(freshRec);
+                }
+                // Recheck the abort/ownership fence AFTER the final metadata read
+                // returns, immediately before the write is authorized: a shutdown
+                // or ownership loss that fired DURING getPullRequest still
+                // withholds the write.
+                if (runAbort.signal.aborted || !lease.ownsClaim()) {
+                  throw new ReviewWriteAbortedError();
                 }
               },
             });
@@ -1686,6 +1782,11 @@ export async function runPullRequestReview(opts: {
                 error: gerr.message,
               };
             }
+          } finally {
+            // Release the PR-scoped publication lease immediately after the
+            // summary reconcile/write (success, abort, supersession, or failure)
+            // — it is NEVER held across the independent formal-review write.
+            pubLease?.release();
           }
         }
         // On a write-boundary supersession the comment was withheld and status is
@@ -1775,6 +1876,11 @@ export async function runPullRequestReview(opts: {
               });
               if (!freshRec.publishable) {
                 throw new ReviewWriteSupersededError(freshRec);
+              }
+              // Recheck the abort/ownership fence AFTER the final metadata read
+              // returns, immediately before the write is authorized.
+              if (runAbort.signal.aborted || !lease.ownsClaim()) {
+                throw new ReviewWriteAbortedError();
               }
             },
           });
@@ -2239,6 +2345,19 @@ export async function runPullRequestReview(opts: {
     };
   };
 
+  // --- Pre-lock fast-path HINT: skip contending the lease when the identity is
+  //     already terminal for THIS invocation (done, or a not-yet-eligible /
+  //     permanent failure). NON-authoritative — a concurrent holder may finish
+  //     between here and the lock, so the decision is remade under the lock.
+  const priorHint = readReviewState(
+    workspaceDir,
+    repository,
+    pullRequest,
+    headSha,
+    inputFingerprint
+  );
+  if (isTerminalForInvocation(priorHint)) return terminalResult(priorHint!);
+
   // --- Acquire the OS-flock composite lease BEFORE writing run/input artifacts
   //     or a worktree. The lease takes an exclusive non-blocking `flock` on a
   //     per-identity lock file; a busy (LIVE) holder returns `skipped` with no
@@ -2246,13 +2365,16 @@ export async function runPullRequestReview(opts: {
   //     acquire. A crashed holder's lock is auto-released by the kernel (no PID
   //     probe, no stale-claim takeover). The lease is released in `finally`, and
   //     its `ownsClaim()` fences every remote write.
-  const leaseResult = acquireReviewLease({
+  //
+  //     A PROVISIONAL run id backs the lease evidence only; the AUTHORITATIVE id
+  //     and run paths/builders are bound AFTER the under-lock state decision.
+  const leaseResult = deps.acquireLease({
     workspaceDir,
     repository,
     pullRequest,
     headSha,
     inputFingerprint,
-    runId,
+    runId: provisionalRunId,
   });
   if (!leaseResult.acquired) {
     return busySkippedResult();
@@ -2281,6 +2403,59 @@ export async function runPullRequestReview(opts: {
   }
 
   try {
+    // --- AUTHORITATIVE state decision, made UNDER the composite flock. Re-read
+    //     the record now that no other holder for this identity can be running
+    //     (the lease is non-blocking, so if we hold it nobody else does). A
+    //     waiter that saw no state pre-lock — while the first holder raced to
+    //     `succeeded` — sees it here and short-circuits at cost 0 instead of
+    //     re-analyzing (never re-emits local output either).
+    const lockedState = readReviewState(
+      workspaceDir,
+      repository,
+      pullRequest,
+      headSha,
+      inputFingerprint
+    );
+    if (isTerminalForInvocation(lockedState))
+      return terminalResult(lockedState!);
+
+    // Bind the authoritative run id + resume context from the under-lock record.
+    if (isResumable(lockedState)) {
+      const resumed = readReviewAnalysisArtifact({
+        workspaceDir,
+        runId: lockedState!.runId,
+        repository,
+        pullRequest,
+        baseSha: revision.baseSha,
+        headSha,
+        inputFingerprint,
+        reviewInput,
+        githubReview: config.githubReview,
+      });
+      if (resumed) {
+        // Resume: rebind to the prior run's id (never the provisional bundle),
+        // reuse the paid analysis, and carry the prior manifest/receipts forward.
+        resumedAnalysis = resumed;
+        bindRunPaths(lockedState!.runId);
+        priorOutputs = lockedState!.outputs;
+        priorAttempts = lockedState!.attempts;
+        durableAnalysisForInvocation = resumed;
+        durableAnalysisOutputs = { ...priorOutputs };
+        priorManifest = readManifest(workspaceDir, runId);
+        priorManifestCost = priorManifest?.costUsd ?? 0;
+        priorManifestUsage = priorManifest?.tokenUsage ?? emptyTokenUsage();
+      } else {
+        // A tampered/missing analysis artifact is never trusted for resume — a
+        // fresh analysis runs under the provisional id, carrying prior attempts.
+        priorOutputs = lockedState?.outputs ?? {};
+        priorAttempts = lockedState?.attempts ?? 0;
+      }
+    } else {
+      priorOutputs = lockedState?.outputs ?? {};
+      priorAttempts = lockedState?.attempts ?? 0;
+    }
+    startedAt = deps.now().toISOString();
+
     // Resume a crashed/failed run from persisted analysis — never re-analyze.
     // This MUST precede the fresh pre-abort branch below: a resumed run reuses
     // the prior runId, so finalizing "aborted-before-work" here would OVERWRITE

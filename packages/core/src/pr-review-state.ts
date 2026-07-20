@@ -309,6 +309,33 @@ function reviewLockPath(
   return statePath.replace(/\.json$/, ".lock");
 }
 
+/**
+ * The OS-flock lock-file path for the PR-scoped SHARED publication lease:
+ * `.otto/review-state/github/<owner>/<repo>/<pr>/publication.lock` — a sibling
+ * of the per-head directories, so it is keyed ONLY by repository + PR and is the
+ * SAME file for every head SHA and every input fingerprint of that PR. It
+ * serializes the one shared summary comment across distinct composite
+ * identities. Throws on an invalid repository/PR before returning.
+ */
+export function reviewPublicationLockPath(
+  workspaceDir: string,
+  repository: string,
+  pr: number
+): string {
+  const { owner, name } = splitAndValidateRepo(repository);
+  assertPr(pr);
+  return join(
+    workspaceDir,
+    ".otto",
+    "review-state",
+    "github",
+    owner,
+    name,
+    String(pr),
+    "publication.lock"
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Atomic write helpers
 // ---------------------------------------------------------------------------
@@ -629,6 +656,86 @@ export function acquireReviewLease(opts: {
   }
 
   return { acquired: true, lease: makeLease(fd, lockPath) };
+}
+
+/**
+ * Acquire the PR-scoped SHARED publication lease that serializes the mutable
+ * summary-comment reconcile/write (list → create/update) across DISTINCT
+ * composite identities of the same PR.
+ *
+ * Unlike {@link acquireReviewLease} — a per-composite-identity NON-BLOCKING
+ * (`exnb`) lock where a live holder means "someone else is reviewing THIS exact
+ * identity", so the loser SKIPS with no work — this lock guards the ONE shared
+ * summary comment that two different input fingerprints both legitimately
+ * publish to. Neither publisher may skip: they must SERIALIZE. So this takes a
+ * BLOCKING EXCLUSIVE flock (`ex`): the second publisher WAITS for the first to
+ * release, then re-lists under the lock and updates/reuses the single comment.
+ * Serialize-then-proceed, with no busy-wait poll and no timeout.
+ *
+ * Deadlock-free by a GLOBAL, CONSISTENT acquisition order: the composite lease
+ * is ALWAYS taken FIRST and this publication lease SECOND, and this lease is
+ * released immediately after the summary reconcile/write — so two publishers can
+ * never each hold one lock while waiting on the other. Returns the held
+ * {@link ReviewLease}; a non-lock failure (missing/broken `fs-ext`, `ENOTSUP`)
+ * is wrapped in an actionable {@link ReviewLeaseError} after closing the fd.
+ */
+export function acquirePublicationLease(opts: {
+  workspaceDir: string;
+  repository: string;
+  pullRequest: number;
+  runId: string;
+}): ReviewLease {
+  assertRunId(opts.runId);
+  const lockPath = reviewPublicationLockPath(
+    opts.workspaceDir,
+    opts.repository,
+    opts.pullRequest
+  );
+
+  mkdirSync(dirname(lockPath), { recursive: true });
+  const fd = openSync(lockPath, "a");
+
+  try {
+    const flock = getFlockSync();
+    if (typeof flock !== "function") {
+      throw wrapFlockError(
+        new Error(
+          `'fs-ext' resolved a flockSync export that is not callable (got ${typeof flock})`
+        ),
+        lockPath
+      );
+    }
+    // BLOCKING exclusive acquire — serialize-then-proceed (see the doc comment).
+    flock(fd, "ex");
+  } catch (err) {
+    try {
+      closeSync(fd);
+    } catch {
+      /* best-effort */
+    }
+    if (err instanceof ReviewLeaseError) throw err;
+    throw wrapFlockError(err, lockPath);
+  }
+
+  // Human-readable evidence only (never gates ownership).
+  try {
+    ftruncateSync(fd, 0);
+    writeSync(
+      fd,
+      JSON.stringify({
+        scope: "publication",
+        runId: opts.runId,
+        pid: process.pid,
+        acquiredAt: new Date().toISOString(),
+      }),
+      0
+    );
+    fsyncSync(fd);
+  } catch {
+    /* best-effort: evidence only */
+  }
+
+  return makeLease(fd, lockPath);
 }
 
 // ---------------------------------------------------------------------------

@@ -30,10 +30,24 @@ describe("parseFindings", () => {
     expect(findings[1].suggestedFix).toBeUndefined();
   });
 
-  it("drops malformed lines instead of throwing", () => {
-    const { findings, dropped } = parseFindings("MAYBE | only two fields");
+  it("counts a truncated finding (valid severity, <4 fields) as dropped", () => {
+    const { findings, dropped } = parseFindings("major | only two fields");
     expect(findings).toHaveLength(0);
     expect(dropped).toBe(1);
+  });
+
+  it("does NOT count a pipe-bearing prose/table/code line as a malformed finding", () => {
+    const text = [
+      "major | src/a.ts:1 | real finding | because reasons",
+      "The guard reduces to `a | b` when both are set.", // prose with a pipe
+      "| Severity | File | Note |", // a markdown table header
+      "| --- | --- | --- |", // a markdown table separator
+      "const mask = FLAG_A | FLAG_B; // bitwise or", // code with a pipe
+    ].join("\n");
+    const { findings, dropped } = parseFindings(text, "correctness");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].claim).toBe("real finding");
+    expect(dropped).toBe(0);
   });
 });
 
@@ -89,8 +103,22 @@ describe("severityCounts", () => {
 describe("dedupeFindings", () => {
   it("merges same file+overlapping range, keeps highest severity, unions lenses", () => {
     const fs: Finding[] = [
-      { severity: "minor", file: "src/a.ts", line: "10-20", claim: "leaky", why: "w1", lens: "correctness" },
-      { severity: "major", file: "src/a.ts", line: "15", claim: "leaky", why: "w2", lens: "structural" },
+      {
+        severity: "minor",
+        file: "src/a.ts",
+        line: "10-20",
+        claim: "leaky",
+        why: "w1",
+        lens: "correctness",
+      },
+      {
+        severity: "major",
+        file: "src/a.ts",
+        line: "15",
+        claim: "leaky",
+        why: "w2",
+        lens: "structural",
+      },
     ];
     const out = dedupeFindings(fs);
     expect(out).toHaveLength(1);

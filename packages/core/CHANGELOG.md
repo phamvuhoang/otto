@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.7](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.6...otto-core-v0.36.7) (2026-07-20)
+
+
+### Bug Fixes
+
+* **otto-review:** don't cancel an explicit --pr review of an unlabelled PR ([#229](https://github.com/phamvuhoang/otto/issues/229)) ([7d45195](https://github.com/phamvuhoang/otto/commit/7d4519563e295152dcd11f18388e29e04ec2f8b4))
+
 ## [0.36.6](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.5...otto-core-v0.36.6) (2026-07-20)
 
 

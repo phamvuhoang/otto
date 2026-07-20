@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.11.0](https://github.com/phamvuhoang/otto/compare/otto-v0.10.11...otto-v0.11.0) (2026-07-20)
+
+
+### Features
+
+* **p32:** automated pull-request code review (otto-review) ([#213](https://github.com/phamvuhoang/otto/issues/213)) ([a884083](https://github.com/phamvuhoang/otto/commit/a8840834ccf1fb277de048fa9c05e1b4863412f3))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @phamvuhoang/otto-core bumped to 0.36.0
+
 ## [0.10.11](https://github.com/phamvuhoang/otto/compare/otto-v0.10.10...otto-v0.10.11) (2026-07-18)
 
 

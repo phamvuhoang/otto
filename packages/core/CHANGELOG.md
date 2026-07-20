@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.35.0...otto-core-v0.36.0) (2026-07-20)
+
+
+### Features
+
+* **p32:** automated pull-request code review (otto-review) ([#213](https://github.com/phamvuhoang/otto/issues/213)) ([a884083](https://github.com/phamvuhoang/otto/commit/a8840834ccf1fb277de048fa9c05e1b4863412f3))
+
 ## [0.35.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.34.0...otto-core-v0.35.0) (2026-07-18)
 
 

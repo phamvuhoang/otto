@@ -184,6 +184,17 @@ describe("reconcilePublication", () => {
     expect(r).toMatchObject({ publishable: false, status: "cancelled" });
   });
 
+  it("publishes when the label was never present (explicit one-shot --pr override)", () => {
+    // Analysis began WITHOUT the label and it is still absent: nothing was
+    // removed mid-run, so an explicit `--pr` review is published, not cancelled.
+    const r = reconcilePublication({
+      expected: revision({ labels: [] }),
+      current: revision({ labels: [] }),
+      label: LABEL,
+    });
+    expect(r.publishable).toBe(true);
+  });
+
   it("prioritizes a changed head over an ineligible state (superseded)", () => {
     const r = reconcilePublication({
       expected: revision(),

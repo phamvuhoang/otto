@@ -663,6 +663,30 @@ describe("runPullRequestReview", () => {
     expect(printed).not.toContain("STALE — NOT PUBLISHED");
   });
 
+  it("(5d2) a PR that NEVER had the label (explicit --pr override) SUCCEEDS — not cancelled", async () => {
+    // The reported case: `otto-review --pr <n>` on a PR that never carried the
+    // required label. The label filter is a watch-daemon concept; an explicit
+    // one-shot invocation overrode it, so the paid review is rendered, not
+    // declined with a false "the required label was removed".
+    const unlabelled = { ...fx.revision, labels: [] };
+    const fake = makeFakeAnalyze({
+      confirmed: [finding()],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+    });
+    const github = { getPullRequest: () => unlabelled };
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      revision: unlabelled,
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: { analyze: fake.fn, github, stdout, now },
+    });
+    expect(res.status).toBe("succeeded");
+    const printed = out.join("");
+    expect(printed).toContain("Confirmed: blocker=0 major=1");
+    expect(printed).not.toContain("STALE — NOT PUBLISHED");
+  });
+
   it("(5e) a superseded run STILL renders a STALE-marked local review (markdown + text)", async () => {
     const newHead = "f".repeat(40);
     for (const output of ["markdown", "text"] as const) {

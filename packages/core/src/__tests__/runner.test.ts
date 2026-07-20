@@ -663,7 +663,9 @@ describe("buildClaudeArgs read-only access (P32)", () => {
     expect(args).toContain("--no-session-persistence");
     expect(args).toContain("--strict-mcp-config");
     expect(args).toContain("--mcp-config");
-    expect(args[args.indexOf("--mcp-config") + 1]).toBe("{}");
+    // Empty MCP server list — must be an explicit `mcpServers` record; the CLI
+    // rejects a bare `{}` ("mcpServers: expected record, received undefined").
+    expect(args[args.indexOf("--mcp-config") + 1]).toBe('{"mcpServers":{}}');
     expect(args.join(" ")).not.toContain("bypassPermissions");
     expect(args.at(-1)).toContain(promptPath);
   });

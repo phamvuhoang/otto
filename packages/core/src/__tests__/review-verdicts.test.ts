@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   findingToWire,
+  parseFindings,
   parseReviewVerdicts,
   type Finding,
 } from "../review-severity.js";
@@ -207,6 +208,88 @@ describe("parseReviewVerdicts", () => {
     expect(out.rejected.map((f) => f.claim)).toEqual([
       "unused import of foo helper",
     ]);
+  });
+
+  // Regression (real run, PR 705): a single candidate that cites THREE locations
+  // as a comma-separated `file:line` list. The verifier reproduced the verdict but
+  // ABBREVIATED two paths (dropped the `supabase/functions/` prefix) AND shortened
+  // the claim. Location matching must understand the list + tolerate segment-aligned
+  // path abbreviation, or 11/12 findings match and this one fails the strict review.
+  it("matches a multi-location verdict whose paths are abbreviated and claim reformatted", () => {
+    const { findings } = parseFindings(
+      "major | supabase/functions/tavus-sync-replica-status/index.ts:153, supabase/functions/tavus-derive-set-characteristic/index.ts:114, supabase/functions/tavus-upsert-set-persona/index.ts:308 | The new isCronCall throttle-exemption predicate is copy-pasted inline into 3 handlers with no test, even though the auth boundary it keys on is otherwise unit-tested (_shared/supabase-cron-or-session-auth.test.ts); a mis-evaluated exemption disables throttling entirely | duplication of the exemption predicate"
+    );
+    const text =
+      "CONFIRMED major | supabase/functions/tavus-sync-replica-status/index.ts:153, tavus-derive-set-characteristic/index.ts:114, tavus-upsert-set-persona/index.ts:308 | isCronCall exemption copy-pasted into 3 handlers with no test | disables throttling entirely";
+    const out = parseReviewVerdicts(text, findings);
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed).toHaveLength(1);
+    expect(out.confirmed[0].severity).toBe("major");
+    expect(out.rejected).toEqual([]);
+  });
+
+  it("matches a single-location verdict whose path prefix was dropped", () => {
+    const cands = [
+      cand(
+        "major",
+        "supabase/functions/tavus-upsert-set-persona/index.ts",
+        "308",
+        "unbounded loop over personas"
+      ),
+    ];
+    const out = parseReviewVerdicts(
+      "CONFIRMED major | tavus-upsert-set-persona/index.ts:308 | unbounded loop | slow",
+      cands
+    );
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed).toHaveLength(1);
+  });
+
+  it("routes two disjoint multi-location verdicts to the right candidates (no cross-match)", () => {
+    const { findings: f1 } = parseFindings(
+      "major | pkg/a/index.ts:10, pkg/b/index.ts:20 | claim one about a and b | why"
+    );
+    const { findings: f2 } = parseFindings(
+      "minor | pkg/c/index.ts:30, pkg/d/index.ts:40 | claim two about c and d | why"
+    );
+    const cands = [...f1, ...f2];
+    const text = [
+      "REJECTED | c/index.ts:30, d/index.ts:40 | reworded two | fine",
+      "CONFIRMED major | a/index.ts:10, b/index.ts:20 | reworded one | real",
+    ].join("\n");
+    const out = parseReviewVerdicts(text, cands);
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed.map((f) => f.claim)).toEqual([
+      "claim one about a and b",
+    ]);
+    expect(out.rejected.map((f) => f.claim)).toEqual([
+      "claim two about c and d",
+    ]);
+  });
+
+  it("does NOT falsely match a partial-overlap location list (fails safe to unmatched)", () => {
+    const { findings } = parseFindings(
+      "major | pkg/a/index.ts:10, pkg/b/index.ts:20, pkg/c/index.ts:30 | genuine three-location finding | why"
+    );
+    // Verdict cites a/b correctly but the third token is a genuinely different file.
+    const text =
+      "CONFIRMED major | a/index.ts:10, b/index.ts:20, other/wrong.ts:99 | reworded | x";
+    const out = parseReviewVerdicts(text, findings);
+    expect(out.confirmed).toHaveLength(0);
+    expect(out.errors.some((e) => /unmatched/i.test(e))).toBe(true);
+    expect(out.errors.some((e) => /missing/i.test(e))).toBe(true);
+  });
+
+  it("suffix tolerance does not over-match a bare basename in a different directory", () => {
+    const cands = [cand("major", "deep/dir/index.ts", "10", "real finding")];
+    const out = parseReviewVerdicts(
+      "CONFIRMED major | index.ts:10 | reworded | x",
+      cands
+    );
+    // `index.ts` is a bare basename (no directory segment) → must NOT suffix-match
+    // `deep/dir/index.ts`; the review fails safe rather than cross-matching.
+    expect(out.confirmed).toHaveLength(0);
+    expect(out.errors.some((e) => /unmatched/i.test(e))).toBe(true);
   });
 
   it("disambiguates two co-located candidates even when both claims are reformatted", () => {

@@ -186,6 +186,84 @@ function parseVerdictLoc(fileRaw: string): { file: string; line?: string } {
   return m ? { file: m[1], line: m[2] } : { file: fileRaw };
 }
 
+type Loc = { file: string; line?: string };
+
+/** Reconstruct a candidate's raw location field (inverse of the `file`/`line`
+ *  split `parseFindings` performs). For a multi-location candidate this yields
+ *  back the original comma-separated `file:line` list, so it can be re-split. */
+const candidateLoc = (c: Finding): string =>
+  c.line ? `${c.file}:${c.line}` : c.file;
+
+/** Parse a location field into a LIST of `{file, line?}` tokens, splitting on
+ *  `,`. A normal single-location field yields a 1-element list (identical to
+ *  today). Empty tokens (stray/trailing commas) are dropped. Used for BOTH the
+ *  verdict's location field and — via `candidateLoc` — the candidate's, because
+ *  `parseFindings` collapses a multi-location field into one `file`/`line` pair. */
+function parseLocList(fileRaw: string): Loc[] {
+  return fileRaw
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .map(parseVerdictLoc);
+}
+
+/** Segment-aligned file match. Two file paths match when, after `norm`, they are
+ *  equal, or one is a suffix of the other on a `/` boundary AND that suffix
+ *  itself carries a directory segment. The directory-segment requirement is what
+ *  keeps a bare basename (`index.ts`) from cross-matching a differently-dir'd
+ *  file of the same name (`deep/dir/index.ts`) — a bare basename must match
+ *  exactly. Empty strings never match. This tolerates the verifier dropping a
+ *  path prefix (`supabase/functions/…/index.ts` ≡ `…/index.ts`) without ever
+ *  using plain substring/`includes` matching. */
+function fileMatches(a: string, b: string): boolean {
+  const na = norm(a);
+  const nb = norm(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (nb.includes("/") && na.endsWith("/" + nb)) return true;
+  if (na.includes("/") && nb.endsWith("/" + na)) return true;
+  return false;
+}
+
+/** Whether a verdict's location list matches a candidate's: the same multiset of
+ *  locations modulo path abbreviation. Concretely, a bijection between the two
+ *  lists where each pair matches by segment-aligned file suffix (`fileMatches`)
+ *  AND line-range overlap (`overlaps`) — every verdict token consumes a distinct
+ *  candidate token and every candidate token is covered. A single-location
+ *  finding reduces to today's `file` + line-overlap behavior. Fails (returns
+ *  false) on any partial overlap, so a verdict that cites even one genuinely
+ *  different location never falsely matches — it stays an `unmatched` error. */
+function locListsMatch(
+  candToks: readonly Loc[],
+  verToks: readonly Loc[]
+): boolean {
+  if (
+    candToks.length === 0 ||
+    verToks.length === 0 ||
+    candToks.length !== verToks.length
+  )
+    return false;
+  const tokenMatches = (v: Loc, c: Loc): boolean =>
+    fileMatches(v.file, c.file) && overlaps(c.line, v.line);
+  // Bipartite perfect matching (Kuhn's augmenting paths); lists are tiny.
+  const assignedTo = new Array(candToks.length).fill(-1); // candidate idx -> verdict idx
+  const assign = (vi: number, seen: boolean[]): boolean => {
+    for (let ci = 0; ci < candToks.length; ci++) {
+      if (seen[ci] || !tokenMatches(verToks[vi], candToks[ci])) continue;
+      seen[ci] = true;
+      if (assignedTo[ci] === -1 || assign(assignedTo[ci], seen)) {
+        assignedTo[ci] = vi;
+        return true;
+      }
+    }
+    return false;
+  };
+  for (let vi = 0; vi < verToks.length; vi++) {
+    if (!assign(vi, new Array(candToks.length).fill(false))) return false;
+  }
+  return true;
+}
+
 /**
  * Strictly parse the verifier's verdict wire format:
  *
@@ -236,17 +314,18 @@ export function parseReviewVerdicts(
       errors.push(`malformed verdict row: ${line}`);
       continue;
     }
-    const { file, line: vline } = parseVerdictLoc(parts[1]);
+    const verToks = parseLocList(parts[1]);
     const claim = parts[2];
     // Identity is LOCATION, not verbatim claim text: the model reproduces
-    // `file:line` exactly but reformats the free-text claim (backticks, spacing).
-    // Collect candidates at this location (file match + line overlap); `locAll`
-    // includes already-matched ones so we can tell a duplicate from an unmatched
-    // verdict and disambiguate co-located candidates.
+    // `file:line` reliably but reformats the free-text claim (backticks, spacing)
+    // and may abbreviate paths or cite several locations as a comma list. Collect
+    // candidates whose location LIST matches this verdict's (segment-aligned file
+    // suffix + line overlap, same multiset). `locAll` includes already-matched
+    // ones so we can tell a duplicate from an unmatched verdict and disambiguate
+    // co-located candidates.
     const locAll: number[] = [];
     for (let i = 0; i < candidates.length; i++) {
-      const c = candidates[i];
-      if (norm(c.file) === norm(file) && overlaps(c.line, vline))
+      if (locListsMatch(parseLocList(candidateLoc(candidates[i])), verToks))
         locAll.push(i);
     }
     const locFree = locAll.filter((i) => !matched[i]);
@@ -296,8 +375,9 @@ export function parseReviewVerdicts(
   for (let i = 0; i < candidates.length; i++) {
     if (!matched[i]) {
       const c = candidates[i];
-      const loc = c.line ? `${c.file}:${c.line}` : c.file;
-      errors.push(`missing verdict for candidate: ${loc} | ${c.claim}`);
+      errors.push(
+        `missing verdict for candidate: ${candidateLoc(c)} | ${c.claim}`
+      );
     }
   }
 

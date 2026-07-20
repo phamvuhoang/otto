@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.2](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.1...otto-core-v0.36.2) (2026-07-20)
+
+
+### Bug Fixes
+
+* **otto-review:** match verifier verdicts by location so real reviews complete ([#217](https://github.com/phamvuhoang/otto/issues/217)) ([d0fefa8](https://github.com/phamvuhoang/otto/commit/d0fefa896807fda9c174e970aa6bb73bdba5a078))
+
 ## [0.36.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.0...otto-core-v0.36.1) (2026-07-20)
 
 

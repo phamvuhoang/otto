@@ -491,7 +491,9 @@ export function buildClaudeArgs(
     // custom agents or automatic repo customizations), disable slash commands
     // and Chrome, pin plan mode, and allow ONLY read tools — regardless of the
     // stage's declared permissionMode. Never `bypassPermissions`. An empty MCP
-    // config with strict enforcement blocks any repo-declared MCP server.
+    // server list with strict enforcement blocks any repo-declared MCP server.
+    // The config must carry an explicit (empty) `mcpServers` record — the CLI
+    // rejects a bare `{}` ("mcpServers: expected record, received undefined").
     args.push(
       "--safe-mode",
       "--disable-slash-commands",
@@ -503,7 +505,7 @@ export function buildClaudeArgs(
       "--no-session-persistence",
       "--strict-mcp-config",
       "--mcp-config",
-      "{}"
+      '{"mcpServers":{}}'
     );
   } else if (stage.permissionMode) {
     args.push("--permission-mode", stage.permissionMode);

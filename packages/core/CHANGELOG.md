@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.36.8](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.7...otto-core-v0.36.8) (2026-07-20)
+
+
+### Bug Fixes
+
+* **otto-review:** don't fail the review on a pipe in lens narration ([#231](https://github.com/phamvuhoang/otto/issues/231)) ([31bd824](https://github.com/phamvuhoang/otto/commit/31bd824db17eb24c21e2f8cfb391e2a4add08b5e))
+* **otto:** absorb coarse filesystem mtime granularity in the [#201](https://github.com/phamvuhoang/otto/issues/201) staleness check ([#233](https://github.com/phamvuhoang/otto/issues/233)) ([c25f2c2](https://github.com/phamvuhoang/otto/commit/c25f2c2c7864669ccc6204ab7105521e7d8a6d31))
+
 ## [0.36.7](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.6...otto-core-v0.36.7) (2026-07-20)
 
 

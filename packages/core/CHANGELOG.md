@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.5](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.4...otto-core-v0.36.5) (2026-07-20)
+
+
+### Bug Fixes
+
+* **otto-review:** render valid local output for eligibility-cancelled runs (no false STALE) ([#225](https://github.com/phamvuhoang/otto/issues/225)) ([7f96b41](https://github.com/phamvuhoang/otto/commit/7f96b41b3164e6f2d9c0bb06c867c75d4e353615))
+
 ## [0.36.4](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.3...otto-core-v0.36.4) (2026-07-20)
 
 

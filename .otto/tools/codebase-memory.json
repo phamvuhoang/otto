@@ -1,0 +1,59 @@
+{
+  "name": "codebase-memory",
+  "kind": "mcp",
+  "description": "Local code-knowledge graph via an Otto-owned MCP stdio child.",
+  "capabilities": [
+    "architecture",
+    "call-path",
+    "change-impact",
+    "symbol-search"
+  ],
+  "stages": ["plan", "implementer", "reviewer", "verifier"],
+  "command": "/Users/hoangpham/.local/bin/codebase-memory-mcp",
+  "env": [],
+  "networkDomains": [],
+  "writeRoots": [".otto/cbm-scratch"],
+  "secretRefs": [],
+  "timeoutMs": 120000,
+  "healthCheck": "/Users/hoangpham/.local/bin/codebase-memory-mcp --version",
+  "approvalActions": [],
+  "enabled": true,
+  "operations": [
+    {
+      "name": "index_repository",
+      "write": true
+    },
+    {
+      "name": "index_status",
+      "write": false
+    },
+    {
+      "name": "get_graph_schema",
+      "write": false
+    },
+    {
+      "name": "get_architecture",
+      "write": false
+    },
+    {
+      "name": "search_graph",
+      "write": false
+    },
+    {
+      "name": "trace_path",
+      "write": false
+    },
+    {
+      "name": "detect_changes",
+      "write": false
+    },
+    {
+      "name": "search_code",
+      "write": false
+    },
+    {
+      "name": "get_code_snippet",
+      "write": false
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "allowedWriteRoots": [".otto/cbm-scratch"],
+  "blockedCommands": [],
+  "allowedNetworkDomains": [],
+  "secretPatterns": [],
+  "highRiskGlobs": [],
+  "approvalRequiredActions": []
+}

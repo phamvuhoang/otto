@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.3](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.2...otto-core-v0.36.3) (2026-07-20)
+
+
+### Bug Fixes
+
+* **otto-review:** pass a valid empty MCP config to read-only Claude stages ([#219](https://github.com/phamvuhoang/otto/issues/219)) ([ed2279b](https://github.com/phamvuhoang/otto/commit/ed2279bf20e5970f51a0a3c12e6caf711f1edd40))
+
 ## [0.36.2](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.1...otto-core-v0.36.2) (2026-07-20)
 
 

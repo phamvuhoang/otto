@@ -242,6 +242,37 @@ describe("produced-this-run enforcement (issue #201)", () => {
     expect(out[0]?.beforePath).toBe(rel);
   });
 
+  it("bundles a scratch artifact whose mtime is floored just before the run start (coarse-FS granularity)", () => {
+    // Regression for a flaky CI failure: a container/overlay filesystem floors
+    // mtime to ~1s, so a screenshot written right after the run started reads a
+    // hair OLDER than the sub-ms startedAtMs. Within the granularity slop it must
+    // still be treated as produced-this-run and relocated.
+    const dir = ws();
+    const rel = scratchShot(dir, 1_000); // 1s "before" now — inside the 2s slop
+    const out = validateVerificationEvidence(
+      [entry({ method: "visual", artifactPath: rel })],
+      {
+        workspaceDir: dir,
+        runId: "r1",
+        startedAtMs: Date.now(), // run "started" now; file is ~1s older by mtime
+        ...noGit,
+      }
+    );
+    expect(out[0]?.artifactBundled).toBe(true);
+    expect(out[0]?.artifactExists).toBe(true);
+  });
+
+  it("still rejects a scratch artifact older than the run start beyond the slop", () => {
+    const dir = ws();
+    const rel = scratchShot(dir, 10_000); // 10s old — well past the 2s slop
+    const out = validateVerificationEvidence(
+      [entry({ method: "visual", artifactPath: rel })],
+      { workspaceDir: dir, runId: "r1", startedAtMs: Date.now(), ...noGit }
+    );
+    expect(out[0]?.artifactBundled).toBe(false);
+    expect(out[0]?.artifactPath).toBe(rel);
+  });
+
   it("without startedAtMs keeps the pre-#201 behavior (no mtime check)", () => {
     const dir = ws();
     const rel = scratchShot(dir, 60_000);

@@ -35,6 +35,16 @@ import {
 const SHA_RE = /^[0-9a-f]{7,40}$/i;
 const FILE_LINE_RE = /^(.+?):(\d+)(?:-(\d+))?$/;
 
+/** Tolerance absorbed into the "produced this run" (#201) mtime check. A file's
+ *  stored mtime can be FLOORED below its true write time by the filesystem's
+ *  timestamp granularity — commonly 1s on container overlay/tmpfs, up to 2s on
+ *  FAT — so a screenshot written just after the run started can appear a hair
+ *  OLDER than the sub-millisecond `startedAtMs` and be wrongly judged stale
+ *  (a flaky CI failure that never reproduces on fine-grained APFS). A file from a
+ *  genuinely PRIOR run is older by the whole run duration (many seconds), so a 2s
+ *  slop closes the granularity gap without weakening the prior-run guard. */
+const MTIME_GRANULARITY_SLOP_MS = 2_000;
+
 export type EvidenceDeps = {
   /** Whether a commit SHA exists in the repo (e.g. `git.commitExists(workspaceDir, …)`). */
   commitExists: (sha: string) => boolean;
@@ -159,7 +169,9 @@ export function validateVerificationEvidence(
       return false; // not a scratch file — durable references have no run age
     }
     try {
-      return statSync(real).mtimeMs < startedAtMs;
+      // Slop absorbs coarse filesystem mtime granularity (see the constant) so a
+      // file written just after the run start is never mistaken for a prior run's.
+      return statSync(real).mtimeMs < startedAtMs - MTIME_GRANULARITY_SLOP_MS;
     } catch {
       return true; // unreadable scratch file cannot prove anything
     }

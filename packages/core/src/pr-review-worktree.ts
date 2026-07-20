@@ -11,8 +11,12 @@
  *     temp refs in ONE `git fetch`, using a STRICT literal-argv runner that
  *     never swallows a failure and never lets an attacker-controlled ref name be
  *     shell-evaluated.
- *  2. Verifies the fetched object IDs EQUAL the adapter's `baseSha`/`headSha`,
- *     failing closed BEFORE any worktree is created if either differs.
+ *  2. Verifies the fetched `refs/pull/<n>/head` object EQUALS the adapter's
+ *     `headSha` (a moved head is a superseded revision) and PINS the base ref to
+ *     the adapter's exact recorded `baseSha` — the stable base snapshot GitHub
+ *     diffs against, NOT the live branch tip, which legitimately advances while a
+ *     PR is open. It fails closed BEFORE any worktree is created if the head
+ *     differs or `baseSha` is no longer reachable on the base branch.
  *  3. Creates a DISPOSABLE detached worktree at the verified head SHA — the
  *     operator's branch and HEAD never move.
  *  4. Writes three artifacts under `<worktree>/.otto-tmp/pr-review/`: the exact
@@ -445,29 +449,65 @@ export function createPullRequestWorktree(opts: {
       "git fetch"
     );
 
-    // --- Verify fetched object IDs EQUAL the adapter SHAs (fail-closed). ---
-    const fetchedBase = runGit(
-      run,
-      ["rev-parse", baseRef],
-      workspaceDir,
-      "git rev-parse base ref"
-    );
+    // --- HEAD gate is UNCHANGED: the fetched `refs/pull/<n>/head` object MUST
+    //     EQUAL the adapter's headSha, fail-closed. A moved head is a genuinely
+    //     superseded/new revision, so this exact-match gate stays. ---
     const fetchedHead = runGit(
       run,
       ["rev-parse", headRef],
       workspaceDir,
       "git rev-parse head ref"
     );
-    if (fetchedBase !== revision.baseSha) {
-      throw new PullRequestWorktreeError(
-        `fetched base ${fetchedBase} does not equal adapter baseSha ${revision.baseSha}`
-      );
-    }
     if (fetchedHead !== revision.headSha) {
       throw new PullRequestWorktreeError(
         `fetched head ${fetchedHead} does not equal adapter headSha ${revision.headSha}`
       );
     }
+
+    // --- BASE is PINNED to the exact recorded baseSha (gh `baseRefOid`), a
+    //     STABLE snapshot of the PR's base — NOT the live branch tip. The base
+    //     branch legitimately advances after a PR is opened, so the fetched tip
+    //     will not equal baseSha; requiring equality broke review on every active
+    //     repo. Instead require baseSha to be PRESENT after the fetch (it is an
+    //     ancestor of the advanced tip, brought in with the branch history) and
+    //     point <baseRef> at that EXACT object, so the review diffs precisely the
+    //     base GitHub recorded. This is stricter than trusting a branch tip. ---
+    const baseShaPresent = (): boolean => {
+      try {
+        run(
+          ["rev-parse", "--verify", "--quiet", `${revision.baseSha}^{commit}`],
+          workspaceDir
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (!baseShaPresent()) {
+      // Edge case: the base branch was force-pushed and baseSha is orphaned (not
+      // an ancestor of the new tip). Attempt a direct object fetch — GitHub
+      // serves a still-reachable SHA. NEVER fall back to the live branch tip,
+      // which would silently review against the wrong base.
+      try {
+        run(["fetch", "--no-tags", "origin", revision.baseSha], workspaceDir);
+      } catch {
+        // best-effort; the re-check below yields the actionable error.
+      }
+      if (!baseShaPresent()) {
+        throw new PullRequestWorktreeError(
+          `base commit ${revision.baseSha} is no longer reachable on ${revision.baseRefName}; ` +
+            `the base branch may have been force-pushed — reopen/rebase the PR`
+        );
+      }
+    }
+    // Pin <baseRef> at the EXACT recorded baseSha, overwriting the fetched tip.
+    // `rev-parse <baseRef>` is now guaranteed to equal baseSha.
+    runGit(
+      run,
+      ["update-ref", baseRef, revision.baseSha],
+      workspaceDir,
+      "git update-ref base ref"
+    );
 
     // --- Disposable detached worktree at the VERIFIED head SHA. ---
     runGit(

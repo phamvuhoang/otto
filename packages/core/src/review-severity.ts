@@ -172,8 +172,9 @@ export function findingToWire(f: Finding): string {
 
 /** Parsed verifier verdicts, mapped back onto the candidate findings. `confirmed`
  *  is ranked (blocker first, stable within a tier); `rejected` keeps candidate
- *  order. `errors` is non-empty when ANY row is malformed, duplicated, unmatched,
- *  severity-mismatched, or when a candidate never received a verdict. */
+ *  order; a confirmed finding carries the verdict's severity (which the verifier
+ *  MAY downgrade). `errors` is non-empty when ANY row is malformed, duplicated,
+ *  unmatched, severity-UPGRADED, or when a candidate never received a verdict. */
 export type ReviewVerdictParse = {
   confirmed: Finding[];
   rejected: Finding[];
@@ -277,7 +278,8 @@ function locListsMatch(
  * candidates share one file+line-overlap. A single `none` line is the
  * empty-candidate signal. The parser is adversarial about the contract: it
  * records an error for a bad status token, a row with fewer than four fields, a
- * CONFIRMED severity that disagrees with the candidate, a row whose location
+ * CONFIRMED severity that UPGRADES the candidate (downgrades are allowed per the
+ * verify prompt, and the verdict's severity is carried onto the finding), a row whose location
  * matches no candidate, co-located candidates it cannot disambiguate, a second
  * row hitting an already-matched candidate, a `none` alongside real candidates,
  * and any candidate left without a verdict. Non-row commentary (e.g. a trailing
@@ -357,13 +359,18 @@ export function parseReviewVerdicts(
         errors.push(`missing/invalid confirmed severity: ${statusField}`);
         continue;
       }
-      if (sev !== candidate.severity) {
+      // The verify prompt permits DOWNGRADING a real-but-smaller finding
+      // (verdict severity less-or-equally severe than the candidate). Only an
+      // UPGRADE — claiming a finding is more severe than the lens raised it —
+      // breaks the contract. A higher RANK number is a lower severity.
+      if (RANK[sev] < RANK[candidate.severity]) {
         errors.push(
-          `severity mismatch for ${parts[1]}: verdict ${sev} vs candidate ${candidate.severity}`
+          `severity upgrade for ${parts[1]}: verdict ${sev} exceeds candidate ${candidate.severity}`
         );
         continue;
       }
-      confirmed.push({ ...candidate });
+      // Carry the verdict's (possibly downgraded) severity onto the finding.
+      confirmed.push({ ...candidate, severity: sev });
     } else {
       rejected.push({ ...candidate });
     }

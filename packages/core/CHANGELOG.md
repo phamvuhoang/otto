@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.6](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.5...otto-core-v0.36.6) (2026-07-20)
+
+
+### Bug Fixes
+
+* **otto-review:** accept verifier severity downgrades instead of failing the review ([#227](https://github.com/phamvuhoang/otto/issues/227)) ([37aed4f](https://github.com/phamvuhoang/otto/commit/37aed4f436dce4f8ddeb0d27a4a33223d351e8ed))
+
 ## [0.36.5](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.4...otto-core-v0.36.5) (2026-07-20)
 
 

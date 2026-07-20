@@ -108,8 +108,18 @@ export type PublicationReconciliation =
 /**
  * Decide whether a completed analysis may still publish to the live PR. A moved
  * head takes priority (the analysis reviewed a now-stale revision → superseded);
- * otherwise a PR that is closed/merged, converted to draft, or has lost the
- * exact required label is cancelled. Anything else is publishable.
+ * otherwise a PR that is closed/merged or converted to draft is cancelled, and a
+ * PR that has LOST the exact required label mid-run is cancelled. Anything else
+ * is publishable.
+ *
+ * The label gate fires only on a genuine mid-run REMOVAL — the label was present
+ * when the analysis began and is gone now. A PR that never carried the label is
+ * NOT cancelled: the only way analysis runs on such a PR is an explicit one-shot
+ * `--pr` invocation that deliberately overrode the label filter, so the paid
+ * result is published (or, for text/markdown, rendered) rather than silently
+ * declined with a false "the required label was removed". The watch daemon only
+ * ever starts on a labelled PR, so `expected` always carries the label there and
+ * a real removal still cancels.
  */
 export function reconcilePublication(opts: {
   expected: PullRequestRevision;
@@ -144,7 +154,7 @@ export function reconcilePublication(opts: {
       reason: "the pull request was converted to draft",
     };
   }
-  if (reason === "label-missing") {
+  if (reason === "label-missing" && expected.labels.includes(label)) {
     return {
       publishable: false,
       status: "cancelled",

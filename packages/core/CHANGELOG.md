@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.0...otto-core-v0.36.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* **otto-review:** field fixes — label check, one-shot label gate, moved base branch ([#215](https://github.com/phamvuhoang/otto/issues/215)) ([150f011](https://github.com/phamvuhoang/otto/commit/150f01120b932664abe617744e55cf53956c8afe))
+
 ## [0.36.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.35.0...otto-core-v0.36.0) (2026-07-20)
 
 

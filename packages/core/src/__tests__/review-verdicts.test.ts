@@ -153,10 +153,20 @@ describe("parseReviewVerdicts", () => {
     expect(out.errors.some((e) => /status/i.test(e))).toBe(true);
   });
 
-  it("errors on a severity mismatch for a confirmed verdict", () => {
+  it("allows a downgrade and carries the verdict severity onto the finding", () => {
     const cands = [cand("major", "a.ts", "1", "c1")];
     const out = parseReviewVerdicts("CONFIRMED nit | a.ts:1 | c1 | w", cands);
-    expect(out.errors.some((e) => /severity/i.test(e))).toBe(true);
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed.map((f) => f.severity)).toEqual(["nit"]);
+  });
+
+  it("errors on a severity upgrade for a confirmed verdict", () => {
+    const cands = [cand("minor", "a.ts", "1", "c1")];
+    const out = parseReviewVerdicts(
+      "CONFIRMED blocker | a.ts:1 | c1 | w",
+      cands
+    );
+    expect(out.errors.some((e) => /upgrade/i.test(e))).toBe(true);
   });
 
   // Regression (real run): the verify LLM reproduces file:line exactly but
@@ -180,15 +190,15 @@ describe("parseReviewVerdicts", () => {
     ]);
   });
 
-  it("keeps the severity check even when the claim was reformatted", () => {
+  it("keeps the upgrade check even when the claim was reformatted", () => {
     const cands = [
-      cand("major", "src/a.ts", "268", "returns {success:true,skipped:true}"),
+      cand("minor", "src/a.ts", "268", "returns {success:true,skipped:true}"),
     ];
     const out = parseReviewVerdicts(
-      "CONFIRMED nit | src/a.ts:268 | returns `{success:true, skipped:true}` | w",
+      "CONFIRMED blocker | src/a.ts:268 | returns `{success:true, skipped:true}` | w",
       cands
     );
-    expect(out.errors.some((e) => /severity/i.test(e))).toBe(true);
+    expect(out.errors.some((e) => /upgrade/i.test(e))).toBe(true);
   });
 
   it("disambiguates two candidates at the same location by claim (no cross-match)", () => {

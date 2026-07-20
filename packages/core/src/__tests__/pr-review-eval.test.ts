@@ -1146,7 +1146,10 @@ describe("P32 adversarial evaluation fixtures", () => {
 
     // First attempt: comment succeeds; the formal-review write "crashes"
     // (a transient failure) right after.
-    const fake1 = makeFakeAnalyze({ confirmed: [finding()] });
+    const fake1 = makeFakeAnalyze({
+      confirmed: [finding()],
+      severity: { ...EMPTY_SEVERITY, major: 1 },
+    });
     const gh1 = {
       current: fx.revision,
       login: "otto-bot",

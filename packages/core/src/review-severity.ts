@@ -103,6 +103,50 @@ function overlaps(a?: string, b?: string): boolean {
 
 const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, " ").trim();
 
+/** Claim normalization for match/disambiguation: on top of `norm`, strips
+ *  markdown emphasis and inline-code backticks so an LLM that reformats a claim
+ *  (e.g. wraps a value in backticks) still compares equal. */
+const normClaim = (s: string): string => norm(s.replace(/[`*_~]/g, ""));
+
+/** Token-overlap count between two claims (after `normClaim`). Used only to pick
+ *  the closest of MULTIPLE candidates sharing one file+line-overlap. */
+function claimOverlapScore(a: string, b: string): number {
+  const ta = new Set(normClaim(a).split(" ").filter(Boolean));
+  const tb = new Set(normClaim(b).split(" ").filter(Boolean));
+  let n = 0;
+  for (const t of ta) if (tb.has(t)) n++;
+  return n;
+}
+
+/** Among co-located candidate indices, pick the one whose claim best matches the
+ *  verdict's claim: prefer an exact `normClaim` match, else the strictly-highest
+ *  token overlap. Returns -1 when genuinely ambiguous (tie or no overlap). */
+function pickByClaim(
+  indices: readonly number[],
+  candidates: readonly Finding[],
+  claim: string
+): number {
+  const target = normClaim(claim);
+  const exact = indices.filter(
+    (i) => normClaim(candidates[i].claim) === target
+  );
+  if (exact.length >= 1) return exact[0]; // co-located identical claims are interchangeable
+  let best = -1;
+  let bestScore = -1;
+  let tied = false;
+  for (const i of indices) {
+    const s = claimOverlapScore(candidates[i].claim, claim);
+    if (s > bestScore) {
+      bestScore = s;
+      best = i;
+      tied = false;
+    } else if (s === bestScore) {
+      tied = true;
+    }
+  }
+  return tied || bestScore <= 0 ? -1 : best;
+}
+
 /** Tally findings by severity and count how many nits were suppressed by the
  *  low-value suppression rule (i.e. how many nits would be dropped when a
  *  blocker or major is present). */
@@ -148,13 +192,17 @@ function parseVerdictLoc(fileRaw: string): { file: string; line?: string } {
  *   `CONFIRMED <severity> | file:line | claim | why`
  *   `REJECTED | file:line | claim | why`
  *
- * Every row must map back to exactly one candidate by normalized `file`, `line`
- * (range-overlap aware), and `claim`. A single `none` line is the empty-candidate
- * signal. The parser is adversarial about the contract: it records an error for a
- * bad status token, a row with fewer than four fields, a CONFIRMED severity that
- * disagrees with the candidate, a row matching no candidate, a second row hitting
- * an already-matched candidate, a `none` alongside real candidates, and any
- * candidate left without a verdict. Non-row commentary (e.g. a trailing
+ * Every row maps back to a candidate by LOCATION — normalized `file` plus
+ * range-overlap-aware `line` — because the verifier reliably reproduces
+ * `file:line` but reformats the free-text claim. A unique candidate at a location
+ * matches regardless of claim text; the claim only disambiguates when MULTIPLE
+ * candidates share one file+line-overlap. A single `none` line is the
+ * empty-candidate signal. The parser is adversarial about the contract: it
+ * records an error for a bad status token, a row with fewer than four fields, a
+ * CONFIRMED severity that disagrees with the candidate, a row whose location
+ * matches no candidate, co-located candidates it cannot disambiguate, a second
+ * row hitting an already-matched candidate, a `none` alongside real candidates,
+ * and any candidate left without a verdict. Non-row commentary (e.g. a trailing
  * `<verify>…</verify>` tally) is ignored so the verifier's chat reply parses too.
  */
 export function parseReviewVerdicts(
@@ -190,27 +238,35 @@ export function parseReviewVerdicts(
     }
     const { file, line: vline } = parseVerdictLoc(parts[1]);
     const claim = parts[2];
-    // Match to exactly one not-yet-matched candidate. `anyMatch` distinguishes a
-    // duplicate (a candidate matched twice) from an unmatched verdict.
-    let hitIndex = -1;
-    let anyMatch = false;
+    // Identity is LOCATION, not verbatim claim text: the model reproduces
+    // `file:line` exactly but reformats the free-text claim (backticks, spacing).
+    // Collect candidates at this location (file match + line overlap); `locAll`
+    // includes already-matched ones so we can tell a duplicate from an unmatched
+    // verdict and disambiguate co-located candidates.
+    const locAll: number[] = [];
     for (let i = 0; i < candidates.length; i++) {
       const c = candidates[i];
-      if (
-        norm(c.file) === norm(file) &&
-        norm(c.claim) === norm(claim) &&
-        overlaps(c.line, vline)
-      ) {
-        anyMatch = true;
-        if (!matched[i]) {
-          hitIndex = i;
-          break;
-        }
+      if (norm(c.file) === norm(file) && overlaps(c.line, vline))
+        locAll.push(i);
+    }
+    const locFree = locAll.filter((i) => !matched[i]);
+    let hitIndex = -1;
+    if (locFree.length === 1) {
+      // Unique candidate at this location → match regardless of claim text.
+      hitIndex = locFree[0];
+    } else if (locFree.length > 1) {
+      // Multiple candidates share the location → disambiguate by claim.
+      hitIndex = pickByClaim(locFree, candidates, claim);
+      if (hitIndex === -1) {
+        errors.push(
+          `ambiguous verdict (multiple candidates at ${parts[1]}): ${claim}`
+        );
+        continue;
       }
     }
     if (hitIndex === -1) {
       errors.push(
-        `${anyMatch ? "duplicate" : "unmatched"} verdict for: ${parts[1]} | ${claim}`
+        `${locAll.length > 0 ? "duplicate" : "unmatched"} verdict for: ${parts[1]} | ${claim}`
       );
       continue;
     }

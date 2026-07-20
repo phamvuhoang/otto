@@ -157,4 +157,72 @@ describe("parseReviewVerdicts", () => {
     const out = parseReviewVerdicts("CONFIRMED nit | a.ts:1 | c1 | w", cands);
     expect(out.errors.some((e) => /severity/i.test(e))).toBe(true);
   });
+
+  // Regression (real run): the verify LLM reproduces file:line exactly but
+  // REFORMATS the claim (adds backticks, changes spacing). A unique candidate at
+  // that location must still match — otherwise the whole strict review fails.
+  it("matches a verdict whose claim was reformatted (backticks/spacing) at a unique location", () => {
+    const cands = [
+      cand(
+        "major",
+        "src/a.ts",
+        "268",
+        "The new hash short-circuit returns {success:true,skipped:true} on a cache hit"
+      ),
+    ];
+    const text =
+      "CONFIRMED major | src/a.ts:268 | The new hash short-circuit returns `{success:true, skipped:true}` on a cache hit | still short-circuits";
+    const out = parseReviewVerdicts(text, cands);
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed.map((f) => f.claim)).toEqual([
+      "The new hash short-circuit returns {success:true,skipped:true} on a cache hit",
+    ]);
+  });
+
+  it("keeps the severity check even when the claim was reformatted", () => {
+    const cands = [
+      cand("major", "src/a.ts", "268", "returns {success:true,skipped:true}"),
+    ];
+    const out = parseReviewVerdicts(
+      "CONFIRMED nit | src/a.ts:268 | returns `{success:true, skipped:true}` | w",
+      cands
+    );
+    expect(out.errors.some((e) => /severity/i.test(e))).toBe(true);
+  });
+
+  it("disambiguates two candidates at the same location by claim (no cross-match)", () => {
+    const cands = [
+      cand("major", "src/a.ts", "268", "null dereference on user path"),
+      cand("minor", "src/a.ts", "268", "unused import of foo helper"),
+    ];
+    const text = [
+      "REJECTED | src/a.ts:268 | unused import of foo helper | actually used",
+      "CONFIRMED major | src/a.ts:268 | null dereference on user path | can be null",
+    ].join("\n");
+    const out = parseReviewVerdicts(text, cands);
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed.map((f) => f.claim)).toEqual([
+      "null dereference on user path",
+    ]);
+    expect(out.rejected.map((f) => f.claim)).toEqual([
+      "unused import of foo helper",
+    ]);
+  });
+
+  it("disambiguates two co-located candidates even when both claims are reformatted", () => {
+    const cands = [
+      cand("major", "src/a.ts", "268", "returns {success:true,skipped:true}"),
+      cand("minor", "src/a.ts", "268", "logger.debug left in hot path"),
+    ];
+    const text = [
+      "CONFIRMED major | src/a.ts:268 | returns `{success:true, skipped:true}` | confirmed",
+      "REJECTED | src/a.ts:268 | `logger.debug` left in hot path | fine",
+    ].join("\n");
+    const out = parseReviewVerdicts(text, cands);
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed.map((f) => f.severity)).toEqual(["major"]);
+    expect(out.rejected.map((f) => f.claim)).toEqual([
+      "logger.debug left in hot path",
+    ]);
+  });
 });

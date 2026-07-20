@@ -79,12 +79,17 @@ function defaultOriginUrl(workspaceDir: string): string | null {
 }
 
 /**
- * The SHARED remote review preflight run identically by a one-shot AND a watch
- * run before ANY polling / model work: GitHub viewer/auth, the exact-label
- * existence check, and the origin/repository match. Returns a single actionable
- * error line on the first failure, or `{ ok: true }` when every gate passes.
- * Factored so watch mode cannot silently start against an unauthenticated
- * client, a missing label, or the wrong repository origin.
+ * The SHARED remote review preflight run by both a one-shot AND a watch run
+ * before ANY polling / model work: GitHub viewer/auth and the origin/repository
+ * match always; the exact-label existence check ONLY when `requireLabel` is
+ * true. Returns a single actionable error line on the first failure, or
+ * `{ ok: true }` when every gate passes.
+ *
+ * `requireLabel` is true for watch (label filtering is watch's whole purpose —
+ * it must never silently start against a missing label) and false for a
+ * one-shot run (the user explicitly named the PR with `--pr`, so the
+ * configured label need not exist in the repo at all — see the
+ * one-shot-vs-watch split in {@link runReview}).
  */
 function runReviewRemotePreflight(opts: {
   github: Pick<GitHubPrClient, "viewer" | "labelExists">;
@@ -92,6 +97,7 @@ function runReviewRemotePreflight(opts: {
   repository: string;
   label: string;
   originUrl: string | null;
+  requireLabel: boolean;
 }): { ok: true } | { ok: false; message: string } {
   try {
     opts.github.viewer();
@@ -102,14 +108,16 @@ function runReviewRemotePreflight(opts: {
     };
   }
 
-  let labelExists = false;
-  try {
-    labelExists = opts.github.labelExists(opts.repository, opts.label);
-  } catch (err) {
-    return {
-      ok: false,
-      message: `GitHub label check failed: ${(err as Error).message}`,
-    };
+  let labelExists = true;
+  if (opts.requireLabel) {
+    try {
+      labelExists = opts.github.labelExists(opts.repository, opts.label);
+    } catch (err) {
+      return {
+        ok: false,
+        message: `GitHub label check failed: ${(err as Error).message}`,
+      };
+    }
   }
 
   const preflight = runReviewPreflight({
@@ -118,7 +126,7 @@ function runReviewRemotePreflight(opts: {
     label: opts.label,
     originUrl: opts.originUrl,
     labelExists,
-  });
+  }).filter((r) => opts.requireLabel || r.label !== "review label");
   const failed = preflight.find((r) => !r.ok);
   if (failed)
     return { ok: false, message: `preflight failed: ${failed.detail}` };
@@ -262,6 +270,7 @@ export async function runReview(
       repository: config.repository,
       label: config.label,
       originUrl: watchOriginUrl,
+      requireLabel: true,
     });
     if (!watchPreflight.ok) {
       deps.stderr(`${watchPreflight.message}\n`);
@@ -297,8 +306,12 @@ export async function runReview(
   // Real run: remote + input preflight through the same client before any model.
   const github = deps.createGithub({ cwd: workspaceDir });
 
-  // The SHARED remote preflight (viewer/auth + exact-label + origin) — the SAME
-  // checks watch runs before polling. Fails closed with a clean one-line error.
+  // The SHARED remote preflight (viewer/auth + origin) — the SAME auth/origin
+  // checks watch runs before polling. The exact-label existence check is
+  // SKIPPED here: the user explicitly named this PR with `--pr`, so unlike
+  // watch (whose whole purpose is label-based filtering), a one-shot run does
+  // not require the configured label to exist in the repo at all. Fails
+  // closed with a clean one-line error.
   const originUrl = deps.originUrl(workspaceDir);
   const preflight = runReviewRemotePreflight({
     github,
@@ -306,6 +319,7 @@ export async function runReview(
     repository: config.repository,
     label: config.label,
     originUrl,
+    requireLabel: false,
   });
   if (!preflight.ok) {
     deps.stderr(`${preflight.message}\n`);
@@ -341,12 +355,15 @@ export async function runReview(
     return deps.exit(1);
   }
 
-  // Eligibility gate BEFORE the (paid) pipeline: a closed/draft/unlabelled PR
-  // is never claimed, worktree'd, or model-analyzed for a one-shot run. Watch
-  // mode already filters eligibility on its own poll loop, so this check is
-  // one-shot only.
+  // Eligibility gate BEFORE the (paid) pipeline: a closed/draft PR is never
+  // claimed, worktree'd, or model-analyzed for a one-shot run. Watch mode
+  // already filters eligibility (including the label) on its own poll loop,
+  // so this check is one-shot only. UNLIKE watch, a one-shot run never
+  // declines on "label-missing" — the user explicitly named this PR with
+  // `--pr`, so it is reviewed regardless of label; only closed/draft still
+  // block.
   const ineligible = ineligibleReason(revision, config.label);
-  if (ineligible) {
+  if (ineligible && ineligible !== "label-missing") {
     deps.stderr(
       `PR ${config.repository}#${pullRequest} is not eligible for review: ${ineligible}\n`
     );

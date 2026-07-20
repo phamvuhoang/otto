@@ -584,6 +584,11 @@ export function createGitHubPrClient(opts: {
           "--json",
           "name",
         ]);
+        // `gh label list --search <name>` prints EMPTY stdout (exit 0, zero
+        // bytes) — NOT `[]` — when nothing matches. Treat that as "no labels"
+        // here (scoped to this parse only) rather than letting `JSON.parse("")`
+        // throw and get misclassified as `malformed`.
+        if (out.trim().length === 0) return false;
         const json = parseJson(out);
         if (!Array.isArray(json)) malformed("label list JSON", "<root>");
         return (json as unknown[]).some((item) => {

@@ -493,17 +493,31 @@ describe("runReview", () => {
       expect(err.join("")).toMatch(/closed/);
     });
 
-    it("an unlabelled PR is never analyzed: exits 1 before runOne, naming the reason", async () => {
+    it("a one-shot review proceeds for an UNLABELLED open PR — the user explicitly named the PR, so the label requirement is relaxed", async () => {
       const { deps, github, runOne } = makeDeps();
       (github.getPullRequest as ReturnType<typeof vi.fn>).mockReturnValue({
         ...revision,
         labels: [],
       });
       await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
-      expect(runOne).not.toHaveBeenCalled();
-      expect(exitCode).toBe(1);
-      expect(err.join("")).toContain("acme/widget#7");
-      expect(err.join("")).toMatch(/label/);
+      expect(runOne).toHaveBeenCalledTimes(1);
+      expect(exitCode).toBeNull();
+    });
+
+    it("a one-shot review does NOT preflight-check that the label exists in the repo — labelExists is never called", async () => {
+      const { deps, github, runOne } = makeDeps();
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(github.labelExists).not.toHaveBeenCalled();
+      expect(runOne).toHaveBeenCalledTimes(1);
+      expect(exitCode).toBeNull();
+    });
+
+    it("a one-shot review proceeds even when labelExists would report the label missing (it is never consulted)", async () => {
+      const { deps, github, runOne } = makeDeps();
+      github.labelExists.mockReturnValue(false);
+      await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+      expect(runOne).toHaveBeenCalledTimes(1);
+      expect(exitCode).toBeNull();
     });
 
     it("an eligible PR (open, non-draft, labelled) still runs the pipeline", async () => {

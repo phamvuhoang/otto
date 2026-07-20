@@ -326,6 +326,51 @@ describe("createGitHubPrClient", () => {
       const client = createGitHubPrClient({ cwd: "/repo", run });
       expect(client.labelExists("acme/web", "otto-review")).toBe(false);
     });
+
+    it("returns false (not a throw) when gh returns EMPTY stdout for --search with no match — gh's real behavior, NOT `[]`", () => {
+      const { run } = recordingRunner(() => "");
+      const client = createGitHubPrClient({ cwd: "/repo", run });
+      expect(client.labelExists("acme/web", "otto-review")).toBe(false);
+    });
+
+    it("returns false when gh returns whitespace-only stdout", () => {
+      const { run } = recordingRunner(() => "\n  \n");
+      const client = createGitHubPrClient({ cwd: "/repo", run });
+      expect(client.labelExists("acme/web", "otto-review")).toBe(false);
+    });
+
+    it("still classifies a genuine malformed (non-empty, invalid JSON) gh response as `malformed`", () => {
+      const { run } = recordingRunner(() => "{not json");
+      const client = createGitHubPrClient({ cwd: "/repo", run });
+      expect(() => client.labelExists("acme/web", "otto-review")).toThrow(
+        GitHubPrError
+      );
+      try {
+        client.labelExists("acme/web", "otto-review");
+        throw new Error("expected throw");
+      } catch (e) {
+        expect(e).toBeInstanceOf(GitHubPrError);
+        expect((e as GitHubPrError).kind).toBe("malformed");
+      }
+    });
+
+    it("still classifies a genuine gh exec failure (thrown error) as before", () => {
+      const run: GhRunner = () => {
+        const err = new Error("HTTP 401: Bad credentials") as Error & {
+          stderr?: string;
+        };
+        err.stderr = "";
+        throw err;
+      };
+      const client = createGitHubPrClient({ cwd: "/repo", run });
+      try {
+        client.labelExists("acme/web", "otto-review");
+        throw new Error("expected throw");
+      } catch (e) {
+        expect(e).toBeInstanceOf(GitHubPrError);
+        expect((e as GitHubPrError).kind).toBe("auth");
+      }
+    });
   });
 
   describe("pagination flattening", () => {

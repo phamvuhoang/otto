@@ -71,7 +71,7 @@ function makeRevision(
 
 function setupFixture(
   reviewKind: "prompt" | "none" = "prompt",
-  opts: { headTrailingWs?: boolean } = {}
+  opts: { headTrailingWs?: boolean; moveBase?: "advance" | "orphan" } = {}
 ): Fixture {
   const cleanupDirs: string[] = [];
   const mk = (prefix: string): string => {
@@ -115,6 +115,20 @@ function setupFixture(
   g(seedDir, "commit", "-qm", "head");
   const headSha = g(seedDir, "rev-parse", "HEAD");
   g(seedDir, "push", "-q", "origin", "HEAD:refs/pull/7/head");
+
+  // Optionally move the base branch AFTER the PR's base was recorded (baseSha).
+  // "advance": the branch tip moves forward to a new commit B2 (a child of the
+  // recorded base B1) — the common, healthy case where main gets more commits
+  // while a PR is open, so the LIVE tip no longer equals baseRefOid. baseSha
+  // stays an ANCESTOR of the tip, so it is fetched with the branch history.
+  if (opts.moveBase === "advance") {
+    g(seedDir, "checkout", "-q", baseSha);
+    writeFileSync(join(seedDir, "src", "other.ts"), "export const w = 1;\n");
+    g(seedDir, "add", ".");
+    g(seedDir, "commit", "-qm", "advance base past baseSha");
+    g(seedDir, "push", "-q", "origin", "HEAD:refs/heads/main");
+    g(seedDir, "checkout", "-q", headSha);
+  }
   g(originDir, "symbolic-ref", "HEAD", "refs/heads/main");
 
   const workspaceDir = mk("otto-ws-");
@@ -204,6 +218,167 @@ describe("createPullRequestWorktree", () => {
       expect(g(fx.workspaceDir, "rev-parse", wt.headRef)).toBe(fx.headSha);
     } finally {
       wt.cleanup();
+    }
+  });
+
+  it("pins the base to the recorded baseSha even after the base branch advances past it", () => {
+    // Regression: the base branch moved forward (tip B2 != recorded baseSha B1)
+    // while the PR was open. baseSha (gh baseRefOid) is the PR's RECORDED base,
+    // not the live tip. The old code fetched the tip and required it to equal
+    // baseSha, which failed on every active repo. It must now SUCCEED: baseRef
+    // is pinned to the exact recorded baseSha and the diff is baseSha...head.
+    const moved = setupFixture("prompt", { moveBase: "advance" });
+    try {
+      // The live origin base tip really has advanced past the recorded baseSha.
+      const liveTip = g(
+        moved.workspaceDir,
+        "rev-parse",
+        "refs/remotes/origin/main"
+      );
+      expect(liveTip).not.toBe(moved.baseSha);
+
+      const wt = createPullRequestWorktree({
+        workspaceDir: moved.workspaceDir,
+        runId: moved.runId,
+        revision: moved.revision,
+        reviewInput: moved.reviewInput,
+      });
+      try {
+        // baseRef resolves to the EXACT recorded baseSha (B1), not the live tip.
+        expect(g(moved.workspaceDir, "rev-parse", wt.baseRef)).toBe(
+          moved.baseSha
+        );
+        expect(g(moved.workspaceDir, "rev-parse", wt.headRef)).toBe(
+          moved.headSha
+        );
+        // Detached worktree at the exact head.
+        expect(g(wt.dir, "rev-parse", "HEAD")).toBe(moved.headSha);
+        // Diff is baseSha...head: it contains the head's app.ts change but NOT
+        // the advanced base's `other.ts` (which lives only on the moved tip).
+        expect(wt.diffText).toContain("export const v = 2;");
+        expect(wt.diffText).not.toContain("export const w = 1;");
+        const expected = execFileSync(
+          "git",
+          [
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--unified=0",
+            "--no-ext-diff",
+            "--binary",
+            "--no-renames",
+            `${moved.baseSha}...${moved.headSha}`,
+          ],
+          { cwd: moved.workspaceDir, encoding: "utf8" }
+        );
+        expect(wt.diffText).toBe(expected);
+      } finally {
+        wt.cleanup();
+      }
+    } finally {
+      for (const d of moved.cleanupDirs)
+        rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("fails with an actionable error when the recorded baseSha is orphaned (base force-pushed, unreachable)", () => {
+    // Build a repo where baseSha (B1) is NOT an ancestor of the PR head and the
+    // base branch is force-pushed to an unrelated root, so B1 becomes orphaned:
+    // it is reachable from no ref, so neither the branch-history fetch nor a
+    // direct object fetch can obtain it in the local bare-origin harness. The
+    // fix must fail closed with a clear, actionable message — never silently
+    // review against the live tip.
+    const cleanupDirs: string[] = [];
+    const mk = (prefix: string): string => {
+      const d = mkdtempSync(join(tmpdir(), prefix));
+      cleanupDirs.push(d);
+      return d;
+    };
+    try {
+      const originDir = mk("otto-orphan-origin-");
+      g(originDir, "init", "--bare", "-q");
+
+      const seedDir = mk("otto-orphan-seed-");
+      g(seedDir, "init", "-q");
+      g(seedDir, "symbolic-ref", "HEAD", "refs/heads/main");
+      g(seedDir, "config", "user.email", "t@t");
+      g(seedDir, "config", "user.name", "t");
+      g(seedDir, "remote", "add", "origin", originDir);
+
+      // Recorded base B1 on main.
+      writeFileSync(join(seedDir, "AGENTS.md"), "BASE policy\n");
+      writeFileSync(join(seedDir, "file.ts"), "export const b = 1;\n");
+      g(seedDir, "add", ".");
+      g(seedDir, "commit", "-qm", "base B1");
+      const baseSha = g(seedDir, "rev-parse", "HEAD");
+      g(seedDir, "push", "-q", "origin", "HEAD:refs/heads/main");
+
+      // PR head on an UNRELATED root (does not descend from B1), pushed to
+      // refs/pull/7/head — so nothing keeps B1 reachable once main moves off it.
+      g(seedDir, "checkout", "-q", "--orphan", "prhead");
+      g(seedDir, "rm", "-rfq", ".");
+      writeFileSync(join(seedDir, "head.ts"), "export const h = 1;\n");
+      g(seedDir, "add", ".");
+      g(seedDir, "commit", "-qm", "unrelated head");
+      const headSha = g(seedDir, "rev-parse", "HEAD");
+      g(seedDir, "push", "-q", "origin", "HEAD:refs/pull/7/head");
+
+      // Force-push main to yet another unrelated root, orphaning B1 entirely.
+      g(seedDir, "checkout", "-q", "--orphan", "newmain");
+      g(seedDir, "rm", "-rfq", ".");
+      writeFileSync(join(seedDir, "new.ts"), "export const n = 1;\n");
+      g(seedDir, "add", ".");
+      g(seedDir, "commit", "-qm", "rewritten base");
+      g(seedDir, "push", "-qf", "origin", "HEAD:refs/heads/main");
+      g(originDir, "symbolic-ref", "HEAD", "refs/heads/main");
+      // Drop the loose B1 object from origin so it cannot be fetched by SHA.
+      execFileSync("git", ["gc", "--prune=now", "-q"], {
+        cwd: originDir,
+        stdio: "ignore",
+      });
+
+      const workspaceDir = mk("otto-orphan-ws-");
+      execFileSync("git", ["clone", "-q", originDir, workspaceDir], {
+        stdio: "ignore",
+      });
+      g(workspaceDir, "config", "user.email", "t@t");
+      g(workspaceDir, "config", "user.name", "t");
+
+      const runId = "run-orphan";
+      const resolved = resolveReviewInput({
+        workspaceDir,
+        repository: "acme/widget",
+        request: { kind: "none" },
+      });
+      const reviewInput = writeReviewInputArtifact({
+        workspaceDir,
+        runId,
+        input: resolved,
+      });
+      const revision = makeRevision({ number: 7, baseSha, headSha });
+
+      let err: unknown;
+      try {
+        createPullRequestWorktree({
+          workspaceDir,
+          runId,
+          revision,
+          reviewInput,
+        });
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(PullRequestWorktreeError);
+      expect((err as Error).message).toContain(baseSha);
+      expect((err as Error).message).toContain("force-pushed");
+      // No worktree was created.
+      expect(
+        existsSync(
+          join(workspaceDir, ".otto-tmp", "pr-review-worktrees", runId)
+        )
+      ).toBe(false);
+    } finally {
+      for (const d of cleanupDirs) rmSync(d, { recursive: true, force: true });
     }
   });
 

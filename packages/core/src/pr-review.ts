@@ -1874,18 +1874,37 @@ export async function runPullRequestReview(opts: {
             pubLease?.release();
           }
         }
-        // On a write-boundary supersession the comment was withheld and status is
-        // no longer "succeeded": surface the STALE copy instead of the fresh one.
+        // On a write-boundary supersession the comment was withheld and status
+        // is no longer "succeeded". Only a `superseded` (head advanced) render is
+        // genuinely stale; a `cancelled` run analyzed the CURRENT head (reconcile
+        // checks headSha first) so its local render stays VALID — surface it
+        // without a STALE marker. `supersededBy` is set by the write-boundary
+        // reconcile ONLY for `superseded`, so it distinguishes the two cases here
+        // (TS narrows `status` to "succeeded" inside this block; the closure
+        // reassignment is invisible to it).
         deps.stdout(
           renderReviewText(
-            status === "succeeded" ? canonical : { ...canonical, staleReason }
+            supersededBy !== undefined
+              ? { ...canonical, staleReason }
+              : canonical
           )
         );
       }
     } else {
-      // Superseded/cancelled: emit NO remote output; surface the stale copy.
-      if (requestedOutput === "markdown") deps.stdout(canonicalMarkdown);
-      else deps.stdout(renderReviewText(canonical));
+      // Superseded/cancelled: emit NO remote output. A `cancelled` run reflects
+      // the CURRENT head (reconcile checks headSha FIRST, so a moved head is
+      // `superseded`, not `cancelled`) — its local render is a VALID review that
+      // was simply not published, so it carries NO STALE marker. Only
+      // `superseded` (head advanced) is genuinely stale. The durable bundle copy
+      // (written above) keeps its own stale marking; this only fixes the stdout
+      // render the operator reads.
+      const localCanonical: CanonicalReview = {
+        ...canonical,
+        staleReason: status === "superseded" ? staleReason : undefined,
+      };
+      if (requestedOutput === "markdown")
+        deps.stdout(renderCanonicalReview(localCanonical));
+      else deps.stdout(renderReviewText(localCanonical));
     }
 
     // --github-review is an ADDITIONAL, INDEPENDENT receipt: a harness-owned

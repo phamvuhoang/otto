@@ -540,6 +540,40 @@ Permanent publication errors, including GitHub refusing self-approval, set
 bounded retry/backoff and `nextRetryAt`. A new head SHA or review-input
 fingerprint is independent of the prior permanent failure.
 
+**Final-audit remediation addendum (`996ef32`, see
+`docs/superpowers/plans/2026-07-19-pr-review-final-audit-remediation.md`):**
+the design above shipped with the composite lease as the ONLY lock guarding
+the shared summary comment. The final-audit remediation added a SECOND,
+PR-scoped publication lock (`acquirePublicationLease`, a persistent
+stable-inode `flock` on `.otto/review-state/github/<owner>/<repo>/<pr>/publication.lock`,
+keyed only by repository/PR — the same file for every head SHA and input
+fingerprint of that PR) because two DIFFERENT composite identities (distinct
+input fingerprints on the same PR) each hold an independent composite lease
+and can legitimately race to list/create/update the ONE shared summary
+comment. Acquisition order is fixed and global — composite lease FIRST
+(non-blocking; a busy identity is `skipped`), publication lease SECOND
+(BLOCKING; the second publisher waits for the first), and the publication
+lease is released immediately after that reconcile/write, never held across
+the independent `--github-review` formal-review write — so the two locks can
+never deadlock. The same remediation also made three other changes to this
+contract: (1) `readReviewAnalysisArtifact` and the remote-body envelope
+parsers strictly validate identity/schema/marker-position/diff-SHA-256/path
+integrity before ANY resume or lost-state recovery trusts persisted or remote
+evidence — invalid evidence is treated as absent and a fresh analysis runs,
+never trust-and-publish; (2) a prior `succeeded` state is terminal only when
+EVERY sink the CURRENT invocation requests already has a receipt (not merely
+"missing outputs" in the abstract) — a success missing a now-requested sink
+(e.g. a prior `--output text` run re-invoked with `--github-review`) resumes
+just that sink from validated analysis at zero additional model cost; and
+(3) `writeReviewState` is fail-closed — a durable-persistence failure raises
+`ReviewStatePersistenceError` instead of being swallowed, so a run never
+reports `succeeded` when its terminal state was not durably persisted, and
+`--watch` treats that error (plus a non-busy `ReviewLeaseError`, e.g. a
+missing/broken `fs-ext` or `ENOTSUP`) as fatal: attempt once, notify, exit —
+never spin forever. `--watch` also now runs the identical viewer/auth +
+exact-label + origin/repository preflight described above for one-shot
+BEFORE it starts polling, not per-poll.
+
 ## Safety and trust boundaries
 
 - PR title, body, diff, changed source, and selected review-input content are

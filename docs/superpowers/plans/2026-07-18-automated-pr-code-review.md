@@ -152,7 +152,7 @@ Cover:
 3. Exactly one of `--pr`/`--watch` and required `--repo`.
 4. Flag → env → `pullRequestReview` config → default precedence.
 5. One-shot default `text`; watch default `comment`; label default `otto-review`; interval default 300.
-6. `--output-file` only with `markdown`; positive interval/retries/budget; `--watch-interval` only with watch; `--detach` only with watch; `--log` only with detach; output enum validation.
+6. `--output-file` only with `markdown`; positive interval/budget, non-negative retries (`--max-retries 0` is a valid fail-fast value, per the final-audit remediation addendum after Step 5 below); `--watch-interval` only with watch; `--detach` only with watch; `--log` only with detach; output enum validation.
 7. Existing runtime flags parse through `parseAgentId`, `parseTokenMode`, and the compressor enum without accepting AFK-only flags.
 8. Exact env/config mapping: `OTTO_REVIEW_LABEL` ↔ `pullRequestReview.label`, `OTTO_REVIEW_SKILL` ↔ `pullRequestReview.skill`, and `OTTO_REVIEW_OUTPUT` ↔ `pullRequestReview.output`; `pullRequestReview.githubReview` is boolean and is overridden by the positive `--github-review` flag.
 9. `--github-review` is independent of the primary output: it does not implicitly change `text` to `comment`, and a false config value leaves it disabled.
@@ -231,6 +231,15 @@ git commit -m "feat(p32): define PR review domain and CLI contract"
 ```
 
 Expected: focused tests PASS; typecheck PASS.
+
+**Final-audit remediation addendum (`996ef32`):** `--max-retries 0` is a VALID
+fail-fast value (retries disabled) — `review-cli.ts` accepts any non-negative
+safe integer, matching the shared CLI contract; only a non-safe-integer
+(overflow) is rejected. `--watch-interval` (seconds) and `--cooldown`
+(milliseconds) are additionally validated as safe integers whose millisecond
+value fits Node's `setTimeout` range (`2^31 - 1` ms ≈ 24.8 days) — a value
+that would overflow it is rejected with an actionable error instead of being
+silently clamped by Node into 1ms hot polling.
 
 ---
 
@@ -1724,6 +1733,26 @@ git commit -m "feat(p32): persist composite PR review state"
 
 Expected: tests PASS.
 
+**Final-audit remediation addendum (`996ef32`, Tasks 1-3 of
+`docs/superpowers/plans/2026-07-19-pr-review-final-audit-remediation.md`):**
+`acquireReviewLease` above remains the ONLY lock for a run's own composite
+identity, but a SECOND lock — `acquirePublicationLease` — was added to
+`pr-review-state.ts` to serialize the ONE shared per-PR summary comment across
+DIFFERENT composite identities (distinct input fingerprints on the same PR),
+each of which holds its own independent, non-blocking composite lease and can
+otherwise race on the same summary comment's list→create/update. It is a
+persistent stable-inode `flock` on `.otto/review-state/github/<owner>/<repo>/<pr>/publication.lock`
+(keyed only by repository/PR), taken BLOCKING (not non-blocking) so the second
+publisher waits rather than skipping, and it is acquired SECOND — always AFTER
+the composite lease — and released immediately after the summary reconcile/
+write, never held across the independent `--github-review` formal-review
+write. The fixed composite-first/publication-second order is deadlock-free by
+construction. The same remediation also made `writeReviewState` fail-closed
+(a durable-write failure raises `ReviewStatePersistenceError` instead of being
+swallowed — see Task 12/13 below for the recovery/watch implications) and
+re-reads state UNDER the composite lease before making the authoritative
+terminal/resume/fresh decision, rather than trusting the pre-lock read.
+
 ---
 
 ## Task 12: State-aware output recovery and idempotent summary comments
@@ -1864,6 +1893,27 @@ git commit -m "feat(p32): publish idempotent PR summary comments"
 
 Expected: tests PASS; no live GitHub call.
 
+**Final-audit remediation addendum (`996ef32`):** step 6 above ("mark
+`succeeded` only when every configured … output has a receipt") is now keyed
+to the CURRENT invocation, not the original one — `currentRequiredSinks`
+derives the required sink set from `config.output` plus `config.githubReview`
+on THIS run, and `currentSinksComplete` checks the persisted receipts against
+that set. A prior `succeeded` run re-invoked with an additional sink (e.g.
+`--output text` re-run with `--github-review` added) is therefore NOT terminal
+— it resumes and publishes just the missing sink(s), reusing the validated
+analysis at zero additional model cost, while every already-satisfied receipt
+is left untouched. That reuse is gated by strict validation, not a cast:
+`readReviewAnalysisArtifact` re-parses `analysis.json` (schema `v2`) field by
+field — identity, enums, finding shapes, severity tally, diff artifact path,
+and the diff's SHA-256 digest — and every artifact read additionally checks
+run-root/same-inode/`O_NOFOLLOW` binding; the SAME strictness applies to a
+remote summary/formal-review body during lost-state recovery, via a
+canonical-envelope parser that requires each reserved marker at its fixed
+position and occurring exactly once (a model-authored `<!-- otto-review`
+sequence is escaped before render, so it can never forge one). Anything that
+fails validation is treated as absent — fresh analysis runs — never
+trust-and-publish.
+
 ---
 
 ## Task 13: Slice 2 — sequential labelled-PR watch daemon
@@ -1962,6 +2012,24 @@ git commit -m "feat(p32): watch labelled pull requests"
 ```
 
 Expected: watch tests PASS; print-config performs no write or model call.
+
+**Final-audit remediation addendum (`996ef32`):** `review-main.ts` now runs
+the SAME `runReviewRemotePreflight` (viewer/auth + exact-label + origin) for
+BOTH the one-shot and `--watch` branches — for watch, this happens after any
+`--detach` fork-and-exit but strictly BEFORE the poll loop starts, so watch
+never begins polling/model work against bad auth, a missing label, or a
+mismatched origin. During polling, `pr-review-watch.ts`'s `isFatalDaemonError`
+distinguishes a FATAL platform/storage error — a `ReviewLeaseError` (missing/
+broken `fs-ext`, a non-busy flock failure such as `ENOTSUP`) or a
+`ReviewStatePersistenceError` — from an ordinary transient revision failure,
+by TYPE, never by message. A fatal error is rethrown to the outer daemon
+failure path: the daemon attempts that one revision, releases its keep-alive
+and signal listeners, notifies/reports once, and EXITS, instead of spinning
+forever on a fault that will recur every poll. An ordinary transient failure
+(a bad GitHub call, a model error) still logs, backs off one interval, and
+keeps polling. `review-main.ts` also catches a typed lease/storage failure out
+of the one-shot path and emits one actionable line at exit code 1, never a raw
+stack.
 
 ---
 

@@ -595,3 +595,18 @@ git commit -m "docs(p32): align evidence and lease contracts"
 - [ ] Reconcile every Critical/Important finding against source and focused tests.
 - [ ] Re-run any affected focused test after review fixes.
 - [ ] Re-run the full verification commands before reporting completion.
+
+## Follow-up (out of this round's scope)
+
+That independent adversarial review (the "final full-PR audit") found three
+further Critical/Important issues beyond this round's scope, closed by
+`docs/superpowers/plans/2026-07-19-pr-review-final-audit-remediation.md`
+(`996ef32`): a second PR-scoped publication flock (composite lease first,
+publication lease second, released immediately after the summary write)
+serializing the shared summary comment across distinct input fingerprints;
+strict schema/envelope validation of persisted analysis and remote bodies
+before any resume/recovery; current-invocation-scoped sink completion with
+cost-free missing-sink resume; a fail-closed `ReviewStatePersistenceError`;
+and a shared one-shot/`--watch` preflight with fatal-error exit instead of
+infinite polling. See `docs/CLI.md` and `docs/ARCHITECTURE.md` for the
+shipped, user-facing description.

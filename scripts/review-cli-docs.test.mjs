@@ -614,6 +614,178 @@ test("P32 source documents pin every shipped OS-flock lease property", () => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Final-audit remediation (996ef32): dual composite/publication flock,
+// strict resume/recovery validation, current-output completion, fail-closed
+// state, and watch preflight/fatal-error contracts.
+// ---------------------------------------------------------------------------
+
+test("docs document the composite lease and the separate PR-scoped publication lock with a fixed acquisition order", () => {
+  assert.ok(
+    /publication lock|publication lease|acquirePublicationLease/i.test(cli),
+    "docs/CLI.md never documents the separate publication lock"
+  );
+  assert.ok(
+    /publication\.lock/.test(cli),
+    "docs/CLI.md never names the publication.lock file"
+  );
+  assert.ok(
+    /composite-first\/publication-second|composite lease FIRST[\s\S]{0,80}publication lease SECOND/i.test(
+      cli
+    ),
+    "docs/CLI.md never states the fixed composite-first/publication-second acquisition order"
+  );
+  assert.ok(
+    /acquirePublicationLease/.test(architecture) &&
+      /composite-first\/publication-second|composite lease FIRST[\s\S]{0,80}publication lease SECOND/i.test(
+        architecture
+      ),
+    "docs/ARCHITECTURE.md never documents acquirePublicationLease and its fixed order relative to the composite lease"
+  );
+});
+
+test("docs document strict schema/envelope validation of persisted analysis and remote bodies before resume/recovery", () => {
+  assert.ok(
+    /schema `?v2`?|schema-v2|schemaVersion/i.test(all),
+    "docs never mention the analysis.json schema-v2 validation"
+  );
+  assert.ok(
+    /SHA-256/.test(cli) && /diff/i.test(cli),
+    "docs/CLI.md never mentions diff SHA-256 integrity validation"
+  );
+  assert.ok(
+    /O_NOFOLLOW/.test(all),
+    "docs never mention the O_NOFOLLOW / same-inode artifact-path checks"
+  );
+  assert.ok(
+    /occurring \*\*exactly once\*\*|occur(?:ring|s)? exactly once|EXACTLY once/i.test(
+      cli + architecture
+    ),
+    "docs never state a reserved marker must occur exactly once before evidence is trusted"
+  );
+  assert.ok(
+    /HTML-escaped|escaped before render/i.test(cli + architecture),
+    "docs never state model-authored marker-prefix text is escaped so it can never forge a marker"
+  );
+});
+
+test("docs document current-output completion semantics and cost-free missing-sink resume", () => {
+  assert.ok(
+    /CURRENT invocation/i.test(cli),
+    "docs/CLI.md never scopes sink completion to the CURRENT invocation"
+  );
+  assert.ok(
+    /zero additional model cost|no additional model cost|at zero cost/i.test(
+      all
+    ),
+    "docs never state a missing-sink resume costs zero additional model spend"
+  );
+  assert.ok(
+    /currentRequiredSinks|currentSinksComplete/.test(architecture),
+    "docs/ARCHITECTURE.md never names the current-sink completion functions"
+  );
+});
+
+test("docs document fail-closed durable state persistence", () => {
+  assert.ok(
+    /ReviewStatePersistenceError/.test(all),
+    "docs never mention ReviewStatePersistenceError"
+  );
+  assert.ok(
+    /fail-closed|FAIL-CLOSED|fails? the run closed/i.test(cli + architecture),
+    "docs never describe review state persistence as fail-closed"
+  );
+  assert.ok(
+    /never reports? .?succeeded.? |never returns? success|never report(?:s|ed)? a run `?succeeded`?/i.test(
+      cli + architecture
+    ),
+    "docs never state a run never reports succeeded when its terminal state was not durably persisted"
+  );
+});
+
+test("docs document the shared one-shot/watch preflight and fatal platform/storage error handling", () => {
+  assert.ok(
+    /identical .*preflight|SAME .*preflight|same one-shot preflight/i.test(cli),
+    "docs/CLI.md never states watch runs the identical preflight as one-shot before polling"
+  );
+  assert.ok(
+    /ReviewLeaseError/.test(architecture),
+    "docs/ARCHITECTURE.md never mentions ReviewLeaseError"
+  );
+  assert.ok(
+    /ENOTSUP/.test(cli + architecture),
+    "docs never mention ENOTSUP as a fatal non-busy flock failure"
+  );
+  assert.ok(
+    /EXITS?\b|exits? rather than spinning|attempts? (?:it )?once/i.test(
+      cli + architecture
+    ),
+    "docs never state watch attempts a fatal error once and exits rather than polling forever"
+  );
+});
+
+test("docs document --max-retries 0 as valid fail-fast and timer-overflow rejection for watch-interval/cooldown", () => {
+  assert.ok(
+    /--max-retries 0/.test(cli) && /fail-fast/i.test(cli),
+    "docs/CLI.md never documents --max-retries 0 as a valid fail-fast value"
+  );
+  assert.ok(
+    /overflow/i.test(cli) && /setTimeout/i.test(cli),
+    "docs/CLI.md never documents timer-overflow rejection for --watch-interval/--cooldown"
+  );
+});
+
+test("original P32 spec/plan and the evidence-hardening spec/plan record the final-audit remediation follow-up", () => {
+  const finalAuditRemediation = /final-audit[- ]remediation/i;
+  assert.ok(
+    finalAuditRemediation.test(p32Spec),
+    "P32 design doc never records the final-audit remediation addendum"
+  );
+  assert.ok(
+    /acquirePublicationLease/.test(p32Spec) &&
+      /acquirePublicationLease/.test(p32Plan),
+    "P32 spec/plan never name acquirePublicationLease in the remediation addendum"
+  );
+  const hardeningSpec = readDoc(
+    "docs",
+    "superpowers",
+    "specs",
+    "2026-07-19-pr-review-evidence-state-hardening-design.md"
+  );
+  const hardeningPlan = readDoc(
+    "docs",
+    "superpowers",
+    "plans",
+    "2026-07-19-pr-review-evidence-state-hardening.md"
+  );
+  assert.ok(
+    finalAuditRemediation.test(hardeningSpec),
+    "evidence-hardening design doc never points to the later final-audit remediation"
+  );
+  assert.ok(
+    finalAuditRemediation.test(hardeningPlan),
+    "evidence-hardening plan doc never points to the later final-audit remediation"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Anti-regression: the specific stale wordings this round corrected must
+// never come back, even if an unrelated future edit touches these docs.
+// ---------------------------------------------------------------------------
+
+test("docs never regress to composite-only publication, best-effort state persistence, or shallow resume wording", () => {
+  const staleAbsences = [
+    /composite-only publication|publication is composite-only|composite lease alone (?:guards?|serializes?) publication/i,
+    /best-effort state (?:persistence|writes?)|state (?:persistence|writes?) (?:is|are) best-effort/i,
+    /shallow resume|resumes? shallow(?:ly)?/i,
+  ];
+  for (const stale of staleAbsences) {
+    assert.doesNotMatch(cli, stale);
+    assert.doesNotMatch(architecture, stale);
+    assert.doesNotMatch(readme, stale);
+  }
+});
+
 test("P32 Task 11 has balanced fences with supersession rendered as prose", () => {
   const task11 = sectionBetween(
     p32Plan,

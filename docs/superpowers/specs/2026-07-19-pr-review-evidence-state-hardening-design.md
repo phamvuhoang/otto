@@ -79,3 +79,20 @@ Focused review tests run after each fix. Completion requires `pnpm -r typecheck`
 - Redesigning publication markers or the client-side freshness contract.
 - Introducing per-invocation child manifests or a run-schema migration.
 - Changing normal successful review output.
+
+## Follow-up (out of this round's scope)
+
+The composite OS-flock lease and publication-marker contracts named as
+non-goals above were subsequently extended by the final-audit remediation
+round (`996ef32`,
+`docs/superpowers/plans/2026-07-19-pr-review-final-audit-remediation.md`):
+a second, PR-scoped `acquirePublicationLease` flock now serializes the shared
+summary comment across distinct input fingerprints (composite lease first,
+publication lease second, released immediately after the summary write);
+persisted analysis and remote bodies are strictly schema/envelope validated
+before any resume/recovery; a prior success is terminal only for the sinks
+the current invocation requests; `writeReviewState` is fail-closed
+(`ReviewStatePersistenceError`); and `--watch` runs the one-shot preflight
+before polling and exits on a fatal platform/storage error instead of
+retrying forever. See `docs/CLI.md` and `docs/ARCHITECTURE.md` for the
+shipped, user-facing description.

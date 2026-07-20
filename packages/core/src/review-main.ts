@@ -27,6 +27,11 @@ import { runPreflight, runReviewPreflight } from "./preflight.js";
 import { resolveReviewInput, ReviewInputError } from "./pr-review-input.js";
 import { ineligibleReason, runPullRequestReview } from "./pr-review.js";
 import { runPullRequestReviewWatch } from "./pr-review-watch.js";
+import {
+  ReviewLeaseError,
+  ReviewStatePersistenceError,
+} from "./pr-review-state.js";
+import type { GitHubPrClient } from "./github-pr.js";
 import { DEFAULT_MAX_RETRIES } from "./retry.js";
 import {
   formatReviewConfig,
@@ -71,6 +76,53 @@ function defaultOriginUrl(workspaceDir: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The SHARED remote review preflight run identically by a one-shot AND a watch
+ * run before ANY polling / model work: GitHub viewer/auth, the exact-label
+ * existence check, and the origin/repository match. Returns a single actionable
+ * error line on the first failure, or `{ ok: true }` when every gate passes.
+ * Factored so watch mode cannot silently start against an unauthenticated
+ * client, a missing label, or the wrong repository origin.
+ */
+function runReviewRemotePreflight(opts: {
+  github: Pick<GitHubPrClient, "viewer" | "labelExists">;
+  workspaceDir: string;
+  repository: string;
+  label: string;
+  originUrl: string | null;
+}): { ok: true } | { ok: false; message: string } {
+  try {
+    opts.github.viewer();
+  } catch (err) {
+    return {
+      ok: false,
+      message: `GitHub authentication failed: ${(err as Error).message}`,
+    };
+  }
+
+  let labelExists = false;
+  try {
+    labelExists = opts.github.labelExists(opts.repository, opts.label);
+  } catch (err) {
+    return {
+      ok: false,
+      message: `GitHub label check failed: ${(err as Error).message}`,
+    };
+  }
+
+  const preflight = runReviewPreflight({
+    workspaceDir: opts.workspaceDir,
+    repository: opts.repository,
+    label: opts.label,
+    originUrl: opts.originUrl,
+    labelExists,
+  });
+  const failed = preflight.find((r) => !r.ok);
+  if (failed)
+    return { ok: false, message: `preflight failed: ${failed.detail}` };
+  return { ok: true };
 }
 
 export async function runReview(
@@ -197,6 +249,25 @@ export async function runReview(
         resolve(workspaceDir, ".otto-tmp", "logs", `review-${process.pid}.log`);
       deps.detach({ logPath, argv, binEntry: process.argv[1] });
     }
+
+    // SHARED preflight: watch runs the SAME viewer/auth + exact-label +
+    // origin/repository checks as a one-shot run, here AFTER any detached-child
+    // establishment and BEFORE the poll loop — so the daemon never starts
+    // polling/model work against a bad auth, missing label, or wrong origin.
+    const watchGithub = deps.createGithub({ cwd: workspaceDir });
+    const watchOriginUrl = deps.originUrl(workspaceDir);
+    const watchPreflight = runReviewRemotePreflight({
+      github: watchGithub,
+      workspaceDir,
+      repository: config.repository,
+      label: config.label,
+      originUrl: watchOriginUrl,
+    });
+    if (!watchPreflight.ok) {
+      deps.stderr(`${watchPreflight.message}\n`);
+      return deps.exit(1);
+    }
+
     await deps.runWatch({
       workspaceDir,
       packageDir,
@@ -226,33 +297,18 @@ export async function runReview(
   // Real run: remote + input preflight through the same client before any model.
   const github = deps.createGithub({ cwd: workspaceDir });
 
-  // Auth check (viewer) fails closed with a clean one-line error.
-  try {
-    github.viewer();
-  } catch (err) {
-    deps.stderr(`GitHub authentication failed: ${(err as Error).message}\n`);
-    return deps.exit(1);
-  }
-
-  let labelExists = false;
-  try {
-    labelExists = github.labelExists(config.repository, config.label);
-  } catch (err) {
-    deps.stderr(`GitHub label check failed: ${(err as Error).message}\n`);
-    return deps.exit(1);
-  }
-
+  // The SHARED remote preflight (viewer/auth + exact-label + origin) — the SAME
+  // checks watch runs before polling. Fails closed with a clean one-line error.
   const originUrl = deps.originUrl(workspaceDir);
-  const preflight = runReviewPreflight({
+  const preflight = runReviewRemotePreflight({
+    github,
     workspaceDir,
     repository: config.repository,
     label: config.label,
     originUrl,
-    labelExists,
   });
-  const failed = preflight.find((r) => !r.ok);
-  if (failed) {
-    deps.stderr(`preflight failed: ${failed.detail}\n`);
+  if (!preflight.ok) {
+    deps.stderr(`${preflight.message}\n`);
     return deps.exit(1);
   }
 
@@ -297,29 +353,47 @@ export async function runReview(
     return deps.exit(1);
   }
 
-  const result = await deps.runOne({
-    workspaceDir,
-    packageDir,
-    revision,
-    reviewInput,
-    config,
-    agentId: agent.id,
-    fallbackAgentId: fallback.agent?.id,
-    autoSwitchOnLimit: fallback.autoSwitch,
-    modelRouting: flags.modelRouting,
-    tierLadder,
-    tokenMode,
-    contextCompressor,
-    maxRetries: flags.maxRetries ?? DEFAULT_MAX_RETRIES,
-    cooldownMs: flags.cooldownMs ?? 0,
-    budgetUsd: flags.budget,
-    verbose: flags.verbose,
-    deps: {
-      github,
-      stdout: deps.stdout,
-      env: deps.env,
-    },
-  });
+  let result;
+  try {
+    result = await deps.runOne({
+      workspaceDir,
+      packageDir,
+      revision,
+      reviewInput,
+      config,
+      agentId: agent.id,
+      fallbackAgentId: fallback.agent?.id,
+      autoSwitchOnLimit: fallback.autoSwitch,
+      modelRouting: flags.modelRouting,
+      tierLadder,
+      tokenMode,
+      contextCompressor,
+      maxRetries: flags.maxRetries ?? DEFAULT_MAX_RETRIES,
+      cooldownMs: flags.cooldownMs ?? 0,
+      budgetUsd: flags.budget,
+      verbose: flags.verbose,
+      deps: {
+        github,
+        stdout: deps.stdout,
+        env: deps.env,
+      },
+    });
+  } catch (err) {
+    // Typed lease/storage/platform failures surface as ONE actionable line (no
+    // raw stack), exit 1: an unusable OS file lock ({@link ReviewLeaseError},
+    // e.g. missing/broken fs-ext or ENOTSUP) or a durable-state write failure
+    // ({@link ReviewStatePersistenceError}) means the review could not run
+    // safely — never a silent success.
+    if (
+      err instanceof ReviewLeaseError ||
+      err instanceof ReviewStatePersistenceError
+    ) {
+      deps.stderr(`review failed: ${err.message}\n`);
+      if (flags.notify) deps.notifyError(err.message);
+      return deps.exit(1);
+    }
+    throw err;
+  }
 
   // Notification is advisory — it never changes the run result.
   if (flags.notify) {

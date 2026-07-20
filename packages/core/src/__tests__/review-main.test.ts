@@ -7,6 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runReview, type ReviewMainDeps } from "../review-main.js";
 import { ReviewInputError } from "../pr-review-input.js";
+import {
+  ReviewLeaseError,
+  ReviewStatePersistenceError,
+} from "../pr-review-state.js";
 import type { PullRequestRevision } from "../pr-review.js";
 import type { PullRequestReviewRunResult } from "../pr-review.js";
 
@@ -523,5 +527,78 @@ describe("runReview", () => {
       readFileSync(join(REPO_ROOT, "apps", "cli", "package.json"), "utf8")
     );
     expect(pkg.bin["otto-review"]).toBe("./bin/otto-review.js");
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 3 — shared preflight for watch + typed one-shot error surfacing.
+  // -------------------------------------------------------------------------
+
+  it("--watch runs the SAME viewer/auth preflight as one-shot BEFORE polling; a failed viewer never starts the daemon", async () => {
+    const { deps, github, runOne } = makeDeps();
+    const runWatch = deps.runWatch as ReturnType<typeof vi.fn>;
+    github.viewer.mockImplementation(() => {
+      throw new Error("bad credentials");
+    });
+    await runReview(["--repo", "acme/widget", "--watch"], { deps });
+    expect(runWatch).not.toHaveBeenCalled();
+    expect(runOne).not.toHaveBeenCalled();
+    expect(exitCode).toBe(1);
+    expect(err.join("")).toMatch(/authentication failed/i);
+  });
+
+  it("--watch runs the exact-label + origin preflight; a missing label never starts the daemon", async () => {
+    const { deps, github } = makeDeps();
+    const runWatch = deps.runWatch as ReturnType<typeof vi.fn>;
+    github.labelExists.mockReturnValue(false);
+    await runReview(["--repo", "acme/widget", "--watch"], { deps });
+    expect(github.labelExists).toHaveBeenCalledWith(
+      "acme/widget",
+      "otto-review"
+    );
+    expect(runWatch).not.toHaveBeenCalled();
+    expect(exitCode).toBe(1);
+    expect(err.join("")).toMatch(/preflight failed/i);
+  });
+
+  it("--watch starts the daemon only AFTER the shared preflight passes", async () => {
+    const { deps, github } = makeDeps();
+    const runWatch = deps.runWatch as ReturnType<typeof vi.fn>;
+    await runReview(["--repo", "acme/widget", "--watch"], { deps });
+    expect(github.viewer).toHaveBeenCalled();
+    expect(github.labelExists).toHaveBeenCalledWith(
+      "acme/widget",
+      "otto-review"
+    );
+    expect(runWatch).toHaveBeenCalledTimes(1);
+    expect(exitCode).toBeNull();
+  });
+
+  it("a typed lease failure from a one-shot run surfaces ONE actionable line (no raw stack), exit 1", async () => {
+    const runOne = vi.fn(async () => {
+      throw new ReviewLeaseError(
+        "otto-review could not acquire its OS file lock (ENOTSUP)",
+        { code: "ENOTSUP" }
+      );
+    });
+    const { deps } = makeDeps({ runOne: runOne as never });
+    await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+    expect(exitCode).toBe(1);
+    const line = err.join("");
+    expect(line).toMatch(/review failed:/);
+    expect(line).toMatch(/ENOTSUP/);
+    // A single actionable line — never a multi-frame raw stack trace.
+    expect(line).not.toMatch(/\n\s+at /);
+  });
+
+  it("a typed durable-state failure from a one-shot run surfaces one line, exit 1", async () => {
+    const runOne = vi.fn(async () => {
+      throw new ReviewStatePersistenceError("durable state write failed", {
+        path: "/ws/.otto/review-state/x.json",
+      });
+    });
+    const { deps } = makeDeps({ runOne: runOne as never });
+    await runReview(["--repo", "acme/widget", "--pr", "7"], { deps });
+    expect(exitCode).toBe(1);
+    expect(err.join("")).toMatch(/review failed:.*durable state write failed/);
   });
 });

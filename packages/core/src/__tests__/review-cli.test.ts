@@ -164,8 +164,41 @@ describe("parseReviewFlags", () => {
     expect(() => parseReviewFlags(["--watch-interval", "0"])).toThrow();
   });
 
-  it("rejects a non-positive --max-retries", () => {
-    expect(() => parseReviewFlags(["--max-retries", "0"])).toThrow();
+  it("accepts --max-retries 0 as a valid fail-fast value (shared CLI contract)", () => {
+    // 0 disables retries — a valid non-negative value, matching how the other
+    // bins (cli-help.ts) treat --max-retries 0, not a parse error.
+    expect(parseReviewFlags(["--max-retries", "0"]).maxRetries).toBe(0);
+    expect(parseReviewFlags(["--max-retries", "3"]).maxRetries).toBe(3);
+  });
+
+  it("rejects an unsafe/overflow --max-retries instead of silently mangling it", () => {
+    // A value beyond Number.MAX_SAFE_INTEGER is not a safe integer — reject with
+    // an actionable flag error rather than letting it flow through as a bogus
+    // retry budget.
+    expect(() =>
+      parseReviewFlags(["--max-retries", "99999999999999999999"])
+    ).toThrow(/max-retries/);
+  });
+
+  it("rejects a timer-overflow --watch-interval (would clamp to hot polling)", () => {
+    // watchIntervalSec is fed to setTimeout as ms; a value whose ms exceeds
+    // Node's max timer delay must be rejected, never clamped into a hot poll.
+    expect(() =>
+      parseReviewFlags(["--watch", "--watch-interval", "9999999999"])
+    ).toThrow(/watch-interval/);
+    // A non-safe-integer seconds value is likewise rejected.
+    expect(() =>
+      parseReviewFlags(["--watch", "--watch-interval", "99999999999999999999"])
+    ).toThrow(/watch-interval/);
+  });
+
+  it("rejects a timer-overflow --cooldown (would clamp to hot looping)", () => {
+    expect(() => parseReviewFlags(["--cooldown", "9999999999999"])).toThrow(
+      /cooldown/
+    );
+    expect(() =>
+      parseReviewFlags(["--cooldown", "99999999999999999999"])
+    ).toThrow(/cooldown/);
   });
 
   it("rejects a non-positive --budget", () => {

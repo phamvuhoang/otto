@@ -721,3 +721,25 @@ describe("isStateRunnable", () => {
     expect(isStateRunnable(state, at(6))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// P32 Task 3 — public barrel package-shape: the typed platform/storage errors
+// must be reachable from the package root so callers can `instanceof`-branch.
+// ---------------------------------------------------------------------------
+
+describe("public barrel exports (package shape)", () => {
+  it("exports ReviewLeaseError and ReviewStatePersistenceError from the package root", async () => {
+    const barrel = await import("../index.js");
+    expect(typeof barrel.ReviewLeaseError).toBe("function");
+    expect(typeof barrel.ReviewStatePersistenceError).toBe("function");
+    // They construct and carry their typed fields.
+    const lease = new barrel.ReviewLeaseError("x", { code: "ENOTSUP" });
+    expect(lease).toBeInstanceOf(Error);
+    expect(lease.code).toBe("ENOTSUP");
+    const storage = new barrel.ReviewStatePersistenceError("y", {
+      path: "/p",
+    });
+    expect(storage).toBeInstanceOf(Error);
+    expect(storage.path).toBe("/p");
+  });
+});

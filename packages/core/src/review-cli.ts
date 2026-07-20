@@ -83,6 +83,15 @@ const PR_URL_RE =
   /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)(?:[/?#].*)?$/i;
 
 /**
+ * The largest delay Node's timer subsystem accepts before it silently CLAMPS to
+ * 1ms (`2^31 - 1` ms ≈ 24.8 days). A timer-backed CLI value (watch interval,
+ * cooldown) that exceeds this — or that is not a safe integer — must be REJECTED
+ * with an actionable flag error, never handed to `setTimeout` where the clamp
+ * would turn an intended long wait into hot polling.
+ */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/**
  * Normalize a `--pr` value to a positive PR number. Accepts a bare positive
  * integer (`[1-9]\d*`) or a GitHub PR URL. When `repository` (an `owner/name`
  * scope, e.g. the `--repo` value) is given and the input is a URL, the URL's
@@ -202,12 +211,21 @@ export function parseReviewFlags(argv: string[]): ReviewCliFlags {
       continue;
     }
     if (expectingWatchInterval) {
-      if (!/^\d+$/.test(a) || Number.parseInt(a, 10) <= 0) {
+      const n = Number.parseInt(a, 10);
+      if (!/^\d+$/.test(a) || !Number.isSafeInteger(n) || n <= 0) {
         throw new Error(
           `--watch-interval must be a positive integer (seconds), got: ${JSON.stringify(a)}`
         );
       }
-      watchIntervalSec = Number.parseInt(a, 10);
+      // The interval is fed to setTimeout as milliseconds; reject a value whose
+      // ms would exceed Node's max timer delay (it would otherwise clamp to 1ms
+      // and hot-poll) instead of letting Node silently mangle it.
+      if (n * 1000 > MAX_TIMER_DELAY_MS) {
+        throw new Error(
+          `--watch-interval is too large (max ${Math.floor(MAX_TIMER_DELAY_MS / 1000)} seconds), got: ${JSON.stringify(a)}`
+        );
+      }
+      watchIntervalSec = n;
       expectingWatchInterval = false;
       continue;
     }
@@ -288,22 +306,34 @@ export function parseReviewFlags(argv: string[]): ReviewCliFlags {
       continue;
     }
     if (expectingCooldown) {
-      if (!/^\d+$/.test(a)) {
+      const n = Number.parseInt(a, 10);
+      if (!/^\d+$/.test(a) || !Number.isSafeInteger(n)) {
         throw new Error(
           `--cooldown must be a non-negative integer (ms), got: ${JSON.stringify(a)}`
         );
       }
-      cooldownMs = Number.parseInt(a, 10);
+      // The cooldown is a setTimeout delay; reject an overflow that Node would
+      // clamp to 1ms rather than letting it hot-loop.
+      if (n > MAX_TIMER_DELAY_MS) {
+        throw new Error(
+          `--cooldown is too large (max ${MAX_TIMER_DELAY_MS} ms), got: ${JSON.stringify(a)}`
+        );
+      }
+      cooldownMs = n;
       expectingCooldown = false;
       continue;
     }
     if (expectingMaxRetries) {
-      if (!/^\d+$/.test(a) || Number.parseInt(a, 10) <= 0) {
+      // Match the shared CLI contract (cli-help.ts): a non-negative SAFE integer.
+      // `--max-retries 0` is a VALID fail-fast value (disable retries), not an
+      // error. A non-safe-integer (overflow) is rejected with an actionable error.
+      const n = Number.parseInt(a, 10);
+      if (!/^\d+$/.test(a) || !Number.isSafeInteger(n)) {
         throw new Error(
-          `--max-retries must be a positive integer, got: ${JSON.stringify(a)}`
+          `--max-retries must be a non-negative integer, got: ${JSON.stringify(a)}`
         );
       }
-      maxRetries = Number.parseInt(a, 10);
+      maxRetries = n;
       expectingMaxRetries = false;
       continue;
     }
@@ -641,7 +671,7 @@ Flags:
   --context-compressor <mode>  off | headroom
   --budget <usd>          stop when cumulative cost reaches this USD ceiling
   --cooldown <ms>         wait this many milliseconds between iterations
-  --max-retries <n>       per-stage retry budget on transient failure
+  --max-retries <n>       per-stage retry budget on transient failure (0 disables retries)
   --detach                fork into a background process (only valid with --watch)
   --log <path>            override the detached log path (only valid with --detach)
   --notify                emit OS notification + terminal bell on completion

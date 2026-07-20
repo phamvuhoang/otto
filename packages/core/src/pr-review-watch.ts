@@ -46,7 +46,12 @@ import {
   runPullRequestReview,
   type PullRequestRevision,
 } from "./pr-review.js";
-import { isStateRunnable, readReviewState } from "./pr-review-state.js";
+import {
+  isStateRunnable,
+  readReviewState,
+  ReviewLeaseError,
+  ReviewStatePersistenceError,
+} from "./pr-review-state.js";
 import type { PullRequestReviewConfig } from "./review-cli.js";
 import type { TierLadder } from "./model-tier.js";
 import type { TokenMode } from "./tokens.js";
@@ -301,6 +306,15 @@ export async function runPullRequestReviewWatch(opts: {
           `reviewed ${repository}#${candidate.number} (${result.status}) — cumulative $${(cumulativeCost + cost).toFixed(2)}\n`
         );
       } catch (err) {
+        // FATAL vs TRANSIENT by TYPE (never message): an unrecoverable platform
+        // failure — a missing/broken `fs-ext` or a non-busy flock error such as
+        // `ENOTSUP` ({@link ReviewLeaseError}), or a durable-state write failure
+        // ({@link ReviewStatePersistenceError}) — cannot plausibly recover on a
+        // later poll. RETHROW it to the outer daemon failure/notification path so
+        // the daemon attempts it ONCE, releases keepalive/listeners, notifies /
+        // reports once, and EXITS. Ordinary transient revision faults still
+        // continue as a bounded poll failure below.
+        if (isFatalDaemonError(err)) throw err;
         deps.stderr(
           `review of ${repository}#${candidate.number} failed: ${(err as Error).message} — continuing\n`
         );
@@ -332,6 +346,21 @@ export async function runPullRequestReviewWatch(opts: {
     if (external) external.removeEventListener("abort", onExternalAbort);
     releaseOnce();
   }
+}
+
+/**
+ * Whether an error out of a single revision review is a FATAL daemon failure
+ * (distinguished by TYPE, never message): an unrecoverable platform/storage
+ * fault that will recur on every poll — a missing/broken `fs-ext` or a non-busy
+ * flock error ({@link ReviewLeaseError}, e.g. `ENOTSUP`), or a durable review-
+ * state write failure ({@link ReviewStatePersistenceError}). These must stop the
+ * daemon (attempt once, notify, exit) rather than spin as bounded poll failures.
+ */
+function isFatalDaemonError(err: unknown): boolean {
+  return (
+    err instanceof ReviewLeaseError ||
+    err instanceof ReviewStatePersistenceError
+  );
 }
 
 /** The immediate-re-poll dedup key for one (revision, input) identity. */

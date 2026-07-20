@@ -74,6 +74,7 @@ import {
   acquireReviewLease,
   acquirePublicationLease,
   isStateRunnable,
+  ReviewStatePersistenceError,
   type PullRequestReviewState,
   type PullRequestReviewOutputState,
   type ReviewLease,
@@ -771,6 +772,13 @@ export type PullRequestReviewDeps = {
    * acquire/release ordering around the summary reconcile/write.
    */
   acquirePublicationLease: typeof acquirePublicationLease;
+  /**
+   * The durable per-composite-identity state writer. Injectable so a test can
+   * model a fail-closed storage fault (a writer that throws a typed
+   * {@link ReviewStatePersistenceError} on a chosen state transition) without
+   * needing a genuinely unwritable disk. Defaults to {@link writeReviewState}.
+   */
+  writeState: typeof writeReviewState;
   env: NodeJS.ProcessEnv;
   now: () => Date;
   stdout: (text: string) => void;
@@ -902,6 +910,7 @@ export async function runPullRequestReview(opts: {
     acquireLease: opts.deps?.acquireLease ?? acquireReviewLease,
     acquirePublicationLease:
       opts.deps?.acquirePublicationLease ?? acquirePublicationLease,
+    writeState: opts.deps?.writeState ?? writeReviewState,
     env: opts.deps?.env ?? process.env,
     now: opts.deps?.now ?? (() => new Date()),
     stdout: opts.deps?.stdout ?? ((t) => process.stdout.write(t)),
@@ -1176,14 +1185,6 @@ export async function runPullRequestReview(opts: {
     const nextRetryAt = retryable
       ? nextPublicationRetryAt(attempts, deps.now())
       : undefined;
-    persistState({
-      status: "analysis-failed",
-      outputs: priorOutputs,
-      attempts,
-      retryable,
-      ...(nextRetryAt ? { nextRetryAt } : {}),
-      error,
-    });
     // Harness-authored failure report naming the exact identity + next action.
     const report =
       `# Otto review — analysis failed\n\n` +
@@ -1193,6 +1194,24 @@ export async function runPullRequestReview(opts: {
       `- Review input: ${reviewInput.kind} (${inputFingerprint})\n\n` +
       `The review could not complete: ${error}\n\n` +
       `Next action: ${nextAction}\n`;
+    // FAIL CLOSED: even the analysis-failed record must be durable; a storage
+    // failure finalizes the failure evidence and rethrows the typed error.
+    persistStateOrFinalize(
+      {
+        status: "analysis-failed",
+        outputs: priorOutputs,
+        attempts,
+        retryable,
+        ...(nextRetryAt ? { nextRetryAt } : {}),
+        error,
+      },
+      {
+        exitReason: "analysis-failed",
+        evidence: buildEvidence(),
+        artifacts: artifactList(),
+        report,
+      }
+    );
     writeRunReport(workspaceDir, runId, report);
     finalizeManifest("analysis-failed", buildEvidence(), artifactList());
     return {
@@ -1316,27 +1335,68 @@ export async function runPullRequestReview(opts: {
     };
   };
 
-  /** Persist the durable per-composite-identity review state (best-effort). */
+  /**
+   * Persist the durable per-composite-identity review state. FAIL CLOSED: a
+   * durable-state write failure is NO LONGER swallowed — {@link writeReviewState}
+   * throws a typed {@link ReviewStatePersistenceError}, which propagates so the
+   * pipeline can finalize coherent evidence and surface an unrecoverable storage
+   * failure rather than silently reporting success on lost idempotency state.
+   */
   const persistState = (
     over: Partial<PullRequestReviewState> &
       Pick<PullRequestReviewState, "status" | "outputs" | "attempts">
   ): void => {
+    deps.writeState(workspaceDir, {
+      repository,
+      pullRequest,
+      headSha,
+      inputFingerprint,
+      runId,
+      updatedAt: deps.now().toISOString(),
+      ...over,
+    });
+    if (over.analysisArtifact !== undefined) {
+      durableAnalysisOutputs = { ...over.outputs };
+    }
+  };
+
+  /**
+   * Persist state, but if the durable write fails with a typed
+   * {@link ReviewStatePersistenceError} AFTER analysis/a remote write, FIRST
+   * finalize coherent manifest/report evidence from the given in-memory data,
+   * THEN rethrow the typed storage failure. The finalize path writes only the
+   * manifest/report (never another state record), so it can never fail the same
+   * way it is trying to describe. A run therefore never returns `succeeded`, and
+   * never proceeds to the NEXT remote write, once its state could not be
+   * durably recorded. Non-storage errors propagate unchanged.
+   */
+  const persistStateOrFinalize = (
+    over: Partial<PullRequestReviewState> &
+      Pick<PullRequestReviewState, "status" | "outputs" | "attempts">,
+    finalize: {
+      exitReason: string;
+      evidence: PullRequestReviewEvidence;
+      artifacts: RunArtifact[];
+      report?: string;
+    }
+  ): void => {
     try {
-      writeReviewState(workspaceDir, {
-        repository,
-        pullRequest,
-        headSha,
-        inputFingerprint,
-        runId,
-        updatedAt: deps.now().toISOString(),
-        ...over,
-      });
-      if (over.analysisArtifact !== undefined) {
-        durableAnalysisOutputs = { ...over.outputs };
+      persistState(over);
+    } catch (err) {
+      if (err instanceof ReviewStatePersistenceError) {
+        try {
+          if (finalize.report)
+            writeRunReport(workspaceDir, runId, finalize.report);
+          finalizeManifest(
+            finalize.exitReason,
+            finalize.evidence,
+            finalize.artifacts
+          );
+        } catch {
+          // Best-effort evidence; the storage failure is still surfaced below.
+        }
       }
-    } catch {
-      // A state-write hiccup must not crash the run; idempotency degrades to the
-      // remote marker reconciliation, which is still single-comment safe.
+      throw err;
     }
   };
 
@@ -1717,13 +1777,38 @@ export async function runPullRequestReview(opts: {
             // until the full publication finalizes) so a later publication-phase
             // read failure — e.g. the pre-formal-review getPullRequest below —
             // can never lose this remote write locally (Defect #3).
-            persistState({
-              status: "running",
-              analysisArtifact: analysisArtifactRel,
-              outputs,
-              attempts,
-            });
+            //
+            // FAIL CLOSED: if this receipt write itself fails, finalize local
+            // evidence carrying the in-memory proven comment receipt and rethrow
+            // the typed storage failure — the run NEVER proceeds to the next
+            // remote write (the formal review below) with lost state.
+            persistStateOrFinalize(
+              {
+                status: "running",
+                analysisArtifact: analysisArtifactRel,
+                outputs,
+                attempts,
+              },
+              {
+                exitReason: "publish-failed",
+                evidence: buildEvidence({
+                  outcome,
+                  confirmed: published.length,
+                  rejected: art.rejected.length,
+                  githubReview: outputs.githubReview !== undefined,
+                  ...(commentId !== undefined ? { commentId } : {}),
+                }),
+                artifacts: finalArtifacts,
+                report:
+                  `# Otto review — durable state write failed\n\n` +
+                  `The summary comment was published (id ${receipt.commentId}), ` +
+                  `but its receipt could not be durably persisted. Re-run to reconcile.\n`,
+              }
+            );
           } catch (err) {
+            // A durable-state write failure was already finalized above and is
+            // rethrown here unchanged (never misclassified as a publish failure).
+            if (err instanceof ReviewStatePersistenceError) throw err;
             // A write-boundary abort is NOT a publish failure: withhold the write
             // and take the aborted/resumable terminal path, preserving any prior
             // receipt.
@@ -1891,13 +1976,36 @@ export async function runPullRequestReview(opts: {
           reviewId = receipt.reviewId;
           // Persist the proven formal-review receipt IMMEDIATELY (same discipline
           // as the comment receipt) so a later throw cannot lose it (Defect #3).
-          persistState({
-            status: "running",
-            analysisArtifact: analysisArtifactRel,
-            outputs,
-            attempts,
-          });
+          // FAIL CLOSED: a failed receipt write finalizes evidence carrying both
+          // in-memory receipts and rethrows the typed storage failure.
+          persistStateOrFinalize(
+            {
+              status: "running",
+              analysisArtifact: analysisArtifactRel,
+              outputs,
+              attempts,
+            },
+            {
+              exitReason: "publish-failed",
+              evidence: buildEvidence({
+                outcome,
+                confirmed: published.length,
+                rejected: art.rejected.length,
+                githubReview: true,
+                ...(commentId !== undefined ? { commentId } : {}),
+                ...(reviewId !== undefined ? { reviewId } : {}),
+              }),
+              artifacts: finalArtifacts,
+              report:
+                `# Otto review — durable state write failed\n\n` +
+                `The formal review was published (id ${receipt.reviewId}), but its ` +
+                `receipt could not be durably persisted. Re-run to reconcile.\n`,
+            }
+          );
         } catch (err) {
+          // A durable-state write failure was already finalized above and is
+          // rethrown unchanged (never misclassified as a publish failure).
+          if (err instanceof ReviewStatePersistenceError) throw err;
           // A write-boundary abort withholds the review while preserving the
           // already-succeeded comment receipt (resumable terminal path).
           if (err instanceof ReviewWriteAbortedError) {
@@ -1962,25 +2070,33 @@ export async function runPullRequestReview(opts: {
       }
     }
 
-    persistState({
-      status: status === "succeeded" ? "succeeded" : status,
-      analysisArtifact: analysisArtifactRel,
-      outputs,
-      attempts,
+    const terminalEvidence = buildEvidence({
+      outcome,
+      confirmed: published.length,
+      rejected: art.rejected.length,
+      githubReview: outputs.githubReview !== undefined,
+      ...(commentId !== undefined ? { commentId } : {}),
+      ...(reviewId !== undefined ? { reviewId } : {}),
+      ...(supersededBy ? { supersededBy } : {}),
     });
-    finalizeManifest(
-      status === "succeeded" ? outcome : status,
-      buildEvidence({
-        outcome,
-        confirmed: published.length,
-        rejected: art.rejected.length,
-        githubReview: outputs.githubReview !== undefined,
-        ...(commentId !== undefined ? { commentId } : {}),
-        ...(reviewId !== undefined ? { reviewId } : {}),
-        ...(supersededBy ? { supersededBy } : {}),
-      }),
-      finalArtifacts
+    const terminalExit = status === "succeeded" ? outcome : status;
+    // FAIL CLOSED: a failed terminal-state write finalizes coherent evidence and
+    // rethrows the typed storage failure — the run NEVER returns `succeeded` when
+    // its terminal state could not be durably recorded.
+    persistStateOrFinalize(
+      {
+        status: status === "succeeded" ? "succeeded" : status,
+        analysisArtifact: analysisArtifactRel,
+        outputs,
+        attempts,
+      },
+      {
+        exitReason: terminalExit,
+        evidence: terminalEvidence,
+        artifacts: finalArtifacts,
+      }
     );
+    finalizeManifest(terminalExit, terminalEvidence, finalArtifacts);
     return {
       status,
       runId,
@@ -2476,6 +2592,10 @@ export async function runPullRequestReview(opts: {
       try {
         return finishPublication(resumedAnalysis, priorOutputs);
       } catch (err) {
+        // A durable-state storage failure already finalized coherent evidence
+        // inside finishPublication — rethrow it unchanged rather than persisting
+        // (and re-failing) another publish-failed record here.
+        if (err instanceof ReviewStatePersistenceError) throw err;
         return unexpectedPublicationFailure(resumedAnalysis, err);
       }
     }
@@ -2515,6 +2635,17 @@ export async function runPullRequestReview(opts: {
       artifacts: artifactList(),
       pullRequestReview: buildEvidence(),
       startedAt,
+    });
+
+    // 1a. Durable initial `running` state BEFORE any analysis. FAIL CLOSED: if
+    //     this write cannot be persisted, propagate the typed storage failure
+    //     DIRECTLY and stop before paying for analysis — never analyze a run
+    //     whose start could not be durably recorded. (No prior manifest/evidence
+    //     to finalize beyond the zero-cost manifest just written above.)
+    persistState({
+      status: "running",
+      outputs: {},
+      attempts: priorAttempts + 1,
     });
 
     let snapshot: ReviewInputSnapshot;
@@ -2802,17 +2933,39 @@ export async function runPullRequestReview(opts: {
           .digest("hex"),
       };
       atomicWriteJson(join(runDir, "analysis.json"), analysisArtifact);
-      persistState({
-        status: "running",
-        analysisArtifact: analysisArtifactRel,
-        outputs: {},
-        attempts: priorAttempts + 1,
-      });
+      // FAIL CLOSED: the paid analysis is durable on disk; if its `running` state
+      // pointer cannot be persisted, finalize publish-failed evidence from the
+      // in-memory analysis and rethrow the typed storage failure (the outer catch
+      // rethrows it unchanged rather than misclassifying it as analysis-failed).
+      persistStateOrFinalize(
+        {
+          status: "running",
+          analysisArtifact: analysisArtifactRel,
+          outputs: {},
+          attempts: priorAttempts + 1,
+        },
+        {
+          exitReason: "publish-failed",
+          evidence: buildEvidence({
+            outcome,
+            confirmed: published.length,
+            rejected: analysis.rejected.length,
+          }),
+          artifacts: artifactList([
+            { kind: "diff", path: diffArtifactRel },
+            { kind: "analysis", path: analysisArtifactRel },
+          ]),
+        }
+      );
       durableAnalysisForInvocation = analysisArtifact;
 
       // 7. Publish (re-query → reconcile → output) from the persisted analysis.
       return finishPublication(analysisArtifact, {});
     } catch (err) {
+      // A durable-state storage failure already finalized coherent evidence at
+      // its origin — rethrow it unchanged so it is never re-persisted (and
+      // re-failed) nor misclassified as an analysis failure.
+      if (err instanceof ReviewStatePersistenceError) throw err;
       if (durableAnalysisForInvocation) {
         return unexpectedPublicationFailure(durableAnalysisForInvocation, err);
       }

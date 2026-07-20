@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -42,6 +43,7 @@ import {
   acquirePublicationLease,
   readReviewState,
   writeReviewState,
+  ReviewStatePersistenceError,
   type PullRequestReviewState,
   type ReviewLease,
 } from "../pr-review-state.js";
@@ -3848,5 +3850,154 @@ describe("runPullRequestReview — P32 Task 2: serialized publication + under-lo
     expect(res.runId).toBe(runId);
     expect(res.costUsd).toBe(0);
     expect(second.invocationCount()).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P32 Task 3 — fail closed on durable-state write failures.
+// ---------------------------------------------------------------------------
+
+/**
+ * A `writeState` seam that delegates to the real writer but throws a typed
+ * {@link ReviewStatePersistenceError} the FIRST time `shouldFail(state)` holds,
+ * modelling a durable-state write fault without a genuinely unwritable disk.
+ */
+function failingWriteState(
+  shouldFail: (state: PullRequestReviewState) => boolean
+): { fn: typeof writeReviewState; failed: () => boolean } {
+  let failed = false;
+  const fn = (ws: string, state: PullRequestReviewState): void => {
+    if (!failed && shouldFail(state)) {
+      failed = true;
+      throw new ReviewStatePersistenceError(
+        "simulated durable-state write failure",
+        { path: `${ws}/.otto/review-state/simulated.json` }
+      );
+    }
+    writeReviewState(ws, state);
+  };
+  return { fn, failed: () => failed };
+}
+
+/** Read the sole finalized run manifest under a workspace, or throw. */
+function soleRunManifest(workspaceDir: string): RunManifest {
+  const runsDir = join(workspaceDir, ".otto", "runs");
+  for (const id of readdirSync(runsDir)) {
+    const p = join(runsDir, id, "manifest.json");
+    if (existsSync(p))
+      return JSON.parse(readFileSync(p, "utf8")) as RunManifest;
+  }
+  throw new Error("no finalized run manifest found");
+}
+
+describe("runPullRequestReview — Task 3 fail-closed durable state", () => {
+  let fx: Fixture;
+  const out: string[] = [];
+  const stdout = (t: string): void => void out.push(t);
+  const now = () => new Date("2026-07-18T12:00:00.000Z");
+
+  beforeEach(() => {
+    fx = setupFixture();
+    out.length = 0;
+    mocks.executeStage.mockReset();
+    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const d of fx.cleanupDirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  it("(FC1) a failed INITIAL running-state write stops BEFORE analysis and propagates a typed storage failure", async () => {
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const github = { getPullRequest: () => fx.revision };
+    // The first persisted record is the pre-analysis `running` state (no
+    // analysisArtifact yet); fail exactly that one.
+    const writer = failingWriteState(
+      (s) => s.status === "running" && s.analysisArtifact === undefined
+    );
+    await expect(
+      runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig(),
+        deps: {
+          analyze: fake.fn,
+          github,
+          stdout,
+          now,
+          writeState: writer.fn as never,
+        },
+      })
+    ).rejects.toBeInstanceOf(ReviewStatePersistenceError);
+    // FAIL CLOSED: analysis was never paid for.
+    expect(fake.calls).toHaveLength(0);
+    expect(writer.failed()).toBe(true);
+  });
+
+  it("(FC2) a failed comment-receipt write finalizes local evidence with the proven receipt, WITHHOLDS the next remote write, and throws a typed storage failure", async () => {
+    const fake = makeFakeAnalyze({ confirmed: [finding()] });
+    const gh = makeReviewGithub({ current: () => fx.revision });
+    // Fail the immediate receipt persist (status running, comment receipt set) —
+    // the earlier receipt-free running writes succeed.
+    const writer = failingWriteState(
+      (s) => s.status === "running" && s.outputs.comment !== undefined
+    );
+    await expect(
+      runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "comment", githubReview: true }),
+        deps: {
+          analyze: fake.fn,
+          github: gh.github,
+          stdout,
+          now,
+          writeState: writer.fn as never,
+        },
+      })
+    ).rejects.toBeInstanceOf(ReviewStatePersistenceError);
+    // The comment WAS published (the in-memory proven receipt)...
+    expect(gh.calls.createComment).toBe(1);
+    // ...but the NEXT remote write (the formal review) is never performed.
+    expect(gh.calls.createReview).toHaveLength(0);
+    // Local evidence was finalized (manifest on disk) carrying the comment.
+    const m = soleRunManifest(fx.workspaceDir);
+    expect(m.exitReason).toBe("publish-failed");
+    expect((m.pullRequestReview as { commentId?: number }).commentId).toBe(
+      7000
+    );
+  });
+
+  it("(FC3) a failed TERMINAL succeeded-state write NEVER returns success and throws a typed storage failure", async () => {
+    const fake = makeFakeAnalyze({}); // approved, text mode
+    const github = { getPullRequest: () => fx.revision };
+    const writer = failingWriteState((s) => s.status === "succeeded");
+    await expect(
+      runPullRequestReview({
+        ...baseArgs(fx),
+        reviewInput: resolvedInput(fx),
+        config: makeConfig({ output: "text" }),
+        deps: {
+          analyze: fake.fn,
+          github,
+          stdout,
+          now,
+          writeState: writer.fn as never,
+        },
+      })
+    ).rejects.toBeInstanceOf(ReviewStatePersistenceError);
+    // No `succeeded` state was ever durably recorded.
+    const st = readReviewState(
+      fx.workspaceDir,
+      "acme/widget",
+      7,
+      fx.headSha,
+      resolvedInput(fx).fingerprint
+    );
+    expect(st?.status).not.toBe("succeeded");
+    // Coherent evidence was still finalized from the in-memory analysis.
+    const m = soleRunManifest(fx.workspaceDir);
+    expect(m.finishedAt).toBeTruthy();
   });
 });

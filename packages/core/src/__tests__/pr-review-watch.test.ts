@@ -12,7 +12,11 @@ import type { ResolvedReviewInput } from "../pr-review-input.js";
 import { ReviewInputError } from "../pr-review-input.js";
 import { GitHubPrError } from "../github-pr.js";
 import type { PullRequestReviewConfig } from "../review-cli.js";
-import type { PullRequestReviewState } from "../pr-review-state.js";
+import {
+  ReviewLeaseError,
+  ReviewStatePersistenceError,
+  type PullRequestReviewState,
+} from "../pr-review-state.js";
 import type { AgentRuntimeId } from "../agent-runtime.js";
 import type { TierLadder } from "../model-tier.js";
 import type { TokenMode } from "../tokens.js";
@@ -657,6 +661,87 @@ describe("runPullRequestReviewWatch", () => {
     await runPullRequestReviewWatch(baseOpts(h.deps, controller.signal));
     expect(h.listPullRequests).not.toHaveBeenCalled();
     expect(h.runRevision).not.toHaveBeenCalled();
+    expect(h.release).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 3 — fatal (typed) vs transient (recoverable) revision failures.
+  // -------------------------------------------------------------------------
+
+  it("a typed platform failure (ReviewLeaseError) is FATAL: one attempt, keepalive released, notify once, exit", async () => {
+    const controller = new AbortController();
+    const listPullRequests = vi.fn(() => [rev(1)]);
+    const runRevision = vi.fn(async () => {
+      throw new ReviewLeaseError("fs-ext unavailable", { code: "ENOTSUP" });
+    });
+    const h = harness(
+      {
+        listPullRequests: listPullRequests as never,
+        runRevision: runRevision as never,
+      },
+      controller
+    );
+    await expect(
+      runPullRequestReviewWatch(
+        baseOpts(h.deps, controller.signal, { notify: true })
+      )
+    ).rejects.toBeInstanceOf(ReviewLeaseError);
+    // Attempted exactly ONCE — never retried/re-selected in a loop.
+    expect(h.runRevision).toHaveBeenCalledTimes(1);
+    // Keepalive released and the terminal notifier fired exactly once.
+    expect(h.release).toHaveBeenCalledTimes(1);
+    expect(notifyMocks.notifyError).toHaveBeenCalledTimes(1);
+  });
+
+  it("a typed durable-state failure (ReviewStatePersistenceError) is FATAL and the daemon does NOT reselect/repay in a loop", async () => {
+    const controller = new AbortController();
+    const listPullRequests = vi.fn(() => [rev(1)]);
+    const runRevision = vi.fn(async () => {
+      throw new ReviewStatePersistenceError("state write failed", {
+        path: "/ws/.otto/review-state/x.json",
+      });
+    });
+    const h = harness(
+      {
+        listPullRequests: listPullRequests as never,
+        runRevision: runRevision as never,
+      },
+      controller
+    );
+    await expect(
+      runPullRequestReviewWatch(
+        baseOpts(h.deps, controller.signal, { notify: true })
+      )
+    ).rejects.toBeInstanceOf(ReviewStatePersistenceError);
+    expect(h.runRevision).toHaveBeenCalledTimes(1);
+    expect(h.release).toHaveBeenCalledTimes(1);
+    expect(notifyMocks.notifyError).toHaveBeenCalledTimes(1);
+  });
+
+  it("an ORDINARY transient revision failure still continues (distinguished by TYPE, not message)", async () => {
+    const controller = new AbortController();
+    const listPullRequests = vi.fn(() => [rev(1)]);
+    const runRevision = vi.fn(async () => {
+      // A generic error whose message even MENTIONS the fatal codes must still be
+      // treated as recoverable — classification is by TYPE only.
+      throw new Error("transient ENOTSUP-looking network blip");
+    });
+    const h = harness(
+      {
+        listPullRequests: listPullRequests as never,
+        runRevision: runRevision as never,
+      },
+      controller
+    );
+    // Does NOT reject — the loop continues and the stop-sleep aborts it cleanly.
+    await runPullRequestReviewWatch(
+      baseOpts(h.deps, controller.signal, { notify: true })
+    );
+    expect(h.runRevision).toHaveBeenCalledTimes(1);
+    const log = h.stderr.mock.calls.map((c) => c[0]).join("");
+    expect(log).toMatch(/continuing/);
+    // A recoverable revision fault is NOT an unrecoverable daemon failure.
+    expect(notifyMocks.notifyError).not.toHaveBeenCalled();
     expect(h.release).toHaveBeenCalledTimes(1);
   });
 });

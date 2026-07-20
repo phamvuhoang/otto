@@ -200,6 +200,30 @@ export type ReviewLeaseResult =
   | { acquired: true; lease: ReviewLease }
   | { acquired: false; reason: "busy" };
 
+/**
+ * A durable review-STATE write failed (the atomic temp+fsync+rename at the
+ * composite `.json` path could not complete — e.g. an unwritable run dir, a full
+ * disk, or an EIO). Carries the exact state PATH and the original `cause`.
+ *
+ * This is a FAIL-CLOSED signal: {@link writeReviewState} no longer swallows a
+ * persistence failure, and the pipeline never reports a run `succeeded` (nor
+ * proceeds to the next remote write) when its terminal/receipt state could not be
+ * durably recorded. It is distinct from {@link ReviewLeaseError} (the OS lock
+ * mechanism itself could not run) — both are unrecoverable platform failures the
+ * watch daemon rethrows to its outer failure path rather than treating as a
+ * transient, retry-next-poll revision fault.
+ */
+export class ReviewStatePersistenceError extends Error {
+  /** The exact composite-identity state path whose durable write failed. */
+  readonly path: string;
+
+  constructor(message: string, options: { path: string; cause?: unknown }) {
+    super(message, { cause: options.cause });
+    this.name = "ReviewStatePersistenceError";
+    this.path = options.path;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Identity validation (fail-closed before any disk I/O)
 // ---------------------------------------------------------------------------
@@ -384,11 +408,24 @@ export function writeReviewState(
     state.inputFingerprint
   );
   assertRunId(state.runId);
-  atomicWriteFile(
-    path,
-    JSON.stringify(state, null, 2),
-    `${process.pid}-${state.runId}`
-  );
+  try {
+    atomicWriteFile(
+      path,
+      JSON.stringify(state, null, 2),
+      `${process.pid}-${state.runId}`
+    );
+  } catch (err) {
+    // FAIL CLOSED: a durable-state write failure is never swallowed. Wrap it in a
+    // typed, path-carrying error so the pipeline can finalize coherent evidence
+    // and surface an unrecoverable storage failure instead of silently reporting
+    // success. Identity-validation errors above throw raw (programmer error,
+    // pre-disk); only the actual write is wrapped.
+    throw new ReviewStatePersistenceError(
+      `otto-review could not durably persist review state at "${path}": ` +
+        (err instanceof Error ? err.message : String(err)),
+      { path, cause: err }
+    );
+  }
 }
 
 const VALID_STATUS = new Set<PullRequestReviewState["status"]>([

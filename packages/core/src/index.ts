@@ -789,6 +789,8 @@ export {
   acquireReviewLease,
   acquirePublicationLease,
   isStateRunnable,
+  ReviewLeaseError,
+  ReviewStatePersistenceError,
   type PullRequestReviewState,
   type PullRequestReviewOutputState,
   type ReviewLease,

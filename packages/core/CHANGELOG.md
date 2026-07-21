@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.9](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.8...otto-core-v0.36.9) (2026-07-21)
+
+
+### Bug Fixes
+
+* **otto-review:** parse verdict rows the verifier wrapped in backticks/bullets ([#235](https://github.com/phamvuhoang/otto/issues/235)) ([93ac1b6](https://github.com/phamvuhoang/otto/commit/93ac1b6e434706f896e3e1167212b75f87eb905a))
+
 ## [0.36.8](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.7...otto-core-v0.36.8) (2026-07-20)
 
 

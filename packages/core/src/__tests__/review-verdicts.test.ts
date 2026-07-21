@@ -63,6 +63,30 @@ describe("parseReviewVerdicts", () => {
     expect(out.rejected.map((f) => f.claim)).toEqual(["missing guard"]);
   });
 
+  it("parses rows the verifier wrapped in markdown backticks or a bullet", () => {
+    // Regression (real run): the verify prompt shows the wire format inside
+    // backticks, so the model emitted whole rows as inline code / list items —
+    // `CONFIRMED minor | … |` — which failed as a `bad status token`.
+    const cands = [
+      cand("minor", "src/a.ts", "12", "leak"),
+      cand("nit", "src/b.ts", "9", "typo"),
+    ];
+    const text = [
+      "`CONFIRMED minor | src/a.ts:12 | leak | resource not freed`",
+      "- **REJECTED | src/b.ts:9 | typo | not actually wrong**",
+    ].join("\n");
+    const out = parseReviewVerdicts(text, cands);
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed.map((f) => f.claim)).toEqual(["leak"]);
+    expect(out.rejected.map((f) => f.claim)).toEqual(["typo"]);
+  });
+
+  it("accepts a backtick-wrapped `none`", () => {
+    const out = parseReviewVerdicts("`none`", []);
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed).toEqual([]);
+  });
+
   it("orders confirmed findings by severity (stable within tier)", () => {
     const cands = [
       cand("nit", "a.ts", "1", "n1"),

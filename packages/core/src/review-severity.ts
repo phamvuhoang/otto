@@ -283,6 +283,28 @@ function locListsMatch(
  * and any candidate left without a verdict. Non-row commentary (e.g. a trailing
  * `<verify>…</verify>` tally) is ignored so the verifier's chat reply parses too.
  */
+/** Strip markdown decoration a verifier may wrap a whole verdict row in. The
+ *  verify prompt shows the wire format INSIDE backticks (`CONFIRMED … | …`), and
+ *  models sometimes reproduce each row as inline code or a bullet
+ *  (`- **REJECTED | …**`), which would otherwise fail as a `bad status token`.
+ *  Removes a leading list-bullet/block-quote marker, then one SURROUNDING pair of
+ *  backtick or emphasis marks (both ends only, so a trailing `code` span in the
+ *  why/fix text is left intact). Matching is by location and the claim is
+ *  normalized separately, so removing row decoration here is safe. */
+function stripRowDecoration(line: string): string {
+  let s = line.trim();
+  s = s.replace(/^(?:[-*+>]\s+|\d+[.)]\s+)+/, "").trim();
+  for (const [open, close] of [
+    [/^`+/, /`+$/],
+    [/^\*+/, /\*+$/],
+  ] as const) {
+    if (open.test(s) && close.test(s)) {
+      s = s.replace(open, "").replace(close, "").trim();
+    }
+  }
+  return s;
+}
+
 export function parseReviewVerdicts(
   text: string,
   candidates: readonly Finding[]
@@ -294,7 +316,7 @@ export function parseReviewVerdicts(
   let sawNone = false;
 
   for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
+    const line = stripRowDecoration(raw);
     if (!line) continue;
     if (!line.includes("|")) {
       // A bare `none` is the empty signal; anything else (a tally, prose) is

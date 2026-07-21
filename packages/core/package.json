@@ -1,6 +1,6 @@
 {
   "name": "@phamvuhoang/otto-core",
-  "version": "0.36.8",
+  "version": "0.36.9",
   "description": "Claude Code AFK orchestration: iteration loop, native-sandbox runner, template renderer.",
   "type": "module",
   "license": "MIT",

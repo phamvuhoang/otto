@@ -318,6 +318,33 @@ function stripRowDecoration(line: string): string {
       s = s.replace(open, "").replace(close, "").trim();
     }
   }
+  // A markdown TABLE row: the verify prompt shows a pipe-delimited format, so
+  // models routinely render the verdicts as a real table. The leading pipe would
+  // otherwise make the first field EMPTY — never a status token — and the whole
+  // row would be skipped as commentary. Strip one leading and one trailing cell
+  // delimiter; the header/separator rows survive as ordinary lines whose first
+  // field ("Verdict", "---") is still not a status, so they stay ignored.
+  if (s.startsWith("|")) s = s.slice(1).trim();
+  if (s.endsWith("|")) s = s.slice(0, -1).trim();
+  return s;
+}
+
+/** Strip markdown emphasis/code marks wrapping a verdict's STATUS field, so
+ *  `**CONFIRMED major**` and `` `REJECTED` `` read as the wire tokens. Only
+ *  paired surrounding marks are removed — the field's WORDS are untouched, so a
+ *  decorated non-status word (`**MAYBE**`) still fails to match and the run
+ *  still fails closed on the resulting missing verdict. */
+function stripStatusDecoration(field: string): string {
+  let s = field.trim();
+  for (const [open, close] of [
+    [/^`+/, /`+$/],
+    [/^\*+/, /\*+$/],
+    [/^_+/, /_+$/],
+  ] as const) {
+    if (open.test(s) && close.test(s)) {
+      s = s.replace(open, "").replace(close, "").trim();
+    }
+  }
   return s;
 }
 
@@ -341,7 +368,7 @@ export function parseReviewVerdicts(
       continue;
     }
     const parts = line.split("|").map((p) => p.trim());
-    const statusField = parts[0];
+    const statusField = stripStatusDecoration(parts[0]);
     const words = statusField.split(/\s+/);
     const status = words[0].toUpperCase();
     // Not a verdict attempt at all — prose, a markdown table, or code that

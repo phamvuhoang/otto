@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.9...otto-core-v0.37.0) (2026-07-29)
+
+
+### Features
+
+* **otto-review:** add --lenses to select a review lens subset ([#237](https://github.com/phamvuhoang/otto/issues/237)) ([4ab8a7a](https://github.com/phamvuhoang/otto/commit/4ab8a7ae4ca6ad6c79a7f115ee74f385efdd804e))
+
 ## [0.36.9](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.8...otto-core-v0.36.9) (2026-07-21)
 
 

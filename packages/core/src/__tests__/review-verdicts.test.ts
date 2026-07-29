@@ -383,3 +383,66 @@ describe("parseReviewVerdicts", () => {
     ]);
   });
 });
+
+describe("parseReviewVerdicts — markdown-decorated verdict rows", () => {
+  // Real run (lfai-website PR 859, post-#240): the verify stage returned
+  // verdicts the parser recognized as NOTHING — the run failed with a
+  // `missing verdict for candidate` for every candidate and not a single
+  // `unmatched verdict for`, proving zero rows were parsed as verdicts. Rows
+  // decorated as a markdown TABLE (leading pipe ⇒ empty first field) or with
+  // emphasis/code marks on the STATUS TOKEN alone were skipped as commentary.
+  const one = [cand("major", "a.ts", "1", "c1")];
+
+  it("parses a full markdown table row (leading and trailing pipes)", () => {
+    const out = parseReviewVerdicts(
+      "| CONFIRMED major | a.ts:1 | c1 | still stands |",
+      one
+    );
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed.map((f) => f.claim)).toEqual(["c1"]);
+  });
+
+  it("parses a status token wrapped in emphasis", () => {
+    const out = parseReviewVerdicts(
+      "**CONFIRMED major** | a.ts:1 | c1 | still stands",
+      one
+    );
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed.map((f) => f.severity)).toEqual(["major"]);
+  });
+
+  it("parses a status token wrapped in backticks", () => {
+    const out = parseReviewVerdicts("`REJECTED` | a.ts:1 | c1 | nope", one);
+    expect(out.errors).toEqual([]);
+    expect(out.rejected.map((f) => f.claim)).toEqual(["c1"]);
+  });
+
+  it("parses a table row whose status token is ALSO emphasized", () => {
+    const out = parseReviewVerdicts(
+      "| **REJECTED** | a.ts:1 | c1 | nope |",
+      one
+    );
+    expect(out.errors).toEqual([]);
+    expect(out.rejected.map((f) => f.claim)).toEqual(["c1"]);
+  });
+
+  it("still ignores the table header and separator around real rows", () => {
+    const text = [
+      "| Verdict | Location | Claim | Why |",
+      "| ------- | -------- | ----- | --- |",
+      "| CONFIRMED major | a.ts:1 | c1 | still stands |",
+    ].join("\n");
+    const out = parseReviewVerdicts(text, one);
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed.map((f) => f.claim)).toEqual(["c1"]);
+  });
+
+  it("does not invent a status from a decorated non-status word", () => {
+    // `**MAYBE**` must not normalize into something the parser accepts; the
+    // candidate stays unmatched and the run fails closed.
+    const out = parseReviewVerdicts("**MAYBE** | a.ts:1 | c1 | w", one);
+    expect(out.errors.some((e) => /missing/i.test(e))).toBe(true);
+    expect(out.confirmed).toEqual([]);
+    expect(out.rejected).toEqual([]);
+  });
+});

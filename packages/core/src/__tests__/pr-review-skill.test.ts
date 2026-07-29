@@ -41,20 +41,27 @@ function baseSkill(over: Partial<Skill> = {}): Skill {
 
 const NOW = new Date("2026-07-18T00:00:00.000Z");
 
-/** A skill statically validated to `compatibility`/`stages`, and run-validated
- *  (so `skillStatus` reports "validated"), body checksum in sync. */
+/**
+ * A skill in the state `otto-skills validate` ACTUALLY produces: statically
+ * validated to `compatibility`/`stages`, body checksum in sync, and NO
+ * run-attested `lastValidatedRun`.
+ *
+ * Nothing in Otto ever writes `lastValidatedRun` (`recordValidation` has no
+ * production caller), so a fixture that sets it describes a state no operator
+ * can reach — which is how the gate that required it shipped unsatisfiable.
+ * Every success case below therefore runs against validate's real output.
+ */
 function eligibleSkill(
   over: Partial<Skill>,
   compatibility: "afk-safe" | "stage-scoped" | "interactive-only" | "blocked",
   stages: string[] = []
 ): Skill {
   const s0 = baseSkill(over);
-  const staticked = recordStaticValidation(
+  return recordStaticValidation(
     s0,
     { compatibility, stages, checksum: skillChecksum(s0.instructions) },
     NOW
   );
-  return recordValidation(staticked, "run-1", NOW);
 }
 
 describe("resolveReviewSkill — built-in default (no override)", () => {
@@ -92,7 +99,7 @@ describe("resolveReviewSkill — explicit requested skill rejections", () => {
     rmSync(ws, { recursive: true, force: true });
   });
 
-  it("throws when the skill is unvalidated (skillStatus !== validated)", () => {
+  it("throws when the skill was never validated at all (empty validation block)", () => {
     const ws = tmp();
     writeSkill(ws, baseSkill({ name: "unvalidated", validation: {} }));
     expect(() =>
@@ -101,13 +108,14 @@ describe("resolveReviewSkill — explicit requested skill rejections", () => {
         requested: "unvalidated",
         changedPaths: [],
       })
-    ).toThrow(ReviewSkillError);
+    ).toThrow(/no recorded static compatibility/);
     rmSync(ws, { recursive: true, force: true });
   });
 
   it("throws when the skill has no static compatibility recorded", () => {
     const ws = tmp();
-    // Run-validated (lastValidatedRun set) but never through the static gate.
+    // Run-attested but never through the static gate: the static class is what
+    // eligibility keys on, so this is still a rejection.
     const s = recordValidation(baseSkill({ name: "no-compat" }), "run-1", NOW);
     writeSkill(ws, s);
     expect(() =>
@@ -258,6 +266,57 @@ describe("resolveReviewSkill — explicit requested skill rejections", () => {
       rmSync(ws, { recursive: true, force: true });
     }
   );
+});
+
+describe("resolveReviewSkill — eligibility keys on the static gate", () => {
+  // The shipped regression: `otto-skills validate` prints PASS and records
+  // `compatibility`, but never sets `lastValidatedRun` — no code path does.
+  // Gating on it rejected EVERY real skill with `status is "unvalidated"`.
+  it("accepts a statically-validated skill that no run has attested", () => {
+    const ws = tmp();
+    const s = eligibleSkill({ name: "cursor-review" }, "afk-safe");
+    expect(s.validation.lastValidatedRun).toBeUndefined();
+    writeSkill(ws, s);
+    const selection = resolveReviewSkill({
+      workspaceDir: ws,
+      requested: "cursor-review",
+      changedPaths: ["src/app.ts"],
+      now: NOW,
+    });
+    expect(selection.name).toBe("cursor-review");
+    expect(selection.injection).toContain("cursor-review");
+  });
+
+  it("accepts a stage-scoped review skill with no run attestation", () => {
+    const ws = tmp();
+    const s = eligibleSkill({ name: "scoped-review" }, "stage-scoped", [
+      "review",
+    ]);
+    expect(s.validation.lastValidatedRun).toBeUndefined();
+    writeSkill(ws, s);
+    expect(
+      resolveReviewSkill({
+        workspaceDir: ws,
+        requested: "scoped-review",
+        changedPaths: [],
+        now: NOW,
+      }).name
+    ).toBe("scoped-review");
+  });
+
+  it("still rejects a drifted body even when the static class is recorded", () => {
+    const ws = tmp();
+    const s = eligibleSkill({ name: "drifted" }, "afk-safe");
+    writeSkill(ws, { ...s, instructions: "a different body entirely\n" });
+    expect(() =>
+      resolveReviewSkill({
+        workspaceDir: ws,
+        requested: "drifted",
+        changedPaths: [],
+        now: NOW,
+      })
+    ).toThrow(/drifted since validation/);
+  });
 });
 
 describe("resolveReviewSkill — successful explicit repo skill", () => {

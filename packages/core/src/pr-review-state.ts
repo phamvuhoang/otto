@@ -168,6 +168,15 @@ export type PullRequestReviewState = {
     | "superseded"
     | "cancelled";
   runId: string;
+  /**
+   * The review lenses that produced this record, in canonical order. Absent on
+   * records written before `--lenses` existed, which were always produced by
+   * the full built-in set — callers MUST treat `undefined` as "the full set"
+   * rather than "unknown". Not part of the composite identity (the record still
+   * lives at the `(repo, PR, headSha, inputFingerprint)` path); it is the extra
+   * check that stops a subset review from being reused as a full one.
+   */
+  lenses?: string[];
   analysisArtifact?: string;
   outputs: PullRequestReviewOutputState;
   attempts: number;
@@ -501,6 +510,17 @@ export function readReviewState(
     parseReviewInputFingerprint(s.inputFingerprint);
   } catch {
     return null;
+  }
+
+  // A recorded lens set, when present, must be a non-empty string array — a
+  // malformed one would silently degrade the lens-set reuse check.
+  if (s.lenses !== undefined) {
+    if (
+      !Array.isArray(s.lenses) ||
+      s.lenses.length === 0 ||
+      !s.lenses.every((l) => typeof l === "string" && l !== "")
+    )
+      return null;
   }
 
   // An analysisArtifact, when present, must be the canonical run path only.

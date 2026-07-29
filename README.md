@@ -593,6 +593,8 @@ Zero or one extra review intent may be attached — a GitHub issue (`--spec-issu
 
 State/run dedup is a real OS `flock` lease; the one shared per-PR summary comment across different fingerprints is additionally serialized by its own PR-scoped publication lock. Both persisted analysis and any remote comment/review body are strictly re-validated (schema, markers, diff integrity) before either is ever resumed from or trusted, and a state write that can't be durably persisted fails the run closed rather than reporting a false `succeeded`. A prior success missing a now-requested sink (e.g. re-running with `--github-review` added) resumes just that sink at zero additional model cost.
 
+Review depth is selectable: `--lenses <list>` runs a subset of the `correctness,security,tests,structural,task-fit` pool instead of all five (a small PR need not pay for a full panel), and `--model-routing` resolves each lens to a model tier. Situation-by-situation invocations: **[docs/REVIEW_RECIPES.md](./docs/REVIEW_RECIPES.md)**.
+
 `otto-review` never publishes a fix — only a report. `--github-review` additionally posts one formal GitHub PR review (deterministic `APPROVE`/`COMMENT`/`REQUEST_CHANGES`, with inline comments on exactly the diff lines that map). GitHub's own refusal to let a bot approve its own pull request surfaces as a permanent (non-retryable) publish failure, not an infinite retry loop. Full precedence table, mutual-exclusion rules, and the trust-boundary detail: **[docs/CLI.md](./docs/CLI.md#otto-review--automated-pull-request-code-review)**.
 
 Full flag reference and more recipes: **[docs/CLI.md](./docs/CLI.md)**.

@@ -92,6 +92,8 @@ export async function runPullRequestReviewWatch(opts: {
   tierLadder: TierLadder;
   tokenMode: TokenMode;
   contextCompressor: CompressorMode;
+  /** Lens subset applied to every PR this daemon reviews. Omitted ⇒ all. */
+  lenses?: readonly string[];
   maxRetries: number;
   cooldownMs: number;
   budgetUsd?: number;
@@ -291,6 +293,7 @@ export async function runPullRequestReviewWatch(opts: {
           tierLadder: opts.tierLadder,
           tokenMode: opts.tokenMode,
           contextCompressor: opts.contextCompressor,
+          lenses: opts.lenses,
           maxRetries: opts.maxRetries,
           cooldownMs: opts.cooldownMs,
           budgetUsd:

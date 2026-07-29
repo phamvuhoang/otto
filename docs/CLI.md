@@ -581,6 +581,8 @@ otto-review --repo <owner/name> --watch [flags]
 
 `otto-review` reviews an EXACT pull-request revision — the `base...head` diff GitHub reports, isolated in a disposable git worktree — and publishes only a report. It never edits, commits, or pushes source, and never calls `gh`/the network with a live credential from the review stage itself (see [Trust boundary](#trust-boundary) below). One-shot (`--pr`) reviews exactly one PR and exits; `--watch` polls the repo's open, non-draft pull requests carrying a label (default `otto-review`) and reviews each newly-eligible one, forever. Exactly one of `--pr` / `--watch` is required.
 
+Situation-by-situation invocations — matching lens subset and model tier to the PR in front of you — are collected in **[REVIEW_RECIPES.md](./REVIEW_RECIPES.md)**.
+
 ### Flags, environment, and config
 
 | Flag                                | Env                         | `.otto/config.json` `pullRequestReview.` | Default                                    | What it does                                                                                                                     |
@@ -603,6 +605,7 @@ otto-review --repo <owner/name> --watch [flags]
 | `--model-routing`                   | —                           | —                                        | off                                        | Route each stage to a model tier by difficulty/change risk.                                                                      |
 | `--token-mode <mode>`               | —                           | —                                        | `off`                                      | `off` \| `measure` \| `reduce`.                                                                                                  |
 | `--context-compressor <mode>`       | `OTTO_CONTEXT_COMPRESSOR`   | —                                        | `off`                                      | `off` \| `headroom` — compresses the PR **body** only (never review-input; see [Evidence](#durable-evidence--input-artifacts)).  |
+| `--lenses <list>`                   | —                           | —                                        | all five                                   | Comma-separated subset of `correctness,security,tests,structural,task-fit`. Fewer lenses = proportionally cheaper review.        |
 | `--budget <usd>`                    | —                           | —                                        | none                                       | Stop when cumulative cost reaches this USD ceiling.                                                                              |
 | `--cooldown <ms>`                   | —                           | —                                        | `0`                                        | Wait this many milliseconds between iterations. Rejected if it overflows Node's max timer delay.                                 |
 | `--max-retries <n>`                 | —                           | —                                        | (shared default)                           | Per-stage retry budget on transient failure. `0` is a valid fail-fast value (retries disabled), not an error.                    |

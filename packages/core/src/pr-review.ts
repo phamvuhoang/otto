@@ -197,8 +197,10 @@ export function outcomeForFindings(
 // One-shot read-only review pipeline (P32 Slice 1)
 // ---------------------------------------------------------------------------
 
-/** The built-in review lenses run over every PR revision, in a stable order. */
-const REVIEW_LENSES = [
+/** The built-in review lenses run over every PR revision, in a stable order.
+ *  Exported as the single source of truth for `--lenses` validation
+ *  (`review-cli.ts`); a subset selected there preserves this order. */
+export const REVIEW_LENSES = [
   "correctness",
   "security",
   "tests",
@@ -875,6 +877,9 @@ export async function runPullRequestReview(opts: {
   tierLadder: TierLadder;
   tokenMode: TokenMode;
   contextCompressor: CompressorMode;
+  /** Lens subset for this run (validated + canonically ordered by
+   *  `parseReviewLenses`). Omitted/empty ⇒ every {@link REVIEW_LENSES} lens. */
+  lenses?: readonly string[];
   maxRetries: number;
   cooldownMs: number;
   budgetUsd?: number;
@@ -896,6 +901,12 @@ export async function runPullRequestReview(opts: {
     verbose,
     signal,
   } = opts;
+
+  /** The lens set THIS invocation runs, in canonical order. */
+  const activeLenses: string[] =
+    opts.lenses && opts.lenses.length > 0
+      ? [...opts.lenses]
+      : [...REVIEW_LENSES];
 
   const deps: PullRequestReviewDeps = {
     github: opts.deps?.github ?? {
@@ -945,6 +956,20 @@ export async function runPullRequestReview(opts: {
     state?.status === "analysis-failed" &&
     state.retryable !== true;
 
+  /**
+   * Whether a persisted record was produced by the lens set THIS invocation
+   * asks for. The composite identity does NOT include the lens set, so without
+   * this check a cheap `--lenses correctness` success would satisfy a later
+   * full review at cost 0 and return the weaker analysis as if it were the
+   * full one. A record with no recorded set predates `--lenses` and was
+   * therefore produced by the full set.
+   */
+  const lensSetMatches = (state: PullRequestReviewState): boolean => {
+    const recorded = state.lenses ?? [...REVIEW_LENSES];
+    const key = (l: readonly string[]): string => [...l].sort().join(",");
+    return key(recorded) === key(activeLenses);
+  };
+
   /** Whether a state ends THIS invocation with no work: a success whose current
    *  sinks are all present, or a non-success that is not runnable. */
   const isTerminalForInvocation = (
@@ -952,8 +977,15 @@ export async function runPullRequestReview(opts: {
   ): boolean => {
     if (!state) return false;
     if (state.status === "succeeded")
-      return currentSinksComplete(state.outputs, requiredSinks);
+      return (
+        lensSetMatches(state) &&
+        currentSinksComplete(state.outputs, requiredSinks)
+      );
     if (oneShotPermanentAnalysisRetry(state)) return false;
+    // A differently-lensed unfinished record is not this invocation's work:
+    // fall through to a fresh, correctly-lensed analysis instead of blocking on
+    // (or resuming) an analysis that answers a different question.
+    if (!lensSetMatches(state)) return false;
     return !isStateRunnable(state, deps.now());
   };
 
@@ -962,6 +994,10 @@ export async function runPullRequestReview(opts: {
    *  now-requested sink. Requires a recorded analysis artifact pointer. */
   const isResumable = (state: PullRequestReviewState | null): boolean => {
     if (!state || !state.analysisArtifact) return false;
+    // Publication may only replay an analysis produced by THIS invocation's
+    // lens set — otherwise a subset run's findings would be published as the
+    // full review.
+    if (!lensSetMatches(state)) return false;
     if (state.status === "running" || state.status === "publish-failed")
       return true;
     if (state.status === "succeeded")
@@ -1352,6 +1388,9 @@ export async function runPullRequestReview(opts: {
       headSha,
       inputFingerprint,
       runId,
+      // Recorded so a later invocation asking for a different lens set never
+      // reuses this record (see `lensSetMatches`).
+      lenses: activeLenses,
       updatedAt: deps.now().toISOString(),
       ...over,
     });
@@ -2833,7 +2872,7 @@ export async function runPullRequestReview(opts: {
           // Run-scoped: aborts on caller signal OR a stolen-lock compromise.
           signal: runAbort.signal,
           agentId: activeAgentId,
-          lenses: [...REVIEW_LENSES],
+          lenses: activeLenses,
           lensStage: STAGES.prReviewLens,
           verifyStage: STAGES.prReviewVerify,
           stageVars,

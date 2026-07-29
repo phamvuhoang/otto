@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.37.0...otto-core-v0.37.1) (2026-07-29)
+
+
+### Bug Fixes
+
+* **otto-review:** accept statically-validated skills for --review-skill ([#239](https://github.com/phamvuhoang/otto/issues/239)) ([2f45b95](https://github.com/phamvuhoang/otto/commit/2f45b95bf4eb1db66c09da15551fe3035c6bca33))
+
 ## [0.37.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.36.9...otto-core-v0.37.0) (2026-07-29)
 
 

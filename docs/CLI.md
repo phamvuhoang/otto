@@ -657,7 +657,7 @@ A prior `succeeded` state is terminal only when **every** sink the CURRENT invoc
 
 ### Review skill
 
-By default every review runs the template-owned built-in contract `builtin:otto-code-review`. `--review-skill <name>` (or `OTTO_REVIEW_SKILL` / config `skill`) selects one repo skill from `.otto/skills/<name>/` instead — subject to the SAME governance ladder used elsewhere: the skill must exist, its status must be **`validated`**, and its static compatibility must be **`afk-safe`** or **`stage-scoped`** with `"review"` in its declared stages (a `blocked`/`interactive-only`/undeclared/checksum-drifted skill is rejected). An explicit `--review-skill` request that fails **never falls back to the built-in** — the run fails closed rather than silently substituting a different contract.
+By default every review runs the template-owned built-in contract `builtin:otto-code-review`. `--review-skill <name>` (or `OTTO_REVIEW_SKILL` / config `skill`) selects one repo skill from `.otto/skills/<name>/` instead — subject to the SAME governance ladder used elsewhere: the skill must exist, it must have been **validated** by `otto-skills validate` (which records its static compatibility class), and that class must be **`afk-safe`** or **`stage-scoped`** with `"review"` in its declared stages (a `blocked`/`interactive-only`/undeclared/checksum-drifted skill is rejected). Eligibility keys on that recorded static class — the same gate `--use-skills` applies — so a skill that `otto-skills validate` passes is usable here. An explicit `--review-skill` request that fails **never falls back to the built-in** — the run fails closed rather than silently substituting a different contract.
 
 ### Trust boundary
 

@@ -24,7 +24,7 @@ import {
   toSkillUsages,
 } from "./skill-routing.js";
 import { needsRevalidation, skillChecksum } from "./skill-validation.js";
-import { readSkill, skillStatus } from "./skills.js";
+import { readSkill } from "./skills.js";
 import type { SkillUsage } from "./run-report.js";
 
 /** The stage name every governance call routes/evidences against. */
@@ -91,12 +91,21 @@ function builtinSelection(): ReviewSkillSelection {
  * Resolve exactly one review skill for the P32 `pr-review` stage.
  *
  * No `requested` → the built-in default (never fails). A `requested` name is
- * checked through the full governance ladder — package exists, `validated`
- * status, static compatibility (`afk-safe` or `stage-scoped` including
- * `review`), no unrevalidated drift, then the stage router's risk/budget
- * selection — and any failure throws {@link ReviewSkillError} with the
- * router's verdict reasons where applicable. NEVER falls back to the built-in
- * after an explicit request fails.
+ * checked through the full governance ladder — package exists, static
+ * compatibility recorded and usable here (`afk-safe`, or `stage-scoped`
+ * including `review`), no unrevalidated drift, then the stage router's
+ * risk/budget selection — and any failure throws {@link ReviewSkillError} with
+ * the router's verdict reasons where applicable. NEVER falls back to the
+ * built-in after an explicit request fails.
+ *
+ * Eligibility keys on the STATIC gate (`otto-skills validate` →
+ * `recordStaticValidation`), exactly like `routeSkillsForStage`'s own
+ * `assess`. It deliberately does NOT consult `skillStatus`: that reports
+ * "validated" only when `validation.lastValidatedRun` is set, which is written
+ * by `recordValidation` alone — a function with no production caller. Gating on
+ * it made this resolver reject every skill an operator can actually produce
+ * ("status is \"unvalidated\"") while `--use-skills` accepted the same package.
+ * Drift and risk/scope remain enforced below, so nothing was traded away.
  */
 export function resolveReviewSkill(opts: {
   workspaceDir: string;
@@ -114,14 +123,6 @@ export function resolveReviewSkill(opts: {
   if (!skill) {
     throw new ReviewSkillError(
       `review skill "${requested}" was not found under .otto/skills/`
-    );
-  }
-
-  const status = skillStatus(skill, now);
-  if (status !== "validated") {
-    throw new ReviewSkillError(
-      `review skill "${requested}" is not eligible for pr-review: status is ` +
-        `"${status}" (must be "validated")`
     );
   }
 

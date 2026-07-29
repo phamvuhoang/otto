@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.2](https://github.com/phamvuhoang/otto/compare/otto-core-v0.37.1...otto-core-v0.37.2) (2026-07-29)
+
+
+### Bug Fixes
+
+* **otto-review:** don't fail the review on a pipe in verifier prose ([#240](https://github.com/phamvuhoang/otto/issues/240)) ([2db232a](https://github.com/phamvuhoang/otto/commit/2db232a4bf3f14d232715c063a571089303a15a1))
+
 ## [0.37.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.37.0...otto-core-v0.37.1) (2026-07-29)
 
 

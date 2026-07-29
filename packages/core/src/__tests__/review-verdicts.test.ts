@@ -171,10 +171,50 @@ describe("parseReviewVerdicts", () => {
     expect(out.errors.some((e) => /missing/i.test(e))).toBe(true);
   });
 
-  it("errors on a bad status token", () => {
+  it("still fails closed when a candidate's only row has a bad status token", () => {
+    // The row is not a verdict attempt (no CONFIRMED/REJECTED), so it is skipped
+    // as commentary — but the candidate is then left without a verdict, which
+    // the coverage gate reports. The run still fails; it just fails for the
+    // accurate reason.
     const cands = [cand("major", "a.ts", "1", "c1")];
     const out = parseReviewVerdicts("MAYBE major | a.ts:1 | c1 | w", cands);
-    expect(out.errors.some((e) => /status/i.test(e))).toBe(true);
+    expect(out.errors.some((e) => /missing/i.test(e))).toBe(true);
+  });
+
+  it("ignores verifier prose whose code span contains a pipe", () => {
+    // Regression (real run, PR 859): the verifier narrated its reasoning in
+    // prose that quoted a template literal containing a pipe —
+    //   `${fn}:${alert_key}|${window}`
+    // Every `|`-bearing line was treated as a verdict row, so the narration's
+    // first field ("`a.ts:320-329` and `b.ts:54-60` — both key dedupe on …")
+    // failed as `bad status token` and killed the whole run AFTER all five
+    // lenses and the verify pass had been paid for. Same class as the lens-side
+    // fix: a `|`-line whose first field is not a status is not a verdict.
+    const cands = [
+      cand("major", "_shared/log-alert-receiver.ts", "320-329", "dedupe key"),
+      cand("minor", "src/b.ts", "9", "typo"),
+    ];
+    const text = [
+      "CONFIRMED major | _shared/log-alert-receiver.ts:320-329 | dedupe key | collides",
+      "`_shared/log-alert-receiver.ts:320-329` and `_shared/logger-alert.ts:54-60` — both key dedupe on `${fn}:${alert_key}|${window}` so they collide.",
+      "REJECTED | src/b.ts:9 | typo | not actually wrong",
+    ].join("\n");
+    const out = parseReviewVerdicts(text, cands);
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed.map((f) => f.claim)).toEqual(["dedupe key"]);
+    expect(out.rejected.map((f) => f.claim)).toEqual(["typo"]);
+  });
+
+  it("ignores a markdown table separator row in the verifier's output", () => {
+    const cands = [cand("major", "a.ts", "1", "c1")];
+    const text = [
+      "| Status | Location | Claim | Why |",
+      "| --- | --- | --- | --- |",
+      "CONFIRMED major | a.ts:1 | c1 | still stands",
+    ].join("\n");
+    const out = parseReviewVerdicts(text, cands);
+    expect(out.errors).toEqual([]);
+    expect(out.confirmed.map((f) => f.claim)).toEqual(["c1"]);
   });
 
   it("allows a downgrade and carries the verdict severity onto the finding", () => {

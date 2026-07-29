@@ -287,13 +287,17 @@ function locListsMatch(
  * matches regardless of claim text; the claim only disambiguates when MULTIPLE
  * candidates share one file+line-overlap. A single `none` line is the
  * empty-candidate signal. The parser is adversarial about the contract: it
- * records an error for a bad status token, a row with fewer than four fields, a
+ * records an error for a row with fewer than four fields, a
  * CONFIRMED severity that UPGRADES the candidate (downgrades are allowed per the
  * verify prompt, and the verdict's severity is carried onto the finding), a row whose location
  * matches no candidate, co-located candidates it cannot disambiguate, a second
  * row hitting an already-matched candidate, a `none` alongside real candidates,
- * and any candidate left without a verdict. Non-row commentary (e.g. a trailing
- * `<verify>…</verify>` tally) is ignored so the verifier's chat reply parses too.
+ * and any candidate left without a verdict. Non-row commentary is ignored so the
+ * verifier's chat reply parses too — a trailing `<verify>…</verify>` tally, and
+ * ALSO any `|`-bearing line whose first field is not a status token (prose, a
+ * markdown table, or quoted code containing a pipe). Skipping those cannot hide
+ * a dropped verdict: the candidate it would have covered is then left unmatched,
+ * which the coverage check reports.
  */
 /** Strip markdown decoration a verifier may wrap a whole verdict row in. The
  *  verify prompt shows the wire format INSIDE backticks (`CONFIRMED … | …`), and
@@ -340,10 +344,13 @@ export function parseReviewVerdicts(
     const statusField = parts[0];
     const words = statusField.split(/\s+/);
     const status = words[0].toUpperCase();
-    if (status !== "CONFIRMED" && status !== "REJECTED") {
-      errors.push(`bad status token: ${statusField}`);
-      continue;
-    }
+    // Not a verdict attempt at all — prose, a markdown table, or code that
+    // merely contains a pipe (a verifier narrating `${fn}:${alert_key}|${w}`
+    // killed a real run here). Skip it as commentary, symmetric to how
+    // `parseFindings` treats a non-severity-leading `|`-line. A genuinely LOST
+    // verdict cannot hide behind this: the candidate it should have covered is
+    // left unmatched, and the coverage check below reports it.
+    if (status !== "CONFIRMED" && status !== "REJECTED") continue;
     if (parts.length < 4) {
       errors.push(`malformed verdict row: ${line}`);
       continue;

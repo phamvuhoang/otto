@@ -42,6 +42,7 @@ import {
   acquireReviewLease,
   acquirePublicationLease,
   readReviewState,
+  reviewStatePath,
   writeReviewState,
   ReviewStatePersistenceError,
   type PullRequestReviewState,
@@ -4085,5 +4086,163 @@ describe("runPullRequestReview — Task 3 fail-closed durable state", () => {
     // Coherent evidence was still finalized from the in-memory analysis.
     const m = soleRunManifest(fx.workspaceDir);
     expect(m.finishedAt).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// --lenses: a selectable lens subset, and the lens set as part of what makes a
+// persisted review reusable. The composite identity
+// (repository, pullRequest, headSha, inputFingerprint) does NOT include the
+// lens set, so without an explicit guard a cheap 1-lens run would satisfy a
+// later full review at cost 0 and hand back a far weaker analysis as if it
+// were the full one.
+// ---------------------------------------------------------------------------
+describe("runPullRequestReview — lens selection", () => {
+  let fx: Fixture;
+  const out: string[] = [];
+  const stdout = (t: string): void => void out.push(t);
+  const now = () => new Date("2026-07-18T12:00:00.000Z");
+
+  beforeEach(() => {
+    fx = setupFixture();
+    out.length = 0;
+    mocks.executeStage.mockReset();
+    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const d of fx.cleanupDirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  /** Run one review, optionally with a lens subset, and report the lens list
+   *  the analysis stage actually received. */
+  async function runWithLenses(
+    lenses?: string[]
+  ): Promise<{ lenses: string[]; runId: string; costUsd: number }> {
+    const fake = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      ...(lenses ? { lenses } : {}),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: fake.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    return {
+      lenses: (fake.calls[0]?.lenses ?? []) as string[],
+      runId: res.runId,
+      costUsd: res.costUsd,
+    };
+  }
+
+  it("runs every built-in lens when no subset is given (unchanged default)", async () => {
+    expect((await runWithLenses()).lenses).toEqual([
+      "correctness",
+      "security",
+      "tests",
+      "structural",
+      "task-fit",
+    ]);
+  });
+
+  it("runs only the selected lenses when a subset is given", async () => {
+    expect((await runWithLenses(["correctness", "tests"])).lenses).toEqual([
+      "correctness",
+      "tests",
+    ]);
+  });
+
+  it("re-analyzes when a prior success used a DIFFERENT lens set", async () => {
+    await runWithLenses(["correctness"]);
+    out.length = 0;
+    const second = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: second.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    // A full review must actually run — not short-circuit onto the 1-lens result.
+    expect(second.invocationCount()).toBe(1);
+    expect(second.calls[0]?.lenses).toEqual([
+      "correctness",
+      "security",
+      "tests",
+      "structural",
+      "task-fit",
+    ]);
+    // Paid work happened: this is a real full review, not a cost-0 replay of
+    // the 1-lens record. (The run id is NOT a useful signal here — the fixture
+    // freezes the clock and `allocateRunId` is timestamp+pid.)
+    expect(res.costUsd).toBeGreaterThan(0);
+  });
+
+  it("still short-circuits at cost 0 when the lens set is unchanged", async () => {
+    const first = await runWithLenses(["correctness", "tests"]);
+    out.length = 0;
+    const second = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      lenses: ["correctness", "tests"],
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: second.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.runId).toBe(first.runId);
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
+  });
+
+  it("treats a pre-existing state with no recorded lens set as the full set", async () => {
+    // Back-compat: states written before --lenses existed carry no `lenses`
+    // field and were always produced by the full lens set.
+    await runWithLenses();
+    const statePath = reviewStatePath(
+      fx.workspaceDir,
+      fx.revision.repository,
+      fx.revision.number,
+      fx.revision.headSha,
+      resolvedInput(fx).fingerprint
+    );
+    const legacy = JSON.parse(readFileSync(statePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete legacy.lenses;
+    writeFileSync(statePath, JSON.stringify(legacy, null, 2));
+
+    const second = makeFakeAnalyze({});
+    const res = await runPullRequestReview({
+      ...baseArgs(fx),
+      reviewInput: resolvedInput(fx),
+      config: makeConfig({ output: "text" }),
+      deps: {
+        analyze: second.fn,
+        github: { getPullRequest: () => fx.revision },
+        stdout,
+        now,
+      },
+    });
+    expect(res.status).toBe("succeeded");
+    expect(res.costUsd).toBe(0);
+    expect(second.invocationCount()).toBe(0);
   });
 });

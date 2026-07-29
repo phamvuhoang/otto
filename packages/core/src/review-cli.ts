@@ -13,7 +13,41 @@ import { join } from "node:path";
 import { parseGithubRepo } from "./task-key.js";
 import { parseAgentId, type AgentRuntimeId } from "./agent-runtime.js";
 import { parseTokenMode, type TokenMode } from "./tokens.js";
+import { REVIEW_LENSES } from "./pr-review.js";
 import type { CompressorMode } from "./context-compressor.js";
+
+/**
+ * Validate a `--lenses` value against the built-in catalogue. Returns the
+ * selection in {@link REVIEW_LENSES} order (never the typed order) so a run's
+ * lens sequence — and the lens-set identity derived from it — is a function of
+ * WHICH lenses were chosen, not how the operator typed them. Blank entries are
+ * dropped and duplicates collapse; an empty selection or an unknown name is an
+ * error rather than a silently degraded review.
+ */
+export function parseReviewLenses(raw: string, flag: string): string[] {
+  const asked = new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s !== "")
+  );
+  const unknown = [...asked].filter(
+    (l) => !(REVIEW_LENSES as readonly string[]).includes(l)
+  );
+  if (unknown.length > 0) {
+    throw new Error(
+      `${flag}: unknown lens ${unknown.map((u) => JSON.stringify(u)).join(", ")}. ` +
+        `Valid lenses: ${REVIEW_LENSES.join(", ")}.`
+    );
+  }
+  const selected = REVIEW_LENSES.filter((l) => asked.has(l));
+  if (selected.length === 0) {
+    throw new Error(
+      `${flag} requires at least one lens. Valid lenses: ${REVIEW_LENSES.join(", ")}.`
+    );
+  }
+  return [...selected];
+}
 
 /** Primary review output surface. Default depends on mode (see resolver). */
 export type ReviewOutputMode = "text" | "markdown" | "comment";
@@ -56,6 +90,9 @@ export type ReviewCliFlags = {
   modelRouting: boolean;
   tokenMode?: TokenMode;
   contextCompressor?: CompressorMode;
+  /** Lens subset for this run, in canonical order. Undefined ⇒ every built-in
+   *  lens runs (the default, unchanged behavior). */
+  lenses?: string[];
   budget?: number;
   cooldownMs?: number;
   maxRetries?: number;
@@ -186,6 +223,8 @@ export function parseReviewFlags(argv: string[]): ReviewCliFlags {
   let expectingTokenMode = false;
   let contextCompressor: CompressorMode | undefined;
   let expectingContextCompressor = false;
+  let lenses: string[] | undefined;
+  let expectingLenses = false;
   let budget: number | undefined;
   let expectingBudget = false;
   let cooldownMs: number | undefined;
@@ -292,6 +331,11 @@ export function parseReviewFlags(argv: string[]): ReviewCliFlags {
       }
       contextCompressor = a;
       expectingContextCompressor = false;
+      continue;
+    }
+    if (expectingLenses) {
+      lenses = parseReviewLenses(a, "--lenses");
+      expectingLenses = false;
       continue;
     }
     if (expectingBudget) {
@@ -409,6 +453,9 @@ export function parseReviewFlags(argv: string[]): ReviewCliFlags {
       case "--context-compressor":
         expectingContextCompressor = true;
         break;
+      case "--lenses":
+        expectingLenses = true;
+        break;
       case "--budget":
         expectingBudget = true;
         break;
@@ -456,6 +503,7 @@ export function parseReviewFlags(argv: string[]): ReviewCliFlags {
   if (expectingTokenMode) throw new Error("--token-mode requires a value");
   if (expectingContextCompressor)
     throw new Error("--context-compressor requires a value");
+  if (expectingLenses) throw new Error("--lenses requires a value");
   if (expectingBudget) throw new Error("--budget requires a value");
   if (expectingCooldown) throw new Error("--cooldown requires a value");
   if (expectingMaxRetries) throw new Error("--max-retries requires a value");
@@ -485,6 +533,7 @@ export function parseReviewFlags(argv: string[]): ReviewCliFlags {
     modelRouting,
     tokenMode,
     contextCompressor,
+    lenses,
     budget,
     cooldownMs,
     maxRetries,
@@ -669,6 +718,7 @@ Flags:
   --model-routing         route each stage to a model tier by difficulty + change risk
   --token-mode <mode>     token accounting mode: off | measure | reduce
   --context-compressor <mode>  off | headroom
+  --lenses <list>         comma-separated review lenses (default: all of correctness,security,tests,structural,task-fit)
   --budget <usd>          stop when cumulative cost reaches this USD ceiling
   --cooldown <ms>         wait this many milliseconds between iterations
   --max-retries <n>       per-stage retry budget on transient failure (0 disables retries)

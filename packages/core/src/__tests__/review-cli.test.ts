@@ -789,3 +789,59 @@ describe("formatReviewConfig", () => {
     expect(out).toContain(`direct (${secretText.length} chars)`);
   });
 });
+
+describe("--lenses", () => {
+  it("defaults to undefined (the full built-in lens set runs)", () => {
+    expect(parseReviewFlags(["--pr", "1"]).lenses).toBeUndefined();
+  });
+
+  it("parses a comma-separated subset", () => {
+    expect(parseReviewFlags(["--lenses", "correctness,tests"]).lenses).toEqual([
+      "correctness",
+      "tests",
+    ]);
+  });
+
+  it("normalizes to the canonical lens order, not the typed order", () => {
+    expect(
+      parseReviewFlags(["--lenses", "task-fit,security,correctness"]).lenses
+    ).toEqual(["correctness", "security", "task-fit"]);
+  });
+
+  it("tolerates surrounding whitespace and de-duplicates", () => {
+    expect(
+      parseReviewFlags(["--lenses", " tests , correctness , tests "]).lenses
+    ).toEqual(["correctness", "tests"]);
+  });
+
+  it("accepts the full set explicitly", () => {
+    expect(
+      parseReviewFlags([
+        "--lenses",
+        "correctness,security,tests,structural,task-fit",
+      ]).lenses
+    ).toEqual(["correctness", "security", "tests", "structural", "task-fit"]);
+  });
+
+  it("rejects an unknown lens name and names the valid ones", () => {
+    expect(() => parseReviewFlags(["--lenses", "correctness,perf"])).toThrow(
+      /perf/
+    );
+    expect(() => parseReviewFlags(["--lenses", "perf"])).toThrow(/task-fit/);
+  });
+
+  it("rejects an empty list instead of silently running zero lenses", () => {
+    expect(() => parseReviewFlags(["--lenses", ""])).toThrow();
+    expect(() => parseReviewFlags(["--lenses", " , "])).toThrow();
+  });
+
+  it("throws when --lenses has no value", () => {
+    expect(() => parseReviewFlags(["--lenses"])).toThrow(
+      "--lenses requires a value"
+    );
+  });
+
+  it("is documented in --help", () => {
+    expect(formatReviewHelp("0.0.0")).toContain("--lenses");
+  });
+});

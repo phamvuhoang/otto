@@ -182,6 +182,7 @@ test("docs/CLI.md documents every otto-review flag", () => {
     "--model-routing",
     "--token-mode",
     "--context-compressor",
+    "--lenses",
     "--budget",
     "--cooldown",
     "--max-retries",

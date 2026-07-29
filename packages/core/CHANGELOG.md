@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.3](https://github.com/phamvuhoang/otto/compare/otto-core-v0.37.2...otto-core-v0.37.3) (2026-07-29)
+
+
+### Bug Fixes
+
+* **otto-review:** read verdict rows the verifier rendered as a markdown table ([#243](https://github.com/phamvuhoang/otto/issues/243)) ([b60dea0](https://github.com/phamvuhoang/otto/commit/b60dea0f1276224c3b33b51cd650ebec1431bb10))
+
 ## [0.37.2](https://github.com/phamvuhoang/otto/compare/otto-core-v0.37.1...otto-core-v0.37.2) (2026-07-29)
 
 

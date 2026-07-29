@@ -85,7 +85,12 @@ export type ChecksSummary = {
  *  `resolveAttestation` reads the LAST entry for the terminal verdict and folds
  *  all entries for the cumulative evidence. */
 export type AttestationLedger = {
-  entries: { boundary: string; iteration: number; records: ChecksRecord[] }[];
+  entries: {
+    boundary: string;
+    iteration: number;
+    configuredCount: number; // captured at attest time so `skipped` is exact
+    records: ChecksRecord[];
+  }[];
 };
 
 /** Everything a boundary needs to run checks; supplied by the loop. */
@@ -152,11 +157,13 @@ Unrun commands are **not** recorded as records (that would corrupt the `ChecksRe
 
 ### D3 — terminal red gets its own exit reason
 
-When the final attestation is red, the run exits with reason `checks-failed` and a maintainer-facing `nextAction` (via `nextActionFor`, `next-action.ts:24`), so `otto-runs` and `otto-inspect` show it without the operator reading the report body.
+When the final attestation is red, the run exits with reason **`"done with failing checks"`** and a maintainer-facing `nextAction` (via `nextActionFor`, `next-action.ts:24`), so `otto-runs` and `otto-inspect` show it without the operator reading the report body.
+
+The reason is phrased as a sentence to match the existing `NEXT_ACTION` keys — `"done with failures"`, `"stopped (budget)"`, `"paused (needs human)"` — rather than as a kebab-case slug, which would be the only one of its kind in the map.
 
 **The override replaces only a success reason.** A run that stopped at `cost-cap` or `max-iterations` keeps that more-informative reason; the eval guard in D1 still sinks `succeeded`. Otherwise attestation would mask why the run actually stopped.
 
-`checks-failed` is **not** added to `SUCCESS_REASONS`. That makes D1's `terminalFailed === 0` guard redundant for overridden runs — deliberately so, and not dead code: it is the only thing that sinks `succeeded` on a terminal-red run whose exit reason was _not_ a success reason and therefore was never overridden (e.g. `cost-cap` with failing checks).
+`"done with failing checks"` is **not** added to `SUCCESS_REASONS`. That makes D1's `terminalFailed === 0` guard redundant for overridden runs — deliberately so, and not dead code: it is the only thing that sinks `succeeded` on a terminal-red run whose exit reason was _not_ a success reason and therefore was never overridden (e.g. `"stopped (budget)"` with failing checks).
 
 No mid-run control flow changes — escalation on attested failure is P28's job, and stays out of P27.
 
@@ -180,7 +187,7 @@ finalize
   → eval succeeded reads terminalFailed === 0
 ```
 
-In `--verify` mode, matrix rows with `method: "test"` whose command **exactly matches** a configured check are re-executed and carry an `attestedCheck` result; non-matching rows keep today's `artifactExists` validation and are marked unattested — recorded as a coverage gap, never as a failure. Exact-match-only is deliberate: agent-emitted strings are untrusted input and must never reach a shell on a fuzzy match.
+In `--verify` mode, matrix rows with `method: "test"` whose `check` field (the command run — not `artifactPath`, which is a `file:line`/SHA pointer) **exactly matches** a configured check are re-executed and carry an `attestedCheck` result; non-matching rows keep today's `artifactExists` validation and are marked unattested — recorded as a coverage gap, never as a failure. Exact-match-only is deliberate: agent-emitted strings are untrusted input and must never reach a shell on a fuzzy match.
 
 `checks`, `checksSummary`, and `attestedCheck` are harness-only fields, set by the loop and finalize — never parsed from agent JSON, mirroring `artifactExists` (`verification-matrix.ts:49-53`).
 
@@ -239,7 +246,7 @@ The existing implementation plan predates these decisions and disagrees in three
 
 1. **`succeeded` rule.** Plan: `checksSummary.failed === 0` over a cumulative tally — marks recovered runs as failures. This spec: `terminalFailed === 0` (D1).
 2. **`summarizeChecks` arity.** Plan: `summarizeChecks(records)`. This spec: `summarizeChecks(records, configuredCount)`, required to report `skipped` under fail-fast (D2).
-3. **Exit reason.** Plan: report/eval only. This spec: adds the `checks-failed` reason and `nextAction` (D3).
+3. **Exit reason.** Plan: report/eval only. This spec: adds the `"done with failing checks"` reason and `nextAction` (D3).
 
 The plan is otherwise sound and should be re-anchored rather than rewritten — its `file:line` citations predate 91 changed core files (P32/otto-review), e.g. `runFixtureChecks` moved from `bench.ts:193` to `bench.ts:210`.
 

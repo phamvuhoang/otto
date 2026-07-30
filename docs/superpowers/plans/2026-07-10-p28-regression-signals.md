@@ -2,9 +2,36 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Refreshed 2026-07-30** against `docs/superpowers/specs/2026-07-30-p28-regression-signals-design.md` and `main` at `a3cd6e2`. See [Refresh notes](#refresh-notes-2026-07-30).
+
+> ## ⛔ READ THIS BEFORE TASK 8
+>
+> **Do NOT wire `PolicyContext.failingChecks`.** Hold it at `null` (spec D1).
+>
+> `policy.ts:55-59` returns `finish-confident` whenever `ctx.failingChecks === 0`,
+> and `loop.ts:1909-1918` maps that action to exit reason `"complete"` followed by
+> `summarize(...)` and `return outcome()` — it **ends the run**. There is no verify
+> stage and no gate consultation, despite the comment at `policy.ts:58` claiming it
+> routes to "a confident finish/verify".
+>
+> Because `failingChecks` is hardcoded `null` today, that branch has **never
+> executed**. Supply a real count and the first iteration whose reviewer commits
+> with passing checks terminates the whole run and reports success — abandoning
+> every remaining backlog task. `"complete"` is in `SUCCESS_REASONS`
+> (`eval.ts:78`), so eval scores it a win and P27's exit-reason override does not
+> fire (terminal checks were green).
+>
+> Wire the **escalation** signals (they can only stop a run already going badly)
+> and leave the short-circuit dormant, pinned by the Task 8 regression test below.
+>
+> **`IterationObservation.failingChecks` is safe to wire** — it only feeds
+> `checksDelta`, which makes `stop-low-progress` _less_ aggressive while failures
+> are dropping (`policy.ts:62`). The dangerous field is the one on
+> `PolicyContext`.
+
 **Goal:** Feed real signals — P27-attested check results and panel finding signatures — into the `deriveProgress`/`decide` machinery that already models them; make the review pipeline's bookkeeping stop disagreeing with itself (verdict-reconciled severity totals, post-synth confirmation, dirty-worktree refusal); and finish the half-populated evidence fields. Default runs (no checks config, no panel, no adaptive router) stay byte-for-byte unchanged.
 
-**Architecture:** Pure signal helpers land first (`progress.ts`, `policy.ts`, `review-severity.ts`, new `finding-memory.ts`), each unit-tested in isolation. The panel (`panel.ts`) gains verdict-reconciled recording, a cheap-tier `review-confirm` local `Stage` const (house pattern: not in `STAGES`, run via `executeStage`), and a hard dirty-worktree refusal. The loop (`loop.ts`) wires the observations at its existing adaptive-control block (`:1538-1579`) and aggregates evidence onto the manifest. P27's contract (`checks.ts`) is consumed as given.
+**Architecture:** Pure signal helpers land first (`progress.ts`, `policy.ts`, `review-severity.ts`, new `finding-memory.ts`), each unit-tested in isolation. The panel (`panel.ts`) gains verdict-reconciled recording, a cheap-tier `review-confirm` local `Stage` const (house pattern: not in `STAGES`, run via `executeStage`), and a hard dirty-worktree refusal. The loop (`loop.ts`) wires the observations at its existing adaptive-control block (`:1878-1898`) and aggregates evidence onto the manifest. P27's contract (`checks.ts`) is consumed as given.
 
 **Tech Stack:** TypeScript (NodeNext ESM), Node ≥20, vitest. `packages/core` only. No new npm dependencies.
 
@@ -31,7 +58,17 @@
 
 **Interfaces:**
 
-- Consumes: **P27 contract** — `ChecksRecord`, `summarizeChecks(records: ChecksRecord[]): { passed: number; failed: number; failureSignatures: string[] }` from `./checks.js`.
+- Consumes: **P27 contract** — `ChecksRecord`, `summarizeChecks(records: ChecksRecord[], configuredCount: number): { passed: number; failed: number; skipped: number; failureSignatures: string[] }` from `./checks.js`. **The arity changed** in P27's merged spec (`a3cd6e2`): `configuredCount` is required so fail-fast short-circuiting surfaces as `skipped`. `checkSignals` passes `records.length` when it only needs the tally.
+
+> **Read per-iteration signals from the ledger, never from `checksSummary`** (spec D2).
+> P27 exposes both: per-boundary `AttestationLedger` entries (each with `boundary`,
+> `iteration`, `configuredCount`, `records`) and the run-level `ChecksSummary`.
+> `ChecksSummary` is **terminal and cumulative** — `terminalFailed` describes the
+> last attestation and `passed`/`failed` accumulate across the whole run. Feeding
+> either into an `IterationObservation` corrupts `checksDelta`: cumulative counts
+> never decrease, so the delta would report improvement that never happened.
+> Filter ledger entries to the current iteration and use those records alone.
+
 - Produces:
   - `export type CheckSignals = { failingChecks: number | null; failureSignature: string | null };`
   - `export function checkSignals(records: ChecksRecord[] | null | undefined): CheckSignals` — no records ⇒ both `null` (unmeasured, today's behavior); else `failed` count + first failure signature (`null` when green).
@@ -1371,9 +1408,9 @@ git commit -m "feat(p28): refuse panel on dirty worktree; record read-only viola
 
 **Files:**
 
-- Modify: `packages/core/src/loop.ts` (observation wiring at `:1538-1579`; state near `:971-972`; `recordStage` closure; manifest at `:874-907`)
+- Modify: `packages/core/src/loop.ts` (observation wiring at `:1878-1898`; `recordStage` closure at `:775`; manifest writes at `:532` and `:1114`)
 - Modify: `packages/core/src/panel.ts` (add `RunPanelOptions.onFindings` callback)
-- Modify: `packages/core/src/run-report.ts` (add `RunManifest.findingRecurrence`; refresh the stale "no bin/loop populates them yet" comments on `SafetyEvent` at `:29-32` and `ToolUsage` at `:80-84`)
+- Modify: `packages/core/src/run-report.ts` (add `RunManifest.findingRecurrence`; refresh the stale "no bin/loop populates them yet" comments on `SafetyEvent` at `:40` and `ToolUsage` at `:98`)
 - Modify: `packages/core/src/report-finalize.ts` (recurrence note from the manifest)
 - Modify: `README.md` (review panel / adaptive router sections), `docs/HARNESS_ROADMAP_PHASE6.md` (§P28 status note)
 - Test: `packages/core/src/__tests__/regression-trajectory.test.ts`
@@ -1382,9 +1419,88 @@ git commit -m "feat(p28): refuse panel on dirty worktree; record read-only viola
 
 - Consumes: **P27 contract** — `ChecksRecord` and the loop's attestation call site (P27's first slice runs checks after fix commits and attaches `StageRecord.checks`); Tasks 1–3 helpers; `deriveProgress`/`decide`; `Finding`.
 - Produces:
-  - `RunPanelOptions.onFindings?: (findings: Finding[]) => void` — invoked once per panel run with the merged, deduped lens findings (right after `mergeLensFindings`, `panel.ts:317-319`); absent ⇒ no behavior change.
+  - `RunPanelOptions.onFindings?: (findings: Finding[]) => void` — invoked once per panel run with the merged, deduped lens findings (right after the `mergeLensFindings` call, `panel.ts:523`); absent ⇒ no behavior change.
   - `RunManifest.findingRecurrence?: { signature: string; severity: string; file: string; claim: string; iterations: number[] }[]` (structural type — no import cycle; absent when nothing recurred).
   - Loop state: `iterationChecks: ChecksRecord[] | null`, `iterationFindingSignatures: string[]`, `recurringFindingCount: number` (reset each iteration), `prevFailureSignature`/`repeatedFailureStreak` (cross-iteration), `runToolsUsed: ToolUsage[]`, `runRecurrence: Map<string, FindingMemoryEntry>`, `findingMemory` (loaded once per run).
+
+- [ ] **Step 0: Write the D1 regression test — green checks must NOT end the run**
+
+This test exists to stop a future contributor from "finishing the wiring" by passing `checks.failingChecks` into `PolicyContext`. Put it in the same file as Step 1's fixture.
+
+```ts
+import { describe, expect, it } from "vitest";
+import {
+  checkSignals,
+  deriveProgress,
+  type IterationObservation,
+} from "../progress.js";
+import { decide } from "../policy.js";
+import type { ChecksRecord } from "../checks.js";
+
+const greenRecord: ChecksRecord = {
+  command: "pnpm -r test",
+  exitCode: 0,
+  durationMs: 900,
+  outputTail: "",
+  failureSignature: null,
+  attestedAt: "2026-07-30T00:00:00.000Z",
+};
+
+describe("D1: a green attestation must not short-circuit the run", () => {
+  it("checkSignals reports zero failing checks", () => {
+    expect(checkSignals([greenRecord]).failingChecks).toBe(0);
+  });
+
+  it("decide returns continue, NOT finish-confident", () => {
+    const checks = checkSignals([greenRecord]);
+    const cur: IterationObservation = {
+      diffSignature: "src/a.ts",
+      failingChecks: checks.failingChecks, // safe: only feeds checksDelta
+      failureSignature: checks.failureSignature,
+      findingSignatures: [],
+      cumulativeCostUsd: 1,
+    };
+    const prev: IterationObservation = {
+      ...cur,
+      diffSignature: "src/b.ts",
+      cumulativeCostUsd: 0.5,
+    };
+    const decision = decide(deriveProgress(cur, prev), {
+      stalledIterations: 0,
+      repeatedFailureStreak: 0,
+      failingChecks: null, // D1: held back on purpose
+      recurringFindingCount: 0,
+    });
+    expect(decision.action).toBe("continue");
+    expect(decision.action).not.toBe("finish-confident");
+  });
+
+  it("documents WHY: passing the count through would end the run", () => {
+    // This is the wiring D1 forbids. Asserting the consequence keeps the reason
+    // discoverable at the point someone would be tempted to change it:
+    // loop.ts maps finish-confident -> exitReason "complete" -> return outcome().
+    const decision = decide(
+      deriveProgress({
+        diffSignature: "a",
+        failingChecks: 0,
+        failureSignature: null,
+        findingSignatures: [],
+        cumulativeCostUsd: 1,
+      }),
+      {
+        stalledIterations: 0,
+        repeatedFailureStreak: 0,
+        failingChecks: 0,
+        recurringFindingCount: 0,
+      }
+    );
+    expect(decision.action).toBe("finish-confident"); // <- the trap, proven
+  });
+});
+```
+
+Run: `pnpm --filter @phamvuhoang/otto-core test -- regression-trajectory`
+Expected: the first two tests FAIL until `recurringFindingCount` is added to `PolicyContext` (Task 3); the third PASSES immediately and must keep passing — it documents the trap rather than the fix.
 
 - [ ] **Step 1: Write the failing test — the recurring-defect fixture (roadmap success metric)**
 
@@ -1505,7 +1621,7 @@ Expected: PASS immediately if Tasks 1–3 are complete (this is the integration 
 
 In `loop.ts` (imports: `checkSignals`, `nextFailureStreak` from `./progress.js`; `readFindingMemory`, `recordFindings`, `writeFindingMemory`, `type FindingMemoryEntry` from `./finding-memory.js`; `findingSignature`, `type Finding` from `./review-severity.js`; `type ChecksRecord` from `./checks.js`):
 
-1. **State** — beside `prevObservation`/`stalledIterations` (`:971-972`):
+1. **State** — beside `prevObservation`/`stalledIterations` (`:1214-1215`):
 
 ```ts
 let prevFailureSignature: string | null = null;
@@ -1519,7 +1635,20 @@ const runRecurrence = new Map<string, FindingMemoryEntry>();
 
 Also update the now-stale comment at `:967-970` ("failing-check and failure-signature observability is future work") — it is no longer future work. Reset `iterationChecks`/`iterationFindingSignatures`/`recurringFindingCount` at the top of each iteration body.
 
-2. **Checks capture (P27 integration point).** P27's first slice invokes its attestation runner from the loop after fix commits and attaches `checks` to the stage record. At that call site, also assign the returned records: `iterationChecks = records;`. Locate it with `grep -n "ChecksRecord\|runChecks\|attest" packages/core/src/loop.ts`; if P27 landed the capture under a different local name, adapt to it — the tested surface is `checkSignals`, not the variable name.
+2. **Checks capture (P27 integration point).** Per P27's refreshed plan, `maybeAttest` (`attestation.ts`) is called from the loop's **`recordStage` closure** (`loop.ts:775`) and returns the boundary's `ChecksRecord[]`. At that call site also assign `iterationChecks = attestedChecks;`.
+
+   **Prefer the ledger over the return value if the boundary and the observation can disagree** (spec D2). A single iteration can attest more than once — `reviewer` in the chain, `review-synth` under `--review-panel`, `apply-review-implementer` in review mode — so the last return value is not necessarily the whole iteration. The robust read is:
+
+   ```ts
+   const iterEntries = attestationLedger.entries.filter(
+     (e) => e.iteration === i
+   );
+   iterationChecks = iterEntries.flatMap((e) => e.records);
+   ```
+
+   Do **not** read `manifest.checksSummary` — it is terminal and cumulative, and feeding it here corrupts `checksDelta` (spec D2).
+
+   Verify the seam still exists before wiring: `grep -n "maybeAttest\|attestationLedger" packages/core/src/loop.ts`. The tested surface is `checkSignals`, not the variable name.
 
 3. **Findings capture** — in `panel.ts`, add to `RunPanelOptions`:
 
@@ -1530,7 +1659,7 @@ Also update the now-stale comment at `:967-970` ("failing-check and failure-sign
   onFindings?: (findings: Finding[]) => void;
 ```
 
-Invoke `opts.onFindings?.(findings);` immediately after `mergeLensFindings` (`panel.ts:317-319`, before the zero-findings early return so an empty raise is also observed). In the loop's `runPanel` invocation (`:1223-1244`), pass:
+Invoke `opts.onFindings?.(findings);` immediately after `mergeLensFindings` (`panel.ts:522-524`, before the zero-findings early return at `:526` so an empty raise is also observed). In the loop's `runPanel` invocation (`:1518`), pass:
 
 ```ts
               onFindings: (findings) => {
@@ -1569,12 +1698,23 @@ prevFailureSignature = checks.failureSignature;
 const decision = decide(signals, {
   stalledIterations,
   repeatedFailureStreak,
-  failingChecks: checks.failingChecks,
+  // DELIBERATELY null — see spec D1. Supplying `checks.failingChecks` here arms
+  // `policy.ts:55-59`'s `finish-confident` branch, which `loop.ts:1909-1918`
+  // turns into exit reason "complete" + `return outcome()` — ending the run on
+  // the first green iteration and abandoning the remaining backlog. That branch
+  // has never executed in production because this field has always been null.
+  // The escalation signals above are the ones P28 is wiring.
+  failingChecks: null,
   recurringFindingCount,
 });
 ```
 
-5. **Evidence completion** — in the `recordStage` closure add `if (sr.toolsUsed?.length) runToolsUsed.push(...sr.toolsUsed);` (declare `const runToolsUsed: ToolUsage[] = [];` beside `runSkillsUsed` at `:615`); in the manifest write (`:874-907`) add:
+> Note that `checks.failingChecks` **is** still used — it goes into the
+> `IterationObservation` above, where it feeds `checksDelta` and makes
+> `stop-low-progress` less aggressive while failures drop. Only the
+> `PolicyContext` field is held back.
+
+5. **Evidence completion** — in the `recordStage` closure add `if (sr.toolsUsed?.length) runToolsUsed.push(...sr.toolsUsed);` (declare `const runToolsUsed: ToolUsage[] = [];` beside `runSkillsUsed` at `:829`); in the manifest writes (`:532`, `:1114` — the `skillsUsed` spread at `:1128` is the pattern to mirror) add:
 
 ```ts
         ...(runToolsUsed.length > 0 ? { toolsUsed: runToolsUsed } : {}),
@@ -1583,7 +1723,7 @@ const decision = decide(signals, {
           : {}),
 ```
 
-In `run-report.ts`: add the `findingRecurrence` optional field to `RunManifest` (structural type per Interfaces), and rewrite the stale INERT paragraphs — `SafetyEvent` (`:29-32`) and `ToolUsage` (`:80-84`) are populated by the render boundary/compressor (`stage-exec.ts:217-220`), panel guards (P28), and the manifest aggregation (P28); say so instead of "no bin/loop populates them yet".
+In `run-report.ts`: add the `findingRecurrence` optional field to `RunManifest` (structural type per Interfaces), and rewrite the stale INERT paragraphs — `SafetyEvent` (`:40`) and `ToolUsage` (`:98`) are populated by the render boundary/compressor (`stage-exec.ts:217-220`), panel guards (P28), and the manifest aggregation (P28); say so instead of "no bin/loop populates them yet".
 
 6. **Report recurrence note** — in `report-finalize.ts`, when `ctx.manifest.findingRecurrence?.length`, add a What To Watch note (`Automated risk note: N finding(s) were re-raised after an earlier fix cycle — see findingRecurrence in the manifest.`) and an Automated Evidence line listing each `signature (iterations i, j)`. Extend `report-verdicts.test.ts` or the trajectory test with one assertion over `finalizeReportText` for this note.
 
@@ -1611,3 +1751,33 @@ git commit -m "feat(p28): wire attested checks + finding recurrence into adaptiv
 - **Opt-in consistency:** no checks config ⇒ `checkSignals(null)` ⇒ `null`s ⇒ `decide` sees exactly today's context; no panel ⇒ `onFindings` never fires ⇒ empty signatures, no `findings.json`, no recurrence; no adaptive router ⇒ the whole observation block is skipped as before. The only behavior changes inside opted-in modes are the panel refusal (Decision 1, locked) and the verdict-reconciled report text on panel runs that record verdicts.
 - **Type placement:** `CheckSignals` (T1, progress), `FindingMemoryEntry`/`FindingMemory` (T2), `ReviewVerdicts`/`ConfirmationResult` (T4/T6, review-severity), `ReviewVerdictSummary` (T5, report-finalize); `RunManifest.findingRecurrence` uses a structural type to avoid an import cycle with `finding-memory.ts` (which imports `runReportDir` from `run-report.ts`).
 - **House conventions held:** `review-confirm` is a local `Stage` const run via `executeStage`, not in `STAGES` or a chain; new template ships in `templates/`; ESM `.js` imports; no new dependencies; every parser is throws-free; release state untouched.
+
+---
+
+## Refresh notes (2026-07-30)
+
+Refreshed against `docs/superpowers/specs/2026-07-30-p28-regression-signals-design.md` and `main` at `a3cd6e2`.
+
+**Blocking dependency:** P27 is **specced, not implemented.** `a3cd6e2` merged its design spec and refreshed plan; `packages/core/src/checks.ts` and `attestation.ts` do not exist. Task 1 imports `ChecksRecord` and Task 8 reads `AttestationLedger`, so **this plan cannot compile until P27 ships.** Per the roadmap, P28's signal wiring begins only after two P27 boundaries are attested and stable.
+
+**The one change that matters — spec D1:** the prior revision wired `failingChecks: checks.failingChecks` into `PolicyContext`, which arms `policy.ts:55-59`'s `finish-confident` branch. `loop.ts:1909-1918` maps that action to exit reason `"complete"`, `summarize(...)`, `return outcome()` — it **ends the run**, with no verify stage and no gate consultation, despite `policy.ts:58` claiming it routes to "a confident finish/verify". Because the field has always been hardcoded `null`, that branch has never executed. Wiring it would make the first green iteration terminate the run and report success while abandoning the remaining backlog — and `"complete"` is in `SUCCESS_REASONS`, so eval would score it a win. The field is now held at `null` with an inline explanation, plus a Task 8 Step 0 regression test whose third case asserts the trap itself so the reasoning stays discoverable.
+
+**New — spec D2:** per-iteration signals read the P27 **ledger entries for the current iteration**, never `manifest.checksSummary`. P27's merged spec made the summary terminal-and-cumulative (its own D1), so feeding it here would report `checksDelta` improvements that never happened. Task 8 Step 2 now shows the ledger filter and names the real seam (`maybeAttest`, called from the `recordStage` closure at `loop.ts:775`).
+
+**Contract change:** `summarizeChecks` is now `(records, configuredCount)` in P27's merged spec — Task 1's Interfaces block cited the old single-argument form.
+
+**Anchor corrections:**
+
+| Cited before                                              | Actual on `main`                                                      |
+| --------------------------------------------------------- | --------------------------------------------------------------------- |
+| `loop.ts:1538-1579` (adaptive-control block)              | `loop.ts:1878-1898`                                                   |
+| `loop.ts:971-972` (`prevObservation`/`stalledIterations`) | `loop.ts:1214-1215`                                                   |
+| `loop.ts:874-907` (manifest write)                        | `loop.ts:532` and `:1114` (mirror the `skillsUsed` spread at `:1128`) |
+| `loop.ts:615` (`runSkillsUsed`)                           | `loop.ts:829`                                                         |
+| `loop.ts:1223-1244` (`runPanel` invocation)               | `loop.ts:1518`                                                        |
+| `panel.ts:317-319` (`mergeLensFindings`)                  | `panel.ts:522-524`; zero-findings early return at `:526`              |
+| `run-report.ts:29-32` / `:80-84` (INERT comments)         | `run-report.ts:40` / `:98`                                            |
+
+**Still accurate:** `policy.ts:44` (`decide`), `progress.ts:43` (`deriveProgress`), `report-finalize.ts:56` (`summarizeReviewSeverity`), `panel.ts:438` (the clean-worktree-only read-only guard).
+
+**Scope addition — spec D4:** severity reconciliation must also fix a **double-count**, not only REJECTED inflation. `summarizeReviewSeverity` sums `reviewSeverity` across every stage record carrying one, and `panel.ts:177` documents that it is passed for **both** the verify and synth substages — so a panel run counts the same findings twice today.

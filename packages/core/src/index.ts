@@ -272,7 +272,10 @@ export {
 export {
   extractFailureSignature,
   summarizeChecks,
+  readChecksConfig,
+  runConfiguredChecks,
   type ChecksRecord,
+  type CheckCommandRunner,
 } from "./checks.js";
 export {
   parseEvalConfigs,

@@ -1,3 +1,13 @@
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { resolveShell } from "./render.js";
+import {
+  checkCommand,
+  DEFAULT_POLICY,
+  type SafetyPolicy,
+} from "./safety-policy.js";
+
 /**
  * P27 harness-attested checks — the pure core.
  *
@@ -87,4 +97,102 @@ export function summarizeChecks(
     skipped: Math.max(0, configuredCount - records.length),
     failureSignatures: signatures,
   };
+}
+
+/** Last N chars of combined output kept on a record. */
+const OUTPUT_TAIL_LIMIT = 2000;
+/** Default per-command timeout: 10 minutes (matches the repo verify ceiling). */
+const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * `.otto/config.json` → `checks`. Tolerant by design: a missing file, malformed
+ * JSON, a missing key, or a non-array value all yield `[]`, which makes every
+ * P27 seam inert. Never throws — a broken config must not fail a run.
+ */
+export function readChecksConfig(workspaceDir: string): string[] {
+  try {
+    const raw = JSON.parse(
+      readFileSync(join(workspaceDir, ".otto", "config.json"), "utf8")
+    ) as Record<string, unknown>;
+    if (!Array.isArray(raw.checks)) return [];
+    return raw.checks.filter((c): c is string => typeof c === "string");
+  } catch {
+    return [];
+  }
+}
+
+/** Injectable spawn seam so CI never runs real check commands. */
+export type CheckCommandRunner = (
+  command: string,
+  cwd: string,
+  timeoutMs: number
+) => { status: number | null; output: string };
+
+const defaultCheckRunner: CheckCommandRunner = (command, cwd, timeoutMs) => {
+  const r = spawnSync(command, {
+    cwd,
+    shell: resolveShell(),
+    encoding: "utf8",
+    timeout: timeoutMs,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  return { status: r.status, output: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+};
+
+/**
+ * Execute the configured checks in order, **stopping at the first failure**
+ * (spec D2): a red typecheck must not pay for the slow suite. Unrun commands
+ * are deliberately absent from the result — {@link summarizeChecks} reports
+ * them as `skipped` so a short-circuited ladder never reads as a passing suite.
+ *
+ * Fail-closed: a policy-blocked command is recorded as a failure and never
+ * spawned, which also stops the ladder.
+ */
+export function runConfiguredChecks(
+  commands: string[],
+  cwd: string,
+  timeoutMs: number = DEFAULT_CHECK_TIMEOUT_MS,
+  run: CheckCommandRunner = defaultCheckRunner,
+  policy: SafetyPolicy = DEFAULT_POLICY,
+  now: () => string = () => new Date().toISOString()
+): ChecksRecord[] {
+  const records: ChecksRecord[] = [];
+  for (const command of commands) {
+    const violations = checkCommand(policy, command);
+    if (violations.length > 0) {
+      records.push({
+        command,
+        exitCode: -1,
+        durationMs: 0,
+        outputTail: violations.map((v) => v.message).join("; "),
+        failureSignature: `policy: ${violations[0].message}`.slice(0, 200),
+        attestedAt: now(),
+      });
+      break; // fail-closed: never keep attesting past a policy violation
+    }
+    const startedAt = Date.now();
+    let status: number | null;
+    let output: string;
+    try {
+      ({ status, output } = run(command, cwd, timeoutMs));
+    } catch (e) {
+      status = -1;
+      output = e instanceof Error ? e.message : String(e);
+    }
+    const exitCode = status ?? -1;
+    const outputTail = output.slice(-OUTPUT_TAIL_LIMIT);
+    records.push({
+      command,
+      exitCode,
+      durationMs: Date.now() - startedAt,
+      outputTail,
+      failureSignature:
+        exitCode === 0
+          ? null
+          : (extractFailureSignature(outputTail) ?? `exit ${exitCode}`),
+      attestedAt: now(),
+    });
+    if (exitCode !== 0) break; // fail-fast
+  }
+  return records;
 }

@@ -2,6 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Refreshed 2026-07-31** against `docs/superpowers/specs/2026-07-31-p30-budget-enforcement-design.md` and `main` at `50695c5`. See [Refresh notes](#refresh-notes-2026-07-31).
+
+> **⚠️ Land P29 first.** Both this plan's Task 1 and P29's Task 7 modify
+> `prompt-reduction.ts` and the `TokenMode` union (`tokens.ts:1`,
+> `parseTokenMode` at `:118`, the CLI help text at `cli-help.ts:574`) — they
+> **conflict textually**. P29 also supplies lever (a): the `{{ LEARNINGS }}`
+> re-render hook this ladder calls. As of `50695c5` P29 is **specced, not
+> implemented** — no `{{ LEARNINGS }}` path exists yet.
+
 **Goal:** Add an opt-in `--token-mode enforce` tier that, when `assessContextBudget` reports a stage's assembled context over budget, degrades it through a governed ladder — tighter `boundLearnings` budget → reversible evidence compression → `compactCommits` — recording every application; retire stale re-derived state into a bounded, harness-written per-run state digest; and bound the `resumeNote` chain. Default runs (no opt-in) stay **byte-for-byte unchanged**.
 
 **Architecture:** A new pure module `context-enforcement.ts` implements the ladder over the rendered prompt string, rewriting only the blocks `analyzeContext` already recognizes (`<learnings>`, evidence tags, `<commits>`) and never `<inputs>`/playbook text; `stage-exec.ts` invokes it between render and spawn (the only place the final prompt exists). Lever (a) runs through a loop-supplied hook that re-renders learnings from governed `.otto/memory/` records (the substrate P29 wires as the `{{ LEARNINGS }}` path — **P30 builds on P29's wired levers**); lever (b) reuses the existing `compressContentSync` seam (P22 #200 anchor-survival floor + retrieval store apply unchanged); lever (c) is self-contained (`parseCommitLog`/`compactCommits`). Each application is a `ContextEnforcementEvent` on the stage record, aggregated on the manifest via the `inputSharpness` optional-field pattern. A new `state-digest.ts` builds a bounded digest from run evidence each iteration; it and the char-bounded resume note ride the existing `RESUME` template var — no template changes. The context report distinguishes **Enforced** (events with measured savings) from **Advisory** (over-budget, lever not pulled).
@@ -192,15 +201,39 @@ git commit -m "feat(p30): enforce tier for --token-mode (flag/env/config)"
 
 **Interfaces:**
 
-- Consumes (all existing, unchanged): `assessContextBudget` + `ContextBudgetAssessment` (`context-budget.ts:114`), `analyzeContext` (`context-report.ts:92`), `parseCommitLog`/`compactCommits`/`formatCompactedCommits` (`iteration-compaction.ts:67/93/130`), `DEFAULT_LEARNINGS_BUDGET_CHARS` (`memory.ts:374` — the P29-wired lever's budget baseline), `TokenMode` (Task 1).
+- Consumes (all existing, unchanged): `assessContextBudget` + `ContextBudgetAssessment` (`context-budget.ts:114`), `analyzeContext` (`context-report.ts:95`), `parseCommitLog`/`compactCommits`/`formatCompactedCommits` (`iteration-compaction.ts:67/93/130`), `DEFAULT_LEARNINGS_BUDGET_CHARS` (`memory.ts:374` — the P29-wired lever's budget baseline), `TokenMode` (Task 1).
 - Produces:
   - `export type ContextEnforcementLever = "bound-learnings" | "compress-spill" | "compact-commits";`
   - `export type ContextEnforcementEvent = { lever: ContextEnforcementLever; beforeTokens: number; afterTokens: number; stage: string };`
-  - `export const RESUME_NOTE_MAX_CHARS = 2000;` and `export function boundResumeNote(note: string, maxChars?: number): string` — head-preserving, elision marker (the `DEFAULT_SKILLS_BUDGET_CHARS` pattern, `skill-routing.ts:24`).
-  - `export type EnforcementHooks = { renderBoundedLearnings?: (budgetChars: number) => string | null; compressEvidence?: (tag: string, text: string) => string | null };`
-  - `export function enforceContextBudget(prompt: string, ctx: { stage: string; model?: string; maxTokens?: number; fraction?: number; learningsBudgetChars?: number; commitsBudgetChars?: number; hooks?: EnforcementHooks }): { prompt: string; events: ContextEnforcementEvent[]; assessment: ContextBudgetAssessment }`
-  - `export function composeResume(digest: string, note: string, mode: TokenMode): string` — enforce ⇒ `digest + bounded note`; other modes ⇒ `note` verbatim (byte-for-byte default).
-  - `export type EnforcementSummary = { applications: number; tokensSaved: number; byLever: Partial<Record<ContextEnforcementLever, number>> };` and `export function summarizeEnforcement(events: ContextEnforcementEvent[]): EnforcementSummary`.
+  - `export const RESUME_NOTE_MAX_CHARS = 2000;` and `export function boundResumeNote(note: string, maxChars?: number): string` — **section-priority dropping, NOT head-preserving** (spec D5). Splits on the `\n\n` joiner, then drops whole sections lowest-priority-first until the note fits, appending a one-line note naming what was dropped. Uses `DEFAULT_SKILLS_BUDGET_CHARS` (`skill-routing.ts:24`) as the budget _pattern_, not its truncation mechanics.
+
+> **Why not head-preserving** (spec D5): `loop.ts:1279` composes the plan-gate
+> resume note as
+> `["…failed Otto's semantic plan gate…", formatPlanGate(gate), formatPlanDepthRubric(depth), "Rewrite <specPath> and <planPath>…"].join("\n\n")`.
+> The **actionable instruction is last** and the two rubric renderings in the
+> middle are the bulky parts, so head-preserving truncation cuts exactly the
+> sentence telling the agent which files to rewrite — leaving a diagnosis with no
+> instruction. Priority order, least-valuable first: depth rubric → gate detail →
+> lead sentence → rewrite instruction (never dropped).
+
+- `export type EnforcementHooks = { renderBoundedLearnings?: (budgetChars: number) => string | null; compressEvidence?: (tag: string, text: string) => string | null };`
+- `export function enforceContextBudget(prompt: string, ctx: { stage: string; model?: string; maxTokens?: number; fraction?: number; learningsBudgetChars?: number; commitsBudgetChars?: number; hooks?: EnforcementHooks }): { prompt: string; events: ContextEnforcementEvent[]; assessment: ContextBudgetAssessment }`
+
+> **Self-verification and fail-closed** (spec D2). This function performs textual
+> surgery on a rendered prompt, so before returning a rewrite it MUST re-run
+> `analyzeContext` on the result and confirm both invariants:
+>
+> 1. the `inputs` and `playbook` segment char counts are **unchanged**;
+> 2. every recognized block tag present in the input is still present in the output.
+>
+> If either fails, **return the ORIGINAL prompt unmodified** with a single event
+> `{ lever, beforeTokens, afterTokens: beforeTokens, skipped: "invariant-violation" }`.
+> An over-budget prompt is a cost problem; a silently mangled prompt is a
+> correctness problem. Add `skipped?: string` to `ContextEnforcementEvent` for
+> this and for the "lever unavailable" / "category unauthorized" cases.
+
+- `export function composeResume(digest: string, note: string, mode: TokenMode): string` — enforce ⇒ `digest + bounded note`; other modes ⇒ `note` verbatim (byte-for-byte default).
+- `export type EnforcementSummary = { applications: number; tokensSaved: number; byLever: Partial<Record<ContextEnforcementLever, number>> };` and `export function summarizeEnforcement(events: ContextEnforcementEvent[]): EnforcementSummary`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -396,7 +429,7 @@ export type ContextEnforcementEvent = {
 };
 
 /**
- * Char cap for the accretive resumeNote chain (loop.ts:975/1036/1385),
+ * Char cap for the accretive resumeNote chain (loop.ts:1218/1279/1725),
  * matching the skills block's budget pattern (DEFAULT_SKILLS_BUDGET_CHARS,
  * skill-routing.ts:24). Applied only in enforce mode (composeResume), so
  * default runs stay byte-for-byte.
@@ -602,7 +635,7 @@ git commit -m "feat(p30): governed context-budget degrade ladder + resume-note b
 
 **Interfaces:**
 
-- Consumes: `enforceContextBudget` + `EnforcementHooks` + `ContextEnforcementEvent` (Task 2); `assessContextBudget`/`ContextBudgetAssessment`; existing `compressContentSync` (`context-compressor.ts:306`), `compressionToolUsage` (`:351`), `analyzeContext`, `applyPromptReduction`, `resolveStageModel`.
+- Consumes: `enforceContextBudget` + `EnforcementHooks` + `ContextEnforcementEvent` (Task 2); `assessContextBudget`/`ContextBudgetAssessment`; existing `compressContentSync` (`context-compressor.ts:341`), `compressionToolUsage` (`:351`), `analyzeContext`, `applyPromptReduction`, `resolveStageModel`.
 - Produces:
   - `ExecuteStageOptions` gains `renderBoundedLearnings?: (budgetChars: number) => string | null;` (loop-supplied lever-a hook) and `budgetMaxTokens?: number;` (explicit ceiling; unset ⇒ model-derived).
   - `StageResult` gains `contextBudget?: ContextBudgetAssessment;` and `contextEnforcement?: ContextEnforcementEvent[];` (import types from `./context-budget.js` / `./context-enforcement.js`).
@@ -1007,7 +1040,7 @@ git commit -m "feat(p30): wire enforcement hooks, manifest rollup, bounded RESUM
 
 **Interfaces:**
 
-- Consumes: `StageRecord`/`RunManifest` types (`run-report.ts:114/150`), `runReportDir` + `readStageRecords` (`run-report.ts`), `boundResumeNote` (Task 2), `assessFactSurvival` (`compression-survival.ts:42` — the P22 gate, test-side).
+- Consumes: `StageRecord`/`RunManifest` types (`run-report.ts:148/225`), `runReportDir` + `readStageRecords` (`run-report.ts`), `boundResumeNote` (Task 2), `assessFactSurvival` (`compression-survival.ts:42` — the P22 gate, test-side).
 - Produces:
   - `export const STATE_DIGEST_MAX_CHARS = 2000;`
   - `export type StateDigestInput = { runId: string; inputs: string; iteration: number; totalIterations: number; commitSubjects: string[]; stages: StageRecord[]; verification?: RunManifest["verification"] };`
@@ -1292,6 +1325,28 @@ git commit -m "feat(p30): harness-written per-run state digest, injected via RES
 
 - Consumes: `StageRecord.contextBudget` / `StageRecord.contextEnforcement` (Task 3); existing `num` formatter and section style in `context-report-cli.ts`.
 - Produces: two new report sections — **Enforced** (one line per event: stage, lever, before → after, measured saving) and **Advisory** (over-budget stages with no events, naming the un-pulled `recommendation` lever from `assessContextBudget`). Both omitted on clean runs.
+
+> **Prerequisite — add `evidence` to `REDUCIBLE_LEVERS`** (spec D1), in
+> `context-budget.ts:66-69`:
+>
+> ```ts
+> const REDUCIBLE_LEVERS: Partial<Record<ContextCategory, string>> = {
+>   commits: "inter-iteration commit compaction (compactCommits, slice 6)",
+>   learnings: "bounded learnings injection (boundLearnings, slice 5)",
+>   evidence: "reversible evidence compression (compressContentSync, P20/P22)",
+> };
+> ```
+>
+> Without this, the Advisory line contradicts the ladder. `assessContextBudget`
+> picks `breakdown.segments.find((s) => s.category in REDUCIBLE_LEVERS)`
+> (`:128`) over a chars-descending list, so a prompt dominated by a 40 KB
+> `evidence` block (issue bodies, `<graph-map>`) skips it and advises compacting
+> a 2 KB `<commits>` block — while the ladder's `compress-spill` rung is what
+> actually fires. Add a `context-budget.test.ts` case: an evidence-dominated
+> breakdown recommends the compression lever.
+>
+> This one line also fixes `--context-report` advice on its own and can land
+> independently of enforcement.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1625,3 +1680,32 @@ git commit -m "feat(p30): long-run flattening + P22 survival gate fixtures + doc
 - **Type consistency:** `ContextEnforcementEvent`/`EnforcementSummary` defined in T2, consumed by `StageResult`/`StageRecord`/`RunManifest` (T3), the loop rollup (T4), and the report (T6). `ContextBudgetAssessment` reused from `context-budget.ts` unchanged — `assessContextBudget` itself is not modified anywhere.
 - **Known weak rung, stated:** default templates inject subject-only commits (`%s` format), so `compact-commits` often saves ~0 there; events stay visible rather than suppressed (spec risk bullet), and the rung matters on verbose bodies / `-n 15` templates.
 - **Deferred (spec out-of-scope, intentionally not planned):** P29's template conversion and dedup, P27 attested checks (digest reads verification rows only "if present"), live `otto-eval` A/B benchmark runs (operator workflow, not CI).
+
+---
+
+## Refresh notes (2026-07-31)
+
+Refreshed against `docs/superpowers/specs/2026-07-31-p30-budget-enforcement-design.md` and `main` at `50695c5`. The plan's core design held up — the ladder is correctly a fixed ordered list rather than being driven by `assessContextBudget`'s single `recommendation`, which is the right call and is unchanged.
+
+**Three corrections:**
+
+1. **`boundResumeNote` was head-preserving; it must be section-priority** (spec D5). `loop.ts:1279` composes the plan-gate resume note with the **actionable instruction last** (`"Rewrite <specPath> and <planPath>…"`) and the two bulky rubric renderings in the middle. Head-preserving truncation cuts exactly the sentence telling the agent which files to rewrite, leaving a diagnosis with no instruction. Now drops whole sections lowest-priority-first, never severing the instruction.
+
+2. **`enforceContextBudget` must verify its own rewrite and fail closed** (spec D2). It performs textual surgery on a rendered prompt; nothing previously checked the result. It now re-runs `analyzeContext` and confirms `inputs`/`playbook` char counts are unchanged and every recognized tag survives — otherwise it returns the **original** prompt with a `skipped: "invariant-violation"` event. An over-budget prompt is a cost problem; a mangled one is a correctness problem.
+
+3. **`evidence` must join `REDUCIBLE_LEVERS`** (spec D1). Task 6's Advisory section prints `assessContextBudget`'s recommendation, which is chosen by `breakdown.segments.find((s) => s.category in REDUCIBLE_LEVERS)` (`context-budget.ts:128`) over a chars-descending list. `REDUCIBLE_LEVERS` omits `evidence` — the one category the compressor is authorized to act on — so an evidence-dominated prompt is advised to compact `<commits>` while the ladder's `compress-spill` rung is what actually fires. This one line also fixes `--context-report` advice on its own, independently of enforcement.
+
+**Anchor corrections:**
+
+| Cited before                                          | Actual on `main`                              |
+| ----------------------------------------------------- | --------------------------------------------- |
+| `context-report.ts:92` (`analyzeContext`)             | `context-report.ts:95`                        |
+| `context-compressor.ts:306` (`compressContentSync`)   | `context-compressor.ts:341`                   |
+| `run-report.ts:114/150` (`StageRecord`/`RunManifest`) | `run-report.ts:148/225`                       |
+| `loop.ts:975/1036/1385` (resumeNote chain)            | `loop.ts:1218/1279/1725` (declared at `:502`) |
+
+**Still accurate:** `context-budget.ts:114` (`assessContextBudget`) and `:44`, `context-report.ts:48` (`estimateTokens`), `iteration-compaction.ts:67/93/130`, `memory.ts:374`/`:529`, `skill-routing.ts:24`, `cli-help.ts:574`, `run-bin.ts:169`, `compression-survival.ts:42`.
+
+**Sequencing:** P29 must land first — textual conflict on `prompt-reduction.ts`/`TokenMode`, plus lever (a) depends on P29's `{{ LEARNINGS }}` hook. P27 is a soft dependency: the state digest's attested-check field degrades to absent without it (spec D4). Neither has code on `main` yet; both merged specs only.
+
+**Authorization constraint (spec D6):** the `compress-spill` rung can only act on categories `isCompressibleCategory` already authorizes — `"issue-body"` today. Enforcement must not become a back door that authorizes `memory-projection` ahead of the P22 fact-survival gate (#200); P29's own D6 gated that on measurement.

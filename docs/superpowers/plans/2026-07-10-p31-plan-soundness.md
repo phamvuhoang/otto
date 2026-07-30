@@ -16,7 +16,7 @@
 - **The judge is not a second implementer.** Document + file map in via vars, three verdict lines out. Its template instructs no tool use, no repo reads; it never rewrites a plan.
 - **Fail-open judge.** A judge failure degrades to the rubric-only gate with the reason recorded — it never blocks or aborts a plan run.
 - **Human authority at the checkpoint.** Explicit approve wins even after a failing re-score; the edit loop's timeout pauses and never auto-approves.
-- **Harness substage pattern.** `PLAN_JUDGE_STAGE` is a local const in `loop.ts` (like `REPORT_REWRITE_STAGE`, `loop.ts:126-131`), cost-accounted via `accountStage` and evidence-recorded via `recordStage` — not added to `STAGES` or any chain.
+- **Harness substage pattern.** `PLAN_JUDGE_STAGE` is a local const in `loop.ts` (like `REPORT_REWRITE_STAGE`, `loop.ts:153-158`), cost-accounted via `accountStage` and evidence-recorded via `recordStage` — not added to `STAGES` or any chain.
 - **Verify command:** `pnpm -r typecheck && pnpm -r test && pnpm test`. Pre-commit runs prettier + typecheck.
 - **Never hand-edit release version state.** release-please owns it.
 
@@ -1556,7 +1556,7 @@ In `automaticEvidenceLines` (`:174-183`), branch the same way:
       ...
 ```
 
-(`loop.ts:801-804` needs no change: `detectScopeDrift`'s richer result flows structurally into the `scopeDrift` context field at `:871`.)
+(`loop.ts:1019-1021` needs no change: `detectScopeDrift`'s richer result flows structurally into the `scopeDrift` finalize-context field at `:1110`.)
 
 - [ ] **Step 4: Documentation**
 
@@ -1583,7 +1583,7 @@ Spec'd in `docs/superpowers/specs/2026-07-10-p31-plan-soundness-design.md`
 
 1. **Interactive sharpening questions.** When `--sharpen-input` finds unmet
    dimensions (`scoreInputSharpness`, `input-sharpness.ts:121-136`) AND the
-   session is interactive (the checkpoint's TTY checks, `loop.ts:998-1003`),
+   session is interactive (the checkpoint's TTY checks, `loop.ts:1241-1250`),
    ask up to 3 plan-changing questions before the plan stage — one per unmet
    dimension in scorecard order, each skippable (Enter = skip), reusing the
    `PlanCheckpointDeps` injectable-read pattern with its own timeout. Answers
@@ -1592,7 +1592,7 @@ Spec'd in `docs/superpowers/specs/2026-07-10-p31-plan-soundness-design.md`
    byte-for-byte unchanged (`formatSharpeningGuidance` still applies). Never
    an interview tax: a sharp input asks zero questions.
 2. **Traceability: plan-task IDs into matrix rows.** `PlanTask.id` is already
-   mandatory (`plan-tasks.ts:14-23`). `VerificationEntry`
+   mandatory (`plan-tasks.ts:14`). `VerificationEntry`
    (`verification-matrix.ts`) gains optional `planTaskId?: string`; the verify
    template asks each row to cite the plan task it proves;
    `parseVerificationMatrix*` carries it through; the matrix summary reports
@@ -1600,8 +1600,8 @@ Spec'd in `docs/superpowers/specs/2026-07-10-p31-plan-soundness-design.md`
    spec → task → verification artifact is one checkable chain on gated runs.
 3. **Gate everywhere.** Give the ghafk/linear bin configs a `planStage`
    (issue-derived planning template) so `--plan` stops being rejected at
-   `run-bin.ts:562-565` and the existing plan-mode chain swap
-   (`run-bin.ts:623-631`), gate, judge, and checkpoint apply unchanged.
+   `run-bin.ts:570-573` and the existing plan-mode chain swap
+   (`run-bin.ts:634`), gate, judge, and checkpoint apply unchanged.
    Flag-absent runs on every bin stay byte-for-byte today's behavior.
 
 ## Self-Review Notes
@@ -1609,7 +1609,7 @@ Spec'd in `docs/superpowers/specs/2026-07-10-p31-plan-soundness-design.md`
 - **Spec coverage (slice 1):** judge substrate (T1), gate join + thresholds
   (T2), template + fail-open orchestration + keyword-stuffed/deep fixture pair
   (T3), flag/loop/manifest wiring (T4), working edit path replacing the
-  `loop.ts:1063` collapse (T5), re-plan counter + escalated final attempt (T6),
+  `loop.ts:1306` collapse (T5), re-plan counter + escalated final attempt (T6),
   zero-path drift fix + report rendering + docs (T7). Every slice-1 scope
   bullet in the spec maps to a task; success criteria 1–8 map to T3, T1, T2,
   T3, T5, T6, T7, T1/T4 respectively.
@@ -1635,3 +1635,28 @@ Spec'd in `docs/superpowers/specs/2026-07-10-p31-plan-soundness-design.md`
   edit loop's timeout pauses rather than auto-approving (spec Decision 6); the
   checkpoint's own 2-minute auto-approve is unchanged. Judge cost is bounded:
   cheap tier, at most once per gate evaluation, only behind `--plan-judge`.
+
+---
+
+## Refresh notes (2026-07-31)
+
+Refreshed against `main` at `95f5f1d`. The spec this plan implements — `docs/superpowers/specs/2026-07-10-p31-plan-soundness-design.md` — **already existed**; it was reviewed rather than rewritten, and all nine of its locked decisions survive unchanged. See its own `## Refresh (2026-07-31)` section.
+
+**Slice 1 is unblocked.** P28 cannot compile until P27 ships; P30 conflicts textually with P29. This plan references no P27–P30 module (`checks.js`, `attestation.js`, `context-enforcement.ts`, `state-digest.ts`, `ChecksRecord` appear nowhere in it), so slice 1 can be implemented today. The roadmap's LATER placement reflects its size and slice 2's P27 tie-in, not a slice-1 blocker.
+
+**Anchor corrections:**
+
+| Cited before                                       | Actual on `main`                                                       |
+| -------------------------------------------------- | ---------------------------------------------------------------------- |
+| `loop.ts:1063` (the edit≡reject collapse)          | `loop.ts:1306` — `return decision === "approve" ? "accept" : "pause";` |
+| `loop.ts:126-131` (`REPORT_REWRITE_STAGE`)         | `loop.ts:153-158`                                                      |
+| `loop.ts:998-1003` (checkpoint TTY checks)         | `loop.ts:1241-1250`                                                    |
+| `loop.ts:801-804` / `:871` (scopeDrift flow)       | computed at `loop.ts:1019-1021`, passed to finalize at `:1110`         |
+| `run-bin.ts:562-565` (`--plan` afk-only rejection) | `run-bin.ts:570-573`                                                   |
+| `run-bin.ts:623-631` (plan-mode chain swap)        | `run-bin.ts:634`                                                       |
+| `plan-tasks.ts:14-23` (`PlanTask.id`)              | `plan-tasks.ts:14`                                                     |
+| `stages.ts:19-24` (plan tier `strong`)             | `stages.ts:31-37`; `tier: "strong"` at `:35`                           |
+
+Still accurate: `input-sharpness.ts:121` (`scoreInputSharpness`), `model-tier.ts:141-142`, `plan-gate.ts:14-18`, `panel.ts:84-98`, `render.ts:211-215`. `detectScopeDrift` is at `plan-rubric.ts:312`.
+
+**Slice-2 addition recorded in the spec:** once P27 ships its `checks` contract, the judge's traceability dimension can score a plan's proposed verify commands against the repo's _configured_ checks — the roadmap's "judge cites attested verify commands". Kept out of slice 1 because it would make the judge's score depend on unshipped code, and Decision 3 requires the comparison to arrive as a rendered var rather than a repo read.

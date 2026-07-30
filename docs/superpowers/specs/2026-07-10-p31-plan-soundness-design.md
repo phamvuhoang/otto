@@ -262,3 +262,37 @@ Slice 2 (own plan after slice 1):
    matrix coverage reporting.
 10. Gate everywhere: `planStage` for ghafk/linear bins behind the same
     `--plan` opt-in.
+
+---
+
+## Refresh (2026-07-31)
+
+Reviewed against `main` at `95f5f1d`, with P27–P30's design specs now merged (`a3cd6e2`, `449201c`, `50695c5`, `95f5f1d`). **The nine locked decisions all survive review unchanged** — none of them depended on anything P32/otto-review or the Phase 6 specs altered. What follows is anchor drift, one new integration opportunity, and a sequencing correction.
+
+### Slice 1 is unblocked — and it is the only Phase 6 initiative that is
+
+P28 cannot compile until P27 ships; P30 conflicts textually with P29 and needs its `{{ LEARNINGS }}` hook. **P31 slice 1 depends on neither.** Its seven tasks touch `plan-judge.ts` (new), `plan-gate.ts`, `plan-rubric.ts`, `plan-checkpoint.ts`, `loop.ts`, `cli-help.ts`, and `run-bin.ts` — and the plan contains no reference to `checks.js`, `attestation.js`, `context-enforcement.ts`, `state-digest.ts`, or `ChecksRecord`.
+
+The roadmap places P31 **LATER** because it is the largest and because its judge could eventually cite P27's attested verify commands. That reasoning holds for _slice 2_, not slice 1. If implementation starts before P27 lands, slice 1 is the only Phase 6 work that can proceed today.
+
+### New integration opportunity (slice 2, not slice 1)
+
+P27's merged spec defines a `checks` contract in `.otto/config.json` — the repo's real verify commands, executed by the harness. The roadmap's P31 dependency line ("P27 attested checks — verify-command substance") becomes concrete once that exists:
+
+> The judge's **traceability** dimension can compare the verify commands a plan proposes against the repo's configured `checks`, scoring a plan that invents a verify command it cannot run lower than one that cites the suite the harness will actually execute.
+
+This is deliberately **not** added to slice 1. It would make the judge's score depend on unshipped code, and Decision 3 ("the judge reads the document, not the repo") means the comparison must arrive as a rendered var, not a repo read. Recorded here so slice 2's plan can cite it.
+
+### Anchor corrections
+
+| Cited                                              | Actual on `main`                             |
+| -------------------------------------------------- | -------------------------------------------- |
+| `loop.ts:126-131` (`REPORT_REWRITE_STAGE` pattern) | `loop.ts:153`                                |
+| `stages.ts:19-24` (plan stage base tier `strong`)  | `stages.ts:31-37`; `tier: "strong"` at `:35` |
+| `plan-rubric.ts:172-180` (`extractPlanFileMap`)    | `plan-rubric.ts:173`                         |
+
+Still accurate: `model-tier.ts:141-142` (pin-wins), `plan-gate.ts:14-18` (the 0.75 soft threshold), `panel.ts:84-98` (the lens `Stage` const pattern), `render.ts:211-215` (generic `{{ VAR }}` substitution). `detectScopeDrift` (Decision 8) is at `plan-rubric.ts:312`.
+
+### Decision 8 remains necessary
+
+`loop.ts:1019-1021` still computes `scopeDrift` as `planDoc && planMatchesRun ? detectScopeDrift(...) : null`, with no zero-path guard inside `detectScopeDrift` — so a plan naming no paths still yields a total-drift verdict rather than a coverage gap. Unchanged since the spec was written.

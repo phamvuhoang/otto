@@ -270,6 +270,11 @@ export {
   type Supersession,
 } from "./memory.js";
 export {
+  extractFailureSignature,
+  summarizeChecks,
+  type ChecksRecord,
+} from "./checks.js";
+export {
   parseEvalConfigs,
   runEval,
   runEvalCompare,

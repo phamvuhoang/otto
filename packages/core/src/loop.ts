@@ -1119,6 +1119,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         exitReason: finalReason,
         nextAction: nextActionFor(finalReason),
         artifacts: [],
+        // P27: the report builder reads checksSummary off this manifest to
+        // render its "Attested Checks" block, so it must be attached here too,
+        // not only on the persisted manifest below.
+        ...(checksSummary ? { checksSummary } : {}),
         ...(inputSharpness
           ? {
               inputSharpness: {

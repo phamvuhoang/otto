@@ -66,6 +66,13 @@ export function modelContextBudget(
 const REDUCIBLE_LEVERS: Partial<Record<ContextCategory, string>> = {
   commits: "inter-iteration commit compaction (compactCommits, slice 6)",
   learnings: "bounded learnings injection (boundLearnings, slice 5)",
+  // `evidence` is the category the compressor is actually authorized to act on
+  // (isCompressibleCategory -> "issue-body"), and it holds the multi-KB pasted
+  // issue bodies and <graph-map> output. Omitting it meant `find` skipped the
+  // largest compressible block — a prompt bloated by a 40 KB issue body was
+  // advised to compact a 2 KB <commits> block, while the enforcement ladder's
+  // compress rung is what would actually fire (P30 spec D1).
+  evidence: "reversible evidence compression (compressContentSync, P20/P22)",
 };
 
 /** What to compact when a stage is over budget — the largest reducible filler. */

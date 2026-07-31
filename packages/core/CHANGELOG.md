@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.39.0...otto-core-v1.0.0) (2026-07-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **p28:** regression signals and review integrity ([#263](https://github.com/phamvuhoang/otto/issues/263))
+
+### Features
+
+* **p28:** regression signals and review integrity ([#263](https://github.com/phamvuhoang/otto/issues/263)) ([b481d28](https://github.com/phamvuhoang/otto/commit/b481d2862107fb9a325b42756a421f750a2e8307))
+
 ## [0.39.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.38.1...otto-core-v0.39.0) (2026-07-31)
 
 

@@ -124,9 +124,7 @@ export function parseMemoryRecord(raw: unknown): MemoryRecord | null {
         ? (o.status as MemoryStatus)
         : "active",
     createdAt:
-      typeof o.createdAt === "string"
-        ? o.createdAt
-        : new Date(0).toISOString(),
+      typeof o.createdAt === "string" ? o.createdAt : new Date(0).toISOString(),
     useCount:
       typeof o.useCount === "number" && Number.isFinite(o.useCount)
         ? o.useCount
@@ -218,8 +216,8 @@ export function supersede(
 
 /** Group key for conflict detection: same category + same scope set. */
 function conflictKey(record: MemoryRecord): string {
-  const scope = [...record.scope].sort().join(" ");
-  return `${record.category ?? ""}${scope}`;
+  const scope = [...record.scope].sort().join("\u0000");
+  return `${record.category ?? ""}\u0001${scope}`;
 }
 
 /**
@@ -319,13 +317,15 @@ export function auditMemory(
  * a normalized category. The first section (Conventions) is also the catch-all for
  * a record whose category matches none of them.
  */
-const LEARNINGS_SECTIONS: { heading: string; match: (norm: string) => boolean }[] =
-  [
-    { heading: "Conventions", match: (n) => n.startsWith("convention") },
-    { heading: "Gotchas", match: (n) => n.startsWith("gotcha") },
-    { heading: "Decisions", match: (n) => n.startsWith("decision") },
-    { heading: "Dead ends", match: (n) => n.startsWith("deadend") },
-  ];
+const LEARNINGS_SECTIONS: {
+  heading: string;
+  match: (norm: string) => boolean;
+}[] = [
+  { heading: "Conventions", match: (n) => n.startsWith("convention") },
+  { heading: "Gotchas", match: (n) => n.startsWith("gotcha") },
+  { heading: "Decisions", match: (n) => n.startsWith("decision") },
+  { heading: "Dead ends", match: (n) => n.startsWith("deadend") },
+];
 
 /** Reduce a category to alphanumerics so "dead-end"/"dead end" both match "deadend". */
 function normalizeCategory(category: string | undefined): string {
@@ -384,7 +384,10 @@ export type MemorySelectionContext = {
 };
 
 /** Relevance score of one record against the task scope (higher = more relevant). */
-function relevanceScore(record: MemoryRecord, taskKey: string | undefined): number {
+function relevanceScore(
+  record: MemoryRecord,
+  taskKey: string | undefined
+): number {
   let score = 0;
   if (taskKey && record.taskKey === taskKey) score += 3; // same task
   if (record.scope.length === 0) score += 1; // repo-wide, broadly applicable

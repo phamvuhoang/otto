@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/phamvuhoang/otto/compare/otto-core-v1.0.0...otto-core-v1.1.0) (2026-07-31)
+
+
+### Features
+
+* **p30:** context budget enforcement and state digest ([#266](https://github.com/phamvuhoang/otto/issues/266)) ([64a5790](https://github.com/phamvuhoang/otto/commit/64a5790e5920ae3a25797db683606e4211e2d2f6))
+
 ## [1.0.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.39.0...otto-core-v1.0.0) (2026-07-31)
 
 

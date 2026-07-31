@@ -192,6 +192,9 @@ export type RunPanelOptions = {
       minor: number;
       nit: number;
       suppressed: number;
+      /** Verifier-REJECTED count (P28 D4); passed only for the synth substage,
+       *  where the confirmed/rejected split is known. */
+      rejected?: number;
     }
   ) => void;
 };
@@ -746,7 +749,13 @@ async function runPanelSynth(
     } else {
       outcomeLine("clean — no fix needed");
     }
-    recordStage?.(SYNTH_STAGE.name, synth, synthStartedAt, analysis.severity);
+    // P28 D4: carry the verifier's REJECTED count alongside the confirmed
+    // severity so the report can show it separately instead of folding
+    // rejected candidates into the headline.
+    recordStage?.(SYNTH_STAGE.name, synth, synthStartedAt, {
+      ...analysis.severity,
+      rejected: analysis.rejected.length,
+    });
     onStage?.(synth);
     return synth;
   } finally {

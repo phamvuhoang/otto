@@ -304,11 +304,20 @@ describe("summarizeReviewSeverity", () => {
     ).toBeNull();
   });
 
-  it("adds counts across review stages", () => {
+  it("reconciles duplicate records within one iteration (P28 D4)", () => {
+    // Two severity records for the SAME iteration are the panel's verify +
+    // synth pair, not two separate reviews — summing them double-counted every
+    // finding. The reconciled view is one iteration's worth.
     expect(summarizeReviewSeverity([stage, stage])).toMatchObject({
-      major: 2,
-      nit: 4,
-      suppressed: 4,
+      major: 1,
+      nit: 2,
+      suppressed: 2,
     });
+  });
+
+  it("still adds counts across DIFFERENT iterations", () => {
+    expect(
+      summarizeReviewSeverity([stage, { ...stage, iteration: 2 }])
+    ).toMatchObject({ major: 2, nit: 4, suppressed: 4 });
   });
 });

@@ -176,6 +176,10 @@ export type StageRecord = {
     minor: number;
     nit: number;
     suppressed: number;
+    /** Findings the verifier REJECTED (P28, issue #248); reported alongside the
+     *  headline rather than inside it, so a rejected finding never inflates the
+     *  counts a maintainer reads as real. */
+    rejected?: number;
   };
   startedAt: string;
   finishedAt: string;

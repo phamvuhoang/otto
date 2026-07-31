@@ -126,6 +126,16 @@ Otto warns at startup if the working tree has uncommitted tracked changes under 
 
 Per-task artifacts (spec, plan, follow-ups) are grouped under `.otto/tasks/<task-key>/`, named with the same task key as the branch. See **[MIGRATION.md](./MIGRATION.md)** for the old→new path mapping and how to migrate an existing repo.
 
+## Semantic plan judge (`--plan-judge`)
+
+**Off by default.** Enable with `--plan-judge`, `OTTO_PLAN_JUDGE=1`, or `"planJudge": true` in `.otto/config.json` (flag > env > config).
+
+In `--plan` mode, a plan that clears the lexical rubric is additionally scored by a cheap-tier judge on three dimensions: alternatives weighed, risk substance, and requirement→task→test traceability. A plan must meet 2 of 3 by default.
+
+The judge only ever makes the gate stricter — it can fail a plan the rubric passed, never rescue one the rubric failed. If its verdict is unparseable the gate falls back to the rubric alone, so a broken judge cannot block your plan flow.
+
+At the checkpoint, **[e]dit now works**: edit `spec.md`/`plan.md` on disk, press Enter, and Otto re-scores and asks again. An explicit approve is honored even if the re-score still fails.
+
 ## Context budget enforcement (`--token-mode enforce`)
 
 **Off by default.** `off`, `measure` and `reduce` behave exactly as before.

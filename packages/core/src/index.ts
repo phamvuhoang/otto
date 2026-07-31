@@ -537,6 +537,7 @@ export {
   formatCheckpointPrompt,
   parseCheckpointResponse,
   resolvePlanCheckpoint,
+  resolvePlanEditLoop,
   type CheckpointDecision,
   type PlanCheckpointDeps,
 } from "./plan-checkpoint.js";
@@ -864,3 +865,11 @@ export {
   STATE_DIGEST_MAX_CHARS,
   type StateDigestInput,
 } from "./state-digest.js";
+export {
+  PLAN_JUDGE_DIMENSIONS,
+  formatPlanJudge,
+  parsePlanJudgeVerdict,
+  readPlanJudgeEnabled,
+  type PlanJudgeDimension,
+  type PlanJudgeScore,
+} from "./plan-judge.js";

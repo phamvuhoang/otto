@@ -9,6 +9,7 @@
  */
 
 import type { PlanDepthScore, PlanRubricScore } from "./plan-rubric.js";
+import type { PlanJudgeScore } from "./plan-judge.js";
 
 /**
  * Default ratio a plan must reach to clear the gate. 0.75 = three-quarters of the
@@ -17,6 +18,13 @@ import type { PlanDepthScore, PlanRubricScore } from "./plan-rubric.js";
  */
 export const DEFAULT_PLAN_QUALITY_THRESHOLD = 0.75;
 export const DEFAULT_PLAN_DEPTH_THRESHOLD = 1;
+/**
+ * Default share of judge dimensions a plan must meet. 2/3 — one soft dimension
+ * may miss, mirroring the 0.75 soft-threshold philosophy above. The judge is an
+ * ADDITIONAL bar, never an alternative one: it can fail a plan the rubric
+ * passed, but it can never rescue one the rubric failed.
+ */
+export const DEFAULT_PLAN_JUDGE_THRESHOLD = 2 / 3;
 
 export type PlanGateVerdict = {
   passed: boolean;
@@ -34,6 +42,12 @@ export type PlanGateVerdict = {
   depthThreshold?: number;
   /** Depth criteria missing, when present. */
   depthMissing?: string[];
+  /** Semantic-judge ratio (0..1) when a judge score was supplied (P31). */
+  judgeRatio?: number;
+  /** Judge threshold applied, when present. */
+  judgeThreshold?: number;
+  /** Judge dimensions the plan did not meet, when present. */
+  judgeMissing?: string[];
 };
 
 /**
@@ -47,14 +61,26 @@ export function assessPlanGate(
     threshold?: number;
     depth?: PlanDepthScore;
     depthThreshold?: number;
+    /** Semantic-judge score (P31). Absent ⇒ verdicts byte-identical to today. */
+    judge?: PlanJudgeScore;
+    judgeThreshold?: number;
   } = {}
 ): PlanGateVerdict {
   const threshold = opts.threshold ?? DEFAULT_PLAN_QUALITY_THRESHOLD;
   const depthThreshold = opts.depthThreshold ?? DEFAULT_PLAN_DEPTH_THRESHOLD;
   const depthPassed = opts.depth ? opts.depth.ratio >= depthThreshold : true;
-  const passed = score.ratio >= threshold && depthPassed;
+  const judgeThreshold = opts.judgeThreshold ?? DEFAULT_PLAN_JUDGE_THRESHOLD;
+  const judgePassed = opts.judge ? opts.judge.ratio >= judgeThreshold : true;
+  const passed = score.ratio >= threshold && depthPassed && judgePassed;
   const needed = Math.ceil(threshold * score.maxScore) - score.metCount;
   return {
+    ...(opts.judge
+      ? {
+          judgeRatio: opts.judge.ratio,
+          judgeThreshold,
+          judgeMissing: opts.judge.missing,
+        }
+      : {}),
     passed,
     ratio: score.ratio,
     threshold,

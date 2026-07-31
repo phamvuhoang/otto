@@ -592,12 +592,78 @@ export function resolveLearningsBlock(
     // raw file is still better than an empty block.
     return { text: trimmed, bounded: false, rawChars };
   }
+  const projection = formatBoundedLearnings(bounded, ctx.now).replace(
+    /\n+$/,
+    ""
+  );
   return {
-    text: formatBoundedLearnings(bounded, ctx.now).replace(/\n+$/, ""),
+    text: fillBudgetWithRawTail(projection, trimmed, budget),
     bounded: true,
     rawChars,
     droppedCount: bounded.dropped.length,
   };
+}
+
+/** Below this, a leftover budget slice is too small to carry useful context. */
+const MIN_RAW_TAIL_CHARS = 200;
+
+/**
+ * Spend the whole budget rather than a sliver of it.
+ *
+ * The governed projection is usually far smaller than the budget — a repo with
+ * one record produced ~91 chars of a 6000-char allowance while a hand-written
+ * `LEARNINGS.md` was discarded wholesale. That is strictly worse than keeping
+ * the records AND as much of the raw file as still fits, so this appends the
+ * remainder.
+ *
+ * Lines already present in the projection are skipped: when `LEARNINGS.md` is
+ * genuinely the projection of the records (the documented model in
+ * `governed-memory.md`), appending it would only duplicate what the records
+ * already supplied. So a projected file adds nothing and a hand-written one
+ * adds everything — without needing to know which it is.
+ */
+function fillBudgetWithRawTail(
+  projection: string,
+  raw: string,
+  budget: number
+): string {
+  const remaining = budget - projection.length;
+  if (remaining < MIN_RAW_TAIL_CHARS) return projection;
+
+  // `projectLearnings` renders each record as `- ${content}`, so a record whose
+  // content is already a bullet becomes `- - …`. Compare on the marker-stripped
+  // form or the dedupe silently misses every line it is meant to catch.
+  const key = (line: string): string =>
+    line
+      .trim()
+      .replace(/^(?:[-*+]\s+)+/, "")
+      .trim();
+  const seen = new Set(projection.split("\n").map(key).filter(Boolean));
+  const fresh = raw
+    .split("\n")
+    .filter((l) => {
+      const t = key(l);
+      return t.length === 0 || !seen.has(t);
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (fresh.length === 0) return projection;
+
+  const NOTE = "\n\n_Raw `LEARNINGS.md` trimmed to fit the context budget._";
+  const SEP = "\n\n";
+  // SEP counts against the budget too — omitting it overshot by 2 chars.
+  const room = remaining - NOTE.length - SEP.length;
+  if (room < MIN_RAW_TAIL_CHARS) return projection;
+
+  if (fresh.length <= remaining - SEP.length) {
+    return `${projection}${SEP}${fresh}`;
+  }
+  // Prefer a line boundary so the block never ends mid-sentence.
+  const window = fresh.slice(0, room);
+  const lastBreak = window.lastIndexOf("\n");
+  const kept = lastBreak > room / 2 ? window.slice(0, lastBreak) : window;
+  return `${projection}${SEP}${kept.trimEnd()}${NOTE}`;
 }
 
 /**

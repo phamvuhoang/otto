@@ -56,6 +56,8 @@ import { readChecksConfig } from "./checks.js";
 import {
   newLedger,
   maybeAttest,
+  resolveAttestation,
+  finalExitReason,
   type AttestationContext,
 } from "./attestation.js";
 import {
@@ -1015,6 +1017,12 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // covered without threading the manifest through each return site.
   const finalizeManifest = (reason: string, completed: number): void => {
     try {
+      // P27: fold the attestation ledger. A terminal-red run swaps a SUCCESS
+      // exit reason for CHECKS_FAILED_REASON; a non-success reason is left
+      // alone so attestation never masks why the run actually stopped.
+      const { checksSummary, exitReasonOverride } =
+        resolveAttestation(attestationLedger);
+      const finalReason = finalExitReason(reason, exitReasonOverride);
       const changedFiles = changedFilesSince(workspaceDir, runStartSha);
       const planDoc = latestTaskPlanDocument(workspaceDir);
       const inputText = inputs || "";
@@ -1108,8 +1116,8 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         completedIterations: completed,
         costUsd: runCostUsd,
         tokenUsage: runTokenUsage,
-        exitReason: reason,
-        nextAction: nextActionFor(reason),
+        exitReason: finalReason,
+        nextAction: nextActionFor(finalReason),
         artifacts: [],
         ...(inputSharpness
           ? {
@@ -1149,9 +1157,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         completedIterations: completed,
         costUsd: runCostUsd,
         tokenUsage: runTokenUsage,
-        exitReason: reason,
-        nextAction: nextActionFor(reason),
+        exitReason: finalReason,
+        nextAction: nextActionFor(finalReason),
         artifacts: collectArtifacts(),
+        ...(checksSummary ? { checksSummary } : {}),
         ...(runSkillsUsed.length > 0 ? { skillsUsed: runSkillsUsed } : {}),
         ...(compressorSafetyEvents.length > 0
           ? { safetyEvents: compressorSafetyEvents }
@@ -1192,6 +1201,14 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     // false here — the deferred-count line is written separately below to
     // preserve the greppable count format ("N deferred follow-ups …").
     const nowTs = nowIso();
+    // P27: the done-card snapshot must show the same verdict the persisted
+    // manifest does, so a terminal-red run never flashes "complete" on screen
+    // while the bundle records otherwise.
+    const {
+      checksSummary: snapChecksSummary,
+      exitReasonOverride: snapOverride,
+    } = resolveAttestation(attestationLedger);
+    const snapReason = finalExitReason(reason, snapOverride);
     const manifestSnap: RunManifest = {
       runId,
       bin,
@@ -1203,9 +1220,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       completedIterations: iterations,
       costUsd: runCostUsd,
       tokenUsage: runTokenUsage,
-      exitReason: reason,
-      nextAction: nextActionFor(reason),
+      exitReason: snapReason,
+      nextAction: nextActionFor(snapReason),
       artifacts: [] as RunArtifact[],
+      ...(snapChecksSummary ? { checksSummary: snapChecksSummary } : {}),
       startedAt: manifestStartedAt,
       finishedAt: nowTs,
     };

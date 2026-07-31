@@ -282,6 +282,7 @@ export {
   shouldAttestBoundary,
   maybeAttest,
   resolveAttestation,
+  finalExitReason,
   CHECKS_FAILED_REASON,
   type AttestationLedger,
   type AttestationContext,

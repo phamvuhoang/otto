@@ -19,6 +19,8 @@ const NEXT_ACTION: Record<string, string> = {
     "the run stopped making changes — refine the plan/prompt, then re-run",
   "paused (needs human)":
     "a repeated failure needs a decision — inspect the logs, then re-run",
+  "done with failing checks":
+    "harness-attested checks failed at the final review commit — run `otto-inspect <run-id>` for the failing command and output tail",
 };
 
 export function nextActionFor(reason: string): string {

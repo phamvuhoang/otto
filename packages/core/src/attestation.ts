@@ -60,6 +60,29 @@ export type AttestationContext = {
  */
 export const CHECKS_FAILED_REASON = "done with failing checks";
 
+/**
+ * Exit reasons that mean "the run finished its work". Mirrors `SUCCESS_REASONS`
+ * in `eval.ts`; kept local so `attestation.ts` stays free of an eval import.
+ */
+const SUCCESS_EXIT_REASONS = new Set(["complete", "done"]);
+
+/**
+ * Apply the terminal-red exit-reason override (spec D3).
+ *
+ * The override replaces **only** a success reason. A run that stopped at
+ * `stopped (budget)` or `halted (rate limit)` keeps that more informative
+ * reason — attestation must not mask why the run actually stopped — and the
+ * eval guard (`terminalFailed === 0`) still sinks `succeeded` for it.
+ */
+export function finalExitReason(
+  loopReason: string,
+  exitReasonOverride: string | null
+): string {
+  return exitReasonOverride && SUCCESS_EXIT_REASONS.has(loopReason)
+    ? exitReasonOverride
+    : loopReason;
+}
+
 /** The three stages that move HEAD in a review path. */
 const BOUNDARIES = new Set([
   "reviewer",

@@ -16,8 +16,13 @@ import { assessFactSurvival } from "./compression-survival.js";
  * they are counted here.
  */
 export type EvalSignals = {
-  /** Run reached a success exit reason (`complete`/`done`). */
+  /** Run reached a success exit reason (`complete`/`done`) AND its final
+   *  harness-attested checks were green (P27, issue #246). */
   succeeded: boolean;
+  /** Failing checks in the run's FINAL attestation (P27); 0 when never
+   *  attested. Terminal, not cumulative: a failure a later iteration fixed is
+   *  not a loss, so a recovered run still scores as a success. */
+  attestedTerminalFailures: number;
   /** Terminal exit reason, or `null` for an un-finalized/interrupted run. */
   exitReason: string | null;
   /** Iterations completed, or `null` when the manifest is un-finalized. */
@@ -97,8 +102,17 @@ export function scoreTrajectory(
   } = {}
 ): EvalSignals {
   const exitReason = manifest.exitReason ?? null;
+  // P27: attested truth outranks exit-reason alone. The guard is NOT redundant
+  // with the exit-reason override — the override only replaces SUCCESS reasons,
+  // so this is the only thing that sinks a terminal-red run that stopped for
+  // some other reason (e.g. "stopped (budget)" with failing checks).
+  const attestedTerminalFailures = manifest.checksSummary?.terminalFailed ?? 0;
   return {
-    succeeded: exitReason != null && SUCCESS_REASONS.has(exitReason),
+    succeeded:
+      exitReason != null &&
+      SUCCESS_REASONS.has(exitReason) &&
+      attestedTerminalFailures === 0,
+    attestedTerminalFailures,
     exitReason,
     completedIterations: manifest.completedIterations ?? null,
     stageCount: stages.length,

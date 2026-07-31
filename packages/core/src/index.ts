@@ -847,3 +847,20 @@ export {
   type FindingMemory,
   type FindingMemoryEntry,
 } from "./finding-memory.js";
+export {
+  boundResumeNote,
+  enforceContextBudget,
+  summarizeEnforcement,
+  formatEnforcementReport,
+  RESUME_NOTE_MAX_CHARS,
+  type ContextEnforcementEvent,
+  type ContextEnforcementLever,
+  type EnforcementHooks,
+  type EnforcementSummary,
+  type EnforcementAdvisory,
+} from "./context-enforcement.js";
+export {
+  buildStateDigest,
+  STATE_DIGEST_MAX_CHARS,
+  type StateDigestInput,
+} from "./state-digest.js";

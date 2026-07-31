@@ -1,4 +1,13 @@
-export type TokenMode = "off" | "measure" | "reduce";
+/**
+ * Token accounting tier.
+ *
+ * `off` — no measurement. `measure` — record the context breakdown and budget
+ * assessment. `reduce` — additionally apply the conservative prompt-reduction
+ * levers. `enforce` — additionally degrade an over-budget prompt through the
+ * governed ladder in `context-enforcement.ts` (P30). Each tier includes the
+ * previous one; `enforce` is opt-in and off by default.
+ */
+export type TokenMode = "off" | "measure" | "reduce" | "enforce";
 
 export type TokenUsage = {
   inputTokens: number;
@@ -89,7 +98,9 @@ export type CacheEfficiency = {
 };
 
 /** Aggregate per-stage usages into one cache-efficiency summary. Pure. */
-export function summarizeCacheEfficiency(usages: TokenUsage[]): CacheEfficiency {
+export function summarizeCacheEfficiency(
+  usages: TokenUsage[]
+): CacheEfficiency {
   const agg = usages.reduce(addTokenUsage, emptyTokenUsage());
   const totalInputTokens =
     agg.inputTokens + agg.cacheCreationInputTokens + agg.cacheReadInputTokens;
@@ -121,10 +132,15 @@ export function parseTokenMode(
 ): TokenMode {
   const trimmed = raw?.trim();
   if (!trimmed) return "off";
-  if (trimmed === "off" || trimmed === "measure" || trimmed === "reduce") {
+  if (
+    trimmed === "off" ||
+    trimmed === "measure" ||
+    trimmed === "reduce" ||
+    trimmed === "enforce"
+  ) {
     return trimmed;
   }
   throw new Error(
-    `${source} must be one of off|measure|reduce, got: ${JSON.stringify(raw)}`
+    `${source} must be one of off|measure|reduce|enforce, got: ${JSON.stringify(raw)}`
   );
 }

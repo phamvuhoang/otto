@@ -14,6 +14,7 @@ import { join, posix } from "node:path";
 import { AGENT_DISPLAY_NAMES, type AgentRuntimeId } from "./agent-runtime.js";
 import { resolveModelSelection } from "./model-tier.js";
 import type { ContextBreakdown } from "./context-report.js";
+import type { ContextEnforcementEvent } from "./context-enforcement.js";
 import type { SafetyEvent, SkillUsage, ToolUsage } from "./run-report.js";
 import type { Stage, StageAccess } from "./stages.js";
 import { boldOut, dim, SYM_OUT, type StreamJson } from "./stream-render.js";
@@ -62,6 +63,9 @@ export type StageResult = {
   /** Composition of the rendered prompt that drove this stage (issue #62 P7);
    *  attributed by `analyzeContext` in `stage-exec.ts`, absent when not measured. */
   contextBreakdown?: ContextBreakdown;
+  /** Levers the P30 budget ladder applied to this stage's prompt; absent ⇒
+   *  enforcement was off or the prompt was within budget. */
+  contextEnforcement?: ContextEnforcementEvent[];
   /** External tools invoked while rendering/running this stage (issue #111 P19);
    *  today only the P20 context compressor at @spill — absent when none ran. */
   toolsUsed?: ToolUsage[];

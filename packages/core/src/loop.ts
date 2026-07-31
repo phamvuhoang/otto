@@ -54,6 +54,13 @@ import {
 } from "./headroom-adapter.js";
 import { readSafetyPolicy } from "./safety-policy.js";
 import { readChecksConfig } from "./checks.js";
+import {
+  boundResumeNote,
+  summarizeEnforcement,
+  type EnforcementHooks,
+} from "./context-enforcement.js";
+import { learningsForPrompt } from "./memory.js";
+import { buildStateDigest } from "./state-digest.js";
 import { checkSignals, nextFailureStreak } from "./progress.js";
 import {
   readFindingMemory,
@@ -842,6 +849,9 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           logPath: sr.logPath,
           safetyEvents: sr.safetyEvents,
           contextBreakdown: sr.contextBreakdown,
+          ...(sr.contextEnforcement
+            ? { contextEnforcement: sr.contextEnforcement }
+            : {}),
           ...(sr.toolsUsed ? { toolsUsed: sr.toolsUsed } : {}),
           ...(sr.skillsUsed ? { skillsUsed: sr.skillsUsed } : {}),
           ...(attestedChecks.length > 0 ? { checks: attestedChecks } : {}),
@@ -1280,6 +1290,37 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // outcome today is the diff-stall early stop (a run that stops changing files).
   let prevObservation: IterationObservation | null = null;
   let stalledIterations = 0;
+  // P30: under `enforce`, bound the accretive resume-note chain by dropping
+  // whole sections lowest-value-first — never mid-string, so the actionable
+  // instruction (which `loop.ts` composes LAST) always survives. Other modes
+  // pass it through verbatim, so this is byte-for-byte inert by default.
+  const resumeVar = (): string => {
+    if (tokenMode !== "enforce") return resumeNote;
+    // P30: carry bounded run state instead of letting later iterations
+    // re-derive it from growing evidence. Harness-written from the stage
+    // records, so an agent cannot smuggle instructions through it.
+    const digest = buildStateDigest({
+      iteration: stageLog.reduce((n, l) => Math.max(n, l.iteration), 0) + 1,
+      stages: stageLog.map((l) => ({
+        iteration: l.iteration,
+        stage: l.stage,
+        isError: l.isError,
+      })) as unknown as StageRecord[],
+      ...(findingMemory.entries.length > 0
+        ? {
+            openFindings: findingMemory.entries.map((e) => e.signature),
+          }
+        : {}),
+    });
+    const bounded = boundResumeNote(resumeNote);
+    return digest ? `${digest}\n\n${bounded}`.trim() : bounded;
+  };
+  // The learnings lever the P30 ladder pulls: re-render the block under a
+  // tighter budget from the same governed substrate P29 wired.
+  const enforcementHooks: EnforcementHooks = {
+    renderBoundedLearnings: (budgetChars) =>
+      learningsForPrompt(workspaceDir, { maxChars: budgetChars }).text,
+  };
   // P28 (#248): real signals for the machinery progress.ts has modelled since P2.
   let prevFailureSignature: string | null = null;
   let repeatedFailureStreak = 0;
@@ -1596,6 +1637,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               maxRetries,
               cooldownMs,
               tokenMode,
+              enforcementHooks,
               signal: activeSignal,
               agentId: activeAgentId,
               // P28: hand the merged lens findings to the loop so they can be
@@ -1603,7 +1645,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               onFindings: (findings) => {
                 iterationFindings = findings;
               },
-              resumeNote,
+              resumeNote: resumeVar(),
               changedPaths: resolveChangedPaths
                 ? resolveChangedPaths(workspaceDir)
                 : changedFilesSince(workspaceDir, iterStartSha),
@@ -1670,7 +1712,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
             stage,
             vars: {
               INPUTS: inputs,
-              RESUME: resumeNote,
+              RESUME: resumeVar(),
               SHARPENING: sharpeningGuidance,
             },
             injectedContext: mergeInjected(injected.block, cbmBlock),
@@ -1885,7 +1927,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               const rw = await executeStage({
                 stage: REPORT_REWRITE_STAGE,
                 vars: {
-                  RESUME: resumeNote,
+                  RESUME: resumeVar(),
                   REPORT: lastReportText,
                   MISSING: score.missing.join(", "),
                 },
@@ -1894,6 +1936,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
                 iteration: i,
                 maxRetries,
                 tokenMode,
+                enforcementHooks,
                 signal: activeSignal,
                 agentId: activeAgentId,
                 sink,

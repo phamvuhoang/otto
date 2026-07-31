@@ -11,6 +11,7 @@ import type { AgentRuntimeId } from "./agent-runtime.js";
 import type { ChecksRecord } from "./checks.js";
 import type { ChecksSummary } from "./attestation.js";
 import type { ContextBreakdown } from "./context-report.js";
+import type { ContextEnforcementEvent } from "./context-enforcement.js";
 import type {
   PlanReconciliation,
   VerificationEntry,
@@ -169,6 +170,9 @@ export type StageRecord = {
   checks?: ChecksRecord[];
   /** Composition of this stage's rendered prompt (issue #62 P7); absent = not measured. */
   contextBreakdown?: ContextBreakdown;
+  /** Budget-enforcement levers applied to this stage's prompt (P30, issue
+   *  #249); absent ⇒ enforcement off or the prompt was within budget. */
+  contextEnforcement?: ContextEnforcementEvent[];
   /** Finding severity counts from the review panel (P14); absent = not a panel stage. */
   reviewSeverity?: {
     blocker: number;

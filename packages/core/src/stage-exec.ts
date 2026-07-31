@@ -230,9 +230,24 @@ export async function executeStage(
       if (tokenMode === "reduce") {
         const reduced = applyPromptReduction(prompt);
         prompt = reduced.prompt;
-        const { originalChars, reducedChars, cacheHits } = reduced.stats;
+        const {
+          originalChars,
+          reducedChars,
+          whitespaceSavedChars,
+          commitsSavedChars,
+        } = reduced.stats;
+        // Report the levers that actually ran. The old line printed a "cache
+        // hits" figure this module never measured (it was hardcoded 0).
+        const levers = [
+          commitsSavedChars > 0 ? `commits -${commitsSavedChars}` : null,
+          whitespaceSavedChars > 0
+            ? `whitespace -${whitespaceSavedChars}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(", ");
         process.stderr.write(
-          `${dim(`prompt reduce ${originalChars} -> ${reducedChars} chars | cache hits ${cacheHits}`)}\n`
+          `${dim(`prompt reduce ${originalChars} -> ${reducedChars} chars${levers ? ` | ${levers}` : ""}`)}\n`
         );
       }
       // Append the bounded, attributed skill block (issue #114 P18) after

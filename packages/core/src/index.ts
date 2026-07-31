@@ -314,7 +314,10 @@ export {
   type RouteDecision,
 } from "./risk.js";
 export {
+  checkSignals,
   deriveProgress,
+  nextFailureStreak,
+  type CheckSignals,
   type IterationObservation,
   type ProgressSignals,
 } from "./progress.js";

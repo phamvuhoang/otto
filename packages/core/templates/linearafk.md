@@ -14,7 +14,7 @@
 
 <issues-summary>
 
-`otto-linear list --limit 50`
+!?`otto-linear list --limit 50|||No open Linear issues available.`
 
 </issues-summary>
 

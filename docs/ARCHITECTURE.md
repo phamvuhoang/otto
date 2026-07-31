@@ -312,7 +312,7 @@ On startup, `loop.ts` calls `matchesResume` to decide whether the saved state ma
 
 ```
 <issues-summary>
-!?`gh issue list --state open --limit 50 --json number,title,labels|||[]`
+!?`gh issue list --state open --limit 50 --json number,title,labels --jq '[.[] | {number, title, labels: [.labels[].name]}]'|||[]`
 </issues-summary>
 
 <issues-full-file>
@@ -322,7 +322,7 @@ Full issue bodies + comments spilled to:
 @include:ghprompt.md
 ```
 
-The agent triages from the inline `<issues-summary>`, then `Read`s the spilled `issues.json` (with `offset`/`limit`) for bodies/comments before picking a task — so large issue bodies never bloat the prompt token count.
+The agent triages from the inline `<issues-summary>`, then `Read`s the spilled `issues.json` (with `offset`/`limit`) for bodies/comments before picking a task — so large issue bodies never bloat the prompt token count. The `--jq` projection reduces each label from a full object (id/description/color) to its name, which on a 50-issue backlog is the difference between a multi-KB index and a lean one.
 
 **[`review.md`](../packages/core/templates/review.md)** — `HEAD`, recent commits, `git show --stat HEAD` inline, and the **full HEAD patch spilled** to `head.diff`:
 

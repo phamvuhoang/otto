@@ -147,6 +147,38 @@ function worktreeDirty(workspaceDir: string): boolean {
   return s != null && s !== "";
 }
 
+/**
+ * Whether panel mode must refuse to run (P28 spec D5), and why.
+ *
+ * Read-only lens enforcement resets a mutating sub-agent with `reset --hard`,
+ * which is only safe when the worktree started tracked-clean. Previously a
+ * dirty tree merely DISABLED enforcement and the panel ran anyway — the one
+ * situation where a lens writing to the tree is both hardest to detect and most
+ * damaging.
+ *
+ * Refusing is the deliberate choice over stash-and-restore: stashing under an
+ * unattended agent that runs its own git commands risks losing operator work,
+ * and a failed restore is unrecoverable. Refusing costs a run; a bad restore
+ * costs the work.
+ *
+ * Only applies to the `restore` policy. Under `fail` any mutation is already a
+ * contract error, so enforcement was never disabled. A non-repo (`null`) has
+ * nothing to protect. Pure.
+ */
+export function panelReadOnlyRefusal(
+  trackedStatus: string | null,
+  mutationPolicy: "restore" | "fail"
+): string | null {
+  if (mutationPolicy !== "restore") return null;
+  if (trackedStatus == null || trackedStatus === "") return null;
+  return (
+    "review panel refused: the worktree has uncommitted tracked changes. " +
+    "Panel lenses are contractually read-only and Otto enforces that with a " +
+    "hard reset, which would discard your changes. Commit or stash them, then " +
+    "re-run. (Set --review-panel off to review without lenses.)"
+  );
+}
+
 /** Per-sub-agent control returned by the loop: budget-stop + adaptive cooldown. */
 export type PanelStageControl = { stop: boolean; cooldownFactor: number };
 
@@ -485,12 +517,14 @@ export async function analyzeReview(
   // ENFORCE (reset --hard, restore policy) when the worktree starts tracked-clean
   // — otherwise a reset would discard pre-existing user changes.
   const baseHead = git(["rev-parse", "HEAD"], workspaceDir);
-  const enforceReadOnly =
-    baseHead != null && trackedStatus(workspaceDir) === "";
-  if (baseHead != null && !enforceReadOnly && mutationPolicy === "restore") {
-    process.stderr.write(
-      `${red(SYM.cross)} ${dim("worktree has uncommitted tracked changes — panel lens read-only enforcement disabled (won't risk your changes)")}\n`
-    );
+  const status = trackedStatus(workspaceDir);
+  const enforceReadOnly = baseHead != null && status === "";
+  // P28 D5: refuse rather than run with enforcement disabled. No third outcome.
+  const refusal =
+    baseHead != null ? panelReadOnlyRefusal(status, mutationPolicy) : null;
+  if (refusal) {
+    outcomeLine(refusal, false);
+    throw new Error(refusal);
   }
 
   const findingsDirRef = `./${posix.join(".otto-tmp", panelRel)}/`;

@@ -421,7 +421,7 @@ describe("runPanel", () => {
     expect(g("rev-parse", "HEAD").trim()).toBe(baseHead);
   });
 
-  it("does NOT discard pre-existing uncommitted tracked changes (enforcement off when dirty)", async () => {
+  it("REFUSES to run on a dirty worktree, leaving the user's edit intact (P28 D5)", async () => {
     const g = (...args: string[]) =>
       execFileSync("git", args, {
         cwd: ws,
@@ -447,19 +447,26 @@ describe("runPanel", () => {
     // A well-behaved lens touches nothing.
     mocks.executeStage.mockResolvedValue(ok("finding"));
 
-    await runPanel({
-      lenses: ["correctness"],
-      workspaceDir: ws,
-      packageDir: "/pkg",
-      iteration: 1,
-      maxRetries: 0,
-      cooldownMs: 0,
-      onStage: noStop,
-    });
+    // Previously the panel ran with read-only enforcement DISABLED — the one
+    // situation where a lens writing to the tree is hardest to detect and most
+    // damaging. It now refuses outright, with an actionable message.
+    await expect(
+      runPanel({
+        lenses: ["correctness"],
+        workspaceDir: ws,
+        packageDir: "/pkg",
+        iteration: 1,
+        maxRetries: 0,
+        cooldownMs: 0,
+        onStage: noStop,
+      })
+    ).rejects.toThrow(/uncommitted tracked changes/);
 
-    // The user's in-progress edit is intact — the guard did not reset --hard it away.
+    // The original guarantee holds, and more strongly: the user's in-progress
+    // edit is intact because no lens ever ran.
     expect(readFileSync(join(ws, "f.txt"), "utf8")).toBe(
       "user edit in progress\n"
     );
+    expect(mocks.executeStage).not.toHaveBeenCalled();
   });
 });

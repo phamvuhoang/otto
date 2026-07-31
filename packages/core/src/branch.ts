@@ -325,8 +325,8 @@ export function ensureTmpIgnored(workspaceDir: string): void {
 
 /**
  * Returns a warning string if `strategy` keeps work in the current checkout AND
- * the tree has uncommitted tracked changes (which disables the review panel's
- * read-only reset enforcement). null when there is nothing to warn about.
+ * the tree has uncommitted tracked changes (which makes review-panel mode
+ * REFUSE to run — P28 D5). null when there is nothing to warn about.
  */
 export function dirtyTreeWarning(
   workspaceDir: string,
@@ -335,5 +335,5 @@ export function dirtyTreeWarning(
   if (strategy === "worktree") return null; // worktree starts clean by construction
   if (!isGitRepo(workspaceDir)) return null;
   if (!hasUncommittedTrackedChanges(workspaceDir)) return null;
-  return "working tree has uncommitted changes — review-panel read-only enforcement will be disabled; consider committing/stashing or using --branch worktree";
+  return "working tree has uncommitted changes — review-panel mode will REFUSE to run (its lenses are enforced read-only by a hard reset, which would discard them); commit/stash them or use --branch worktree";
 }

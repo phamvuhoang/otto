@@ -14,7 +14,7 @@
 
 <issues-summary>
 
-`gh issue list ${OTTO_GITHUB_REPO:+--repo "$OTTO_GITHUB_REPO"} --state open --limit 50 --json number,title,labels`
+!?`gh issue list ${OTTO_GITHUB_REPO:+--repo "$OTTO_GITHUB_REPO"} --state open --limit 50 --json number,title,labels --jq '[.[] | {number, title, labels: [.labels[].name]}]'|||[]`
 
 </issues-summary>
 

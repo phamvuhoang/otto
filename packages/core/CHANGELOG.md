@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.39.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.38.1...otto-core-v0.39.0) (2026-07-31)
+
+
+### Features
+
+* **p29:** prompt diet — bounded learnings, shared diff spill, cache-shaped templates ([#261](https://github.com/phamvuhoang/otto/issues/261)) ([4a0e90a](https://github.com/phamvuhoang/otto/commit/4a0e90a78f8f079bf9d043120c65b675a2ceb387))
+
 ## [0.38.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.38.0...otto-core-v0.38.1) (2026-07-31)
 
 

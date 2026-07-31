@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.1](https://github.com/phamvuhoang/otto/compare/otto-core-v0.38.0...otto-core-v0.38.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **intake:** execute the &lt;issues-summary&gt; tag instead of injecting its text ([#259](https://github.com/phamvuhoang/otto/issues/259)) ([31e8a67](https://github.com/phamvuhoang/otto/commit/31e8a67c709dc827a941e6a88115581cd6663a88))
+
 ## [0.38.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.37.3...otto-core-v0.38.0) (2026-07-31)
 
 

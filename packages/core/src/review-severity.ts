@@ -483,3 +483,16 @@ export function dedupeFindings(findings: Finding[]): Finding[] {
   }
   return out;
 }
+
+/**
+ * A stable identity for a finding across iterations (P28, issue #248).
+ *
+ * Deliberately excludes the line number: a fix elsewhere in the file shifts
+ * lines, and if that minted a new signature every re-raised finding would look
+ * fresh and recurrence could never be detected. Uses `normClaim` so an LLM that
+ * reformats a claim — wrapping a value in backticks, bolding a word — still
+ * compares equal.
+ */
+export function findingSignature(f: Finding): string {
+  return `${f.severity}|${f.file}|${normClaim(f.claim)}`;
+}

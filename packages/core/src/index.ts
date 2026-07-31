@@ -825,6 +825,7 @@ export {
   type ReviewLeaseResult,
 } from "./pr-review-state.js";
 export {
+  findingSignature,
   findingToWire,
   parseReviewVerdicts,
   type Finding,
@@ -838,3 +839,11 @@ export {
   type ReviewAnalysisResult,
   type ReviewSeverityCounts,
 } from "./panel.js";
+export {
+  emptyFindingMemory,
+  readFindingMemory,
+  recordFindings,
+  writeFindingMemory,
+  type FindingMemory,
+  type FindingMemoryEntry,
+} from "./finding-memory.js";

@@ -16,7 +16,7 @@
 
 !?`git show --stat HEAD|||No diff`
 
-Full patch spilled to: @spill?:head.diff=`git show HEAD|||No diff body`
+Full patch spilled to: {{ DIFF_FILE }}
 
 Read that file with `Read` (use `offset`/`limit` for large diffs) before reviewing.
 

@@ -847,3 +847,13 @@ export {
   type FindingMemory,
   type FindingMemoryEntry,
 } from "./finding-memory.js";
+export {
+  boundResumeNote,
+  enforceContextBudget,
+  summarizeEnforcement,
+  RESUME_NOTE_MAX_CHARS,
+  type ContextEnforcementEvent,
+  type ContextEnforcementLever,
+  type EnforcementHooks,
+  type EnforcementSummary,
+} from "./context-enforcement.js";

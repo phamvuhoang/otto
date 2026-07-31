@@ -1,3 +1,5 @@
+@include:prompt.md
+
 {{ RESUME }}
 
 <commits>
@@ -17,5 +19,3 @@
 {{ INPUTS }}
 
 </inputs>
-
-@include:prompt.md

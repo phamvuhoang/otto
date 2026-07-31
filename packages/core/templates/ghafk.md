@@ -1,3 +1,5 @@
+@include:ghprompt.md
+
 {{ RESUME }}
 
 <commits>
@@ -27,5 +29,3 @@ Read that file with `Read` (use `offset`/`limit` if it is large) to get bodies a
 @include:untrusted-content.md
 
 </issues-full-file>
-
-@include:ghprompt.md

@@ -11,6 +11,12 @@ import {
   type SyncContextCompressor,
 } from "./context-compressor.js";
 import { applyPromptReduction } from "./prompt-reduction.js";
+import {
+  enforceContextBudget,
+  summarizeEnforcement,
+  type ContextEnforcementEvent,
+  type EnforcementHooks,
+} from "./context-enforcement.js";
 import { renderTemplate } from "./render.js";
 import { learningsForPrompt } from "./memory.js";
 import { resolveStageModel, type TierLadder } from "./model-tier.js";
@@ -73,6 +79,9 @@ export type ExecuteStageOptions = {
    *  `runStage`. A read-only review stage supplies a credential-scrubbed env.
    *  Absent ⇒ runner default (`process.env`). */
   childEnv?: NodeJS.ProcessEnv;
+  /** Levers the P30 enforcement ladder may pull. Absent ⇒ only the
+   *  self-contained commit-compaction rung is available. */
+  enforcementHooks?: EnforcementHooks;
   /** Trusted safety policy pinned by the caller (issue P32). When supplied it is
    *  used verbatim at the render boundary instead of loading a (possibly
    *  contributor-modified) `.otto/policy.json` from the PR head. Absent ⇒
@@ -266,6 +275,33 @@ export async function executeStage(
         assessment: opts.riskAssessment,
         escalations: opts.escalations,
       });
+      // P30: degrade an over-budget prompt through the governed ladder. Runs
+      // AFTER model routing so the budget is sized against the model actually
+      // used, and after every other prompt mutation so this is the real final
+      // text. Inert unless `--token-mode enforce`.
+      let enforcementEvents: ContextEnforcementEvent[] = [];
+      if (tokenMode === "enforce") {
+        const enforced = enforceContextBudget(prompt, {
+          stage: stage.name,
+          ...(model.spec ? { model: model.spec } : {}),
+          ...(opts.enforcementHooks ? { hooks: opts.enforcementHooks } : {}),
+        });
+        enforcementEvents = enforced.events;
+        prompt = enforced.prompt;
+        const applied = enforced.events.filter((e) => e.skipped === undefined);
+        if (applied.length > 0) {
+          const summary = summarizeEnforcement(enforced.events);
+          process.stderr.write(
+            `${dim(`context enforce: ${applied.map((e) => e.lever).join(", ")} | saved ~${summary.tokensSaved} tokens`)}\n`
+          );
+        } else if (enforced.assessment.overBudget) {
+          // Never silently truncate: an over-budget prompt that no lever could
+          // shrink ships intact and says so.
+          process.stderr.write(
+            `${dim(`context enforce: still over budget (${enforced.assessment.overByTokens} tokens) — no lever applied, prompt sent intact`)}\n`
+          );
+        }
+      }
       const result = await runStage(
         stage,
         prompt,
@@ -288,6 +324,9 @@ export async function executeStage(
         ...result,
         logPath: relative(workspaceDir, stageLog),
         contextBreakdown: analyzeContext(prompt),
+        ...(enforcementEvents.length > 0
+          ? { contextEnforcement: enforcementEvents }
+          : {}),
         ...(model.tier
           ? {
               routedTier: model.tier,

@@ -9,6 +9,7 @@ import { join, posix } from "node:path";
 import { DEFAULT_AGENT, type AgentRuntimeId } from "./agent-runtime.js";
 import { git } from "./git.js";
 import { executeStage } from "./stage-exec.js";
+import type { EnforcementHooks } from "./context-enforcement.js";
 import { tierForLens, type TierLadder } from "./model-tier.js";
 import { sleep } from "./pacing.js";
 import { classifyRisk, reviewDepthForLevel, selectLenses } from "./risk.js";
@@ -222,6 +223,9 @@ export type RunPanelOptions = {
    *  the loop can fold them into the run's finding memory and detect a defect
    *  that was fixed and came back. Absent ⇒ no behavior change. */
   onFindings?: (findings: Finding[]) => void;
+  /** P30 budget-enforcement levers, threaded to every panel substage so a lens
+   *  prompt is degraded by the same ladder as a chain stage. */
+  enforcementHooks?: EnforcementHooks;
   /**
    * Called after every panel sub-agent (each lens + verify + synth) so the loop
    * can write one evidence record per substage. The lens substages are named by
@@ -469,6 +473,9 @@ export async function analyzeReview(
   };
   // Shared executeStage options carrying the P32 read-only plumbing.
   const stageBase = {
+    ...(opts.enforcementHooks
+      ? { enforcementHooks: opts.enforcementHooks }
+      : {}),
     workspaceDir,
     packageDir,
     iteration,

@@ -175,3 +175,30 @@ describe("summarizeEnforcement", () => {
     });
   });
 });
+
+describe("enforcement is opt-in and inert by default", () => {
+  it("boundResumeNote is identity below the ceiling", () => {
+    // The loop only calls this under `enforce`; below the ceiling it is also a
+    // no-op, so even an enforcing run leaves a normal note untouched.
+    const note = "Resumed run (iteration 3 of 10). Reconcile against git.";
+    expect(boundResumeNote(note)).toBe(note);
+  });
+
+  it("never mid-cuts a single-section note", () => {
+    // One section and over budget: dropping it would leave nothing, and cutting
+    // it would sever a sentence. It passes through instead.
+    const one = "x".repeat(RESUME_NOTE_MAX_CHARS + 500);
+    expect(boundResumeNote(one)).toBe(one);
+  });
+
+  it("the ladder is a no-op on a within-budget prompt regardless of hooks", () => {
+    const p = "<learnings>\n\nsmall\n\n</learnings>";
+    const out = enforceContextBudget(p, {
+      stage: "s",
+      maxTokens: 1_000_000,
+      hooks: { renderBoundedLearnings: () => "SHOULD NOT BE USED" },
+    });
+    expect(out.prompt).toBe(p);
+    expect(out.events).toEqual([]);
+  });
+});

@@ -2,14 +2,17 @@
 
 Last updated: 2026-07-18
 
-> **Status:** Planned. No P27–P31 initiative has an implementation slice yet —
-> this update does not claim any of them shipped. **P32 (automated
-> pull-request code review) is an URGENT PARALLEL initiative that has
-> shipped** alongside this backlog, not a renumbering or reordering of
-> P27–P31: it addressed a separate, higher-urgency need (unattended PR review)
-> and was pulled forward and built end-to-end while P27–P31 remained planned.
-> Tracking: epic and per-initiative GitHub issues to be filed when the first
-> P27–P31 slice starts.
+> **Status:** In progress. **P27 (harness-attested feedback loops) has
+> shipped** — see [issue #246](https://github.com/phamvuhoang/otto/issues/246).
+> P28–P31 have merged design specs and refreshed implementation plans under
+> `docs/superpowers/{specs,plans}/` but no implementation slice yet; this update
+> does not claim any of them shipped. **P32 (automated pull-request code
+> review) is an URGENT PARALLEL initiative that has shipped** alongside this
+> backlog, not a renumbering or reordering of P27–P31: it addressed a separate,
+> higher-urgency need (unattended PR review) and was pulled forward and built
+> end-to-end while P27–P31 remained planned. Tracking: epic
+> [#245](https://github.com/phamvuhoang/otto/issues/245) and per-initiative
+> issues #246–#250.
 
 Phase 1 ([`HARNESS_ENHANCEMENT_ROADMAP.md`](./HARNESS_ENHANCEMENT_ROADMAP.md),
 P0–P6) made Otto governed, measurable, and adaptive. Phase 2
@@ -115,7 +118,7 @@ reduce` only strips whitespace and hardcodes `cacheHits: 0`.
 
 | Priority | Initiative                                                                     | Outcome                                                                                                                           | Size   | Confidence |
 | -------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------- |
-| P27      | Harness-attested feedback loops                                                | Test/typecheck/build outcomes are executed and recorded by the harness.                                                           | Medium | High       |
+| ~~P27~~  | ~~Harness-attested feedback loops~~ — **SHIPPED**                              | Test/typecheck/build outcomes are executed and recorded by the harness.                                                           | Medium | High       |
 | P29      | Prompt diet: bounded injection, cache shape                                    | Cut per-iteration prompt cost by wiring built levers and deduping payloads.                                                       | Medium | High       |
 | P28      | Regression signals and review integrity                                        | Iteration control reacts to attested failures and recurring findings.                                                             | Medium | High       |
 | P30      | Context budget enforcement and state digest                                    | Over-budget context degrades through governed levers; stale context retires.                                                      | Medium | Medium     |

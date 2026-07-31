@@ -32,6 +32,7 @@ import {
 } from "./input-sharpness.js";
 import {
   parseVerificationMatrixWithDiagnostics,
+  attestMatrixRows,
   reconcileMatrixWithPlan,
 } from "./verification-matrix.js";
 import { validateVerificationEvidence } from "./verification-evidence.js";
@@ -1086,6 +1087,16 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               ...(Number.isFinite(startedAtMs) ? { startedAtMs } : {}),
               commitExists: (sha) => commitExists(workspaceDir, sha),
             });
+            // P27: re-execute `method:"test"` rows whose cited `check` command
+            // exactly matches a configured check, so a "pass" is something the
+            // harness watched rather than something the agent asserted. Inert
+            // without a `checks` config; exact-match-only, because matrix rows
+            // are agent-emitted strings and must never reach a shell fuzzily.
+            verification = attestMatrixRows(
+              verification,
+              checkCommands,
+              workspaceDir
+            );
             // Reconcile the matrix against the matching plan's task set (#201)
             // so an omitted plan task surfaces as an unverified gap instead of
             // silently inflating coverage.

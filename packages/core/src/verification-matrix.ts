@@ -18,6 +18,9 @@
  * shipped pure-then-wired.
  */
 
+import { runConfiguredChecks, type CheckCommandRunner } from "./checks.js";
+import { DEFAULT_POLICY, type SafetyPolicy } from "./safety-policy.js";
+
 /** How a requirement was checked. */
 export type VerificationMethod =
   | "test" // an automated test / suite
@@ -51,6 +54,12 @@ export type VerificationEntry = {
    *  or a commit present in git. `false` ⇒ the cited proof does not exist and the
    *  requirement is not counted as covered. Never read from agent JSON. */
   artifactExists?: boolean;
+  /** Set by the loop when a `method:"test"` row's cited `check` command exactly
+   *  matched a configured check and the harness re-executed it (P27, issue
+   *  #246). Absent ⇒ the row was not re-executed — a coverage gap, never a
+   *  failure. Never read from agent JSON: `coerceEntry` builds a fresh object
+   *  from validated fields, so an agent-supplied value cannot survive parsing. */
+  attestedCheck?: { command: string; exitCode: number; durationMs: number };
   /** Set true ONLY by the impure layer when `artifactPath` was actually copied
    *  into the physical run bundle (issue #181 boundary review). Embedding trusts
    *  this flag, not a string prefix the agent could spoof. Never read from agent JSON. */
@@ -539,4 +548,41 @@ export function formatVerificationMatrix(entries: VerificationEntry[]): string {
     }
   }
   return lines.join("\n");
+}
+
+/**
+ * Re-execute `method:"test"` rows in `--verify` mode so a "pass" is something
+ * the harness watched rather than something the agent asserted (P27, #246).
+ *
+ * **Exact-match-only** against the configured allowlist. Matrix rows are
+ * agent-emitted strings, and a fuzzy match would hand untrusted text to a
+ * shell; a row that does not match a configured check is left untouched and
+ * counts as a coverage gap, not a failure.
+ *
+ * The command lives in `check` ("the concrete check: the command run"), never
+ * in `artifactPath`, which is a `file:line`/SHA/screenshot pointer.
+ */
+export function attestMatrixRows(
+  entries: VerificationEntry[],
+  commands: string[],
+  cwd: string,
+  run?: CheckCommandRunner,
+  policy: SafetyPolicy = DEFAULT_POLICY
+): VerificationEntry[] {
+  if (commands.length === 0) return entries;
+  return entries.map((e) => {
+    if (e.method !== "test") return e;
+    const cited = e.check.trim();
+    if (!commands.includes(cited)) return e;
+    const [rec] = runConfiguredChecks([cited], cwd, undefined, run, policy);
+    if (!rec) return e;
+    return {
+      ...e,
+      attestedCheck: {
+        command: rec.command,
+        exitCode: rec.exitCode,
+        durationMs: rec.durationMs,
+      },
+    };
+  });
 }

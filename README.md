@@ -626,6 +626,20 @@ Otto is configured by flags and environment variables. The essentials:
 | `OTTO_TOKEN_MODE`         | `off`           | `off`, `measure`, or `reduce`; overridden by `--token-mode`.                            |
 | `OTTO_CONTEXT_COMPRESSOR` | `off`           | `off` or `headroom`; overridden by `--context-compressor`. Compresses `@spill` content. |
 
+### Attested checks (opt-in)
+
+By default every "tests pass" in a review is the agent's own prose — the harness never runs anything itself. Declare your verify commands in `.otto/config.json` and it will:
+
+```json
+{ "checks": ["pnpm -r typecheck", "pnpm -r test"] }
+```
+
+1. **Otto runs these itself** after every review-path fix commit, recording the exit code, duration, and output tail. Agent claims become attested, not trusted.
+2. **A red _final_ attestation** overrides the exit reason (`done with failing checks`), sinks eval's `succeeded`, and adds a **DISAGREEMENT** callout to the run report. A failure a later iteration fixed does not — that is the loop working, and it is recorded as "recovered".
+3. **No `checks` key ⇒ zero behavior change.**
+
+Commands run in order and stop at the first failure, so put the cheapest first. See **[docs/CONFIG.md](./docs/CONFIG.md)** for policy scoping, timeouts, and `--verify` re-execution.
+
 ### How to set config values
 
 Every value resolves in a fixed precedence order — **CLI flag → environment variable → `.otto/config.json` → built-in default** — so a flag always wins for a single run, an env var sets a per-shell default, and the config file persists a choice for a repo. Pick the mechanism by how long the choice should stick:

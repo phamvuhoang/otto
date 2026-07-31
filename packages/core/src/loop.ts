@@ -60,6 +60,7 @@ import {
   type EnforcementHooks,
 } from "./context-enforcement.js";
 import { learningsForPrompt } from "./memory.js";
+import { buildStateDigest } from "./state-digest.js";
 import { checkSignals, nextFailureStreak } from "./progress.js";
 import {
   readFindingMemory,
@@ -1293,8 +1294,27 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // whole sections lowest-value-first — never mid-string, so the actionable
   // instruction (which `loop.ts` composes LAST) always survives. Other modes
   // pass it through verbatim, so this is byte-for-byte inert by default.
-  const resumeVar = (): string =>
-    tokenMode === "enforce" ? boundResumeNote(resumeNote) : resumeNote;
+  const resumeVar = (): string => {
+    if (tokenMode !== "enforce") return resumeNote;
+    // P30: carry bounded run state instead of letting later iterations
+    // re-derive it from growing evidence. Harness-written from the stage
+    // records, so an agent cannot smuggle instructions through it.
+    const digest = buildStateDigest({
+      iteration: stageLog.reduce((n, l) => Math.max(n, l.iteration), 0) + 1,
+      stages: stageLog.map((l) => ({
+        iteration: l.iteration,
+        stage: l.stage,
+        isError: l.isError,
+      })) as unknown as StageRecord[],
+      ...(findingMemory.entries.length > 0
+        ? {
+            openFindings: findingMemory.entries.map((e) => e.signature),
+          }
+        : {}),
+    });
+    const bounded = boundResumeNote(resumeNote);
+    return digest ? `${digest}\n\n${bounded}`.trim() : bounded;
+  };
   // The learnings lever the P30 ladder pulls: re-render the block under a
   // tighter budget from the same governed substrate P29 wired.
   const enforcementHooks: EnforcementHooks = {

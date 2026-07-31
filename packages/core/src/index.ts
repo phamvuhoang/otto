@@ -857,3 +857,8 @@ export {
   type EnforcementHooks,
   type EnforcementSummary,
 } from "./context-enforcement.js";
+export {
+  buildStateDigest,
+  STATE_DIGEST_MAX_CHARS,
+  type StateDigestInput,
+} from "./state-digest.js";

@@ -537,3 +537,87 @@ export function readMemoryRecords(workspaceDir: string): MemoryRecord[] {
   }
   return records;
 }
+
+/**
+ * The exact text the `!?`cat ./.otto/LEARNINGS.md|||…`` try-shell tag produced
+ * when the file was absent. Preserved verbatim so a repo with no learnings
+ * renders byte-identically after the harness takes over the block (P29).
+ */
+export const LEARNINGS_FALLBACK = "_No learnings recorded yet._";
+
+/** What the harness resolved for a prompt's `<learnings>` block. */
+export type LearningsResolution = {
+  text: string;
+  /** True only when governed records replaced an over-budget raw file. */
+  bounded: boolean;
+  /** Size of the raw `LEARNINGS.md`; 0 when absent. */
+  rawChars: number;
+  /** Records the budget dropped; absent unless `bounded`. */
+  droppedCount?: number;
+};
+
+/**
+ * Decide what a prompt's `<learnings>` block should contain (P29 spec D1/D2).
+ *
+ * Three cases, in order:
+ *  1. Absent file ⇒ {@link LEARNINGS_FALLBACK}, matching the old tag exactly.
+ *  2. Under budget ⇒ the raw file verbatim (trailing newline trimmed), so
+ *     small repos are byte-identical to the pre-P29 `cat` injection.
+ *  3. Over budget ⇒ a bounded projection of the governed `.otto/memory/`
+ *     records — but ONLY if there are records to project from. With no
+ *     records the raw file passes through **untruncated**: the harness cannot
+ *     reconstruct a hand-written file, so silently cutting it is not an
+ *     acceptable saving.
+ *
+ * `unbounded` (from `OTTO_UNBOUNDED_LEARNINGS=1`) forces case 2 semantics.
+ * Pure — no I/O; {@link learningsForPrompt} is the fs wrapper.
+ */
+export function resolveLearningsBlock(
+  raw: string | null,
+  records: MemoryRecord[],
+  ctx: MemorySelectionContext & { unbounded?: boolean } = {}
+): LearningsResolution {
+  if (raw == null) {
+    return { text: LEARNINGS_FALLBACK, bounded: false, rawChars: 0 };
+  }
+  const trimmed = raw.replace(/\n+$/, "");
+  const rawChars = trimmed.length;
+  const budget = ctx.maxChars ?? DEFAULT_LEARNINGS_BUDGET_CHARS;
+  if (ctx.unbounded || rawChars <= budget || records.length === 0) {
+    return { text: trimmed, bounded: false, rawChars };
+  }
+  const bounded = boundLearnings(records, ctx);
+  if (bounded.selected.length === 0) {
+    // Nothing survived selection (e.g. every record stale/superseded) — the
+    // raw file is still better than an empty block.
+    return { text: trimmed, bounded: false, rawChars };
+  }
+  return {
+    text: formatBoundedLearnings(bounded, ctx.now).replace(/\n+$/, ""),
+    bounded: true,
+    rawChars,
+    droppedCount: bounded.dropped.length,
+  };
+}
+
+/**
+ * {@link resolveLearningsBlock} over a real workspace: reads
+ * `.otto/LEARNINGS.md` (absent ⇒ `null`) and the governed records, and maps
+ * `OTTO_UNBOUNDED_LEARNINGS=1` onto the `unbounded` escape hatch. Never throws.
+ */
+export function learningsForPrompt(
+  workspaceDir: string,
+  ctx: MemorySelectionContext = {},
+  env: NodeJS.ProcessEnv = process.env
+): LearningsResolution {
+  let raw: string | null;
+  try {
+    raw = readFileSync(join(workspaceDir, ".otto", "LEARNINGS.md"), "utf8");
+  } catch {
+    raw = null;
+  }
+  return resolveLearningsBlock(raw, readMemoryRecords(workspaceDir), {
+    ...ctx,
+    unbounded: env.OTTO_UNBOUNDED_LEARNINGS === "1",
+  });
+}

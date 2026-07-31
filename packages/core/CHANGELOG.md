@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.0](https://github.com/phamvuhoang/otto/compare/otto-core-v0.37.3...otto-core-v0.38.0) (2026-07-31)
+
+
+### Features
+
+* **p27:** harness-attested checks for review-path fix commits ([#257](https://github.com/phamvuhoang/otto/issues/257)) ([32c9070](https://github.com/phamvuhoang/otto/commit/32c90703ebf2721ef87b658d950e2e0bbde3f896))
+
 ## [0.37.3](https://github.com/phamvuhoang/otto/compare/otto-core-v0.37.2...otto-core-v0.37.3) (2026-07-29)
 
 

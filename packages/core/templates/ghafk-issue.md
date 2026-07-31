@@ -6,7 +6,7 @@
 
 <learnings>
 
-!?`cat ./.otto/LEARNINGS.md|||_No learnings recorded yet._`
+{{ LEARNINGS }}
 
 </learnings>
 

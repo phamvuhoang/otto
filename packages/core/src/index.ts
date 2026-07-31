@@ -314,7 +314,10 @@ export {
   type RouteDecision,
 } from "./risk.js";
 export {
+  checkSignals,
   deriveProgress,
+  nextFailureStreak,
+  type CheckSignals,
   type IterationObservation,
   type ProgressSignals,
 } from "./progress.js";
@@ -822,6 +825,7 @@ export {
   type ReviewLeaseResult,
 } from "./pr-review-state.js";
 export {
+  findingSignature,
   findingToWire,
   parseReviewVerdicts,
   type Finding,
@@ -835,3 +839,11 @@ export {
   type ReviewAnalysisResult,
   type ReviewSeverityCounts,
 } from "./panel.js";
+export {
+  emptyFindingMemory,
+  readFindingMemory,
+  recordFindings,
+  writeFindingMemory,
+  type FindingMemory,
+  type FindingMemoryEntry,
+} from "./finding-memory.js";

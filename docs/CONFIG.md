@@ -122,7 +122,7 @@ Where Otto commits is resolved **once at startup**, in this order: `--branch`/`O
 
 `--branch-convention <c>` (default `otto`) sets the validated branch namespace `<c>/<task-key>` — it normalizes an optional trailing slash (`feat` and `feat/` both produce `feat/`) and rejects git-ref-unsafe values. It is the canonical replacement for the older raw `--branch-prefix <p>` (kept for back-compat, concatenated verbatim with no validation). Precedence: `--branch-convention` → `--branch-prefix` → config `branchConvention` → config `branchPrefix` → `otto/`. `--print-config` shows the resolved namespace.
 
-Otto warns at startup if the working tree has uncommitted tracked changes under `current` or `branch` mode, because dirty trees disable the review panel's read-only enforcement.
+Otto warns at startup if the working tree has uncommitted tracked changes under `current` or `branch` mode. Review-panel mode **refuses to run** on such a tree: its lenses are contractually read-only and Otto enforces that with a hard reset, which would discard your changes. Commit or stash them, or use `--branch worktree` (which starts clean by construction).
 
 Per-task artifacts (spec, plan, follow-ups) are grouped under `.otto/tasks/<task-key>/`, named with the same task key as the branch. See **[MIGRATION.md](./MIGRATION.md)** for the old→new path mapping and how to migrate an existing repo.
 

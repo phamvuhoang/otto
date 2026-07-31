@@ -54,6 +54,13 @@ import {
 } from "./headroom-adapter.js";
 import { readSafetyPolicy } from "./safety-policy.js";
 import { readChecksConfig } from "./checks.js";
+import { checkSignals, nextFailureStreak } from "./progress.js";
+import {
+  readFindingMemory,
+  recordFindings,
+  writeFindingMemory,
+} from "./finding-memory.js";
+import type { Finding } from "./review-severity.js";
 import {
   newLedger,
   maybeAttest,
@@ -1273,6 +1280,12 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // outcome today is the diff-stall early stop (a run that stops changing files).
   let prevObservation: IterationObservation | null = null;
   let stalledIterations = 0;
+  // P28 (#248): real signals for the machinery progress.ts has modelled since P2.
+  let prevFailureSignature: string | null = null;
+  let repeatedFailureStreak = 0;
+  let iterationFindings: Finding[] = [];
+  let recurringFindingCount = 0;
+  let findingMemory = readFindingMemory(workspaceDir, runId);
 
   if (resuming) {
     resumeNote = `Resumed run (iteration ${startIteration} of ${total}). Prior work may already be committed or partially applied. Reconcile against git history and the working tree before acting; do not redo completed tasks.`;
@@ -1585,6 +1598,11 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               tokenMode,
               signal: activeSignal,
               agentId: activeAgentId,
+              // P28: hand the merged lens findings to the loop so they can be
+              // folded into the run's finding memory (recurrence detection).
+              onFindings: (findings) => {
+                iterationFindings = findings;
+              },
               resumeNote,
               changedPaths: resolveChangedPaths
                 ? resolveChangedPaths(workspaceDir)
@@ -1939,22 +1957,55 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         const iterChanged = resolveChangedPaths
           ? resolveChangedPaths(workspaceDir)
           : changedFilesSince(workspaceDir, iterStartSha);
+        // P27's attested records for THIS iteration only — never the run-level
+        // checksSummary, which is terminal and cumulative, so feeding it here
+        // would report checksDelta improvements that never happened (spec D2).
+        const iterationChecks = attestationLedger.entries
+          .filter((e) => e.iteration === i)
+          .flatMap((e) => e.records);
+        const checks = checkSignals(iterationChecks);
+        // Fold this iteration's findings into the run's finding memory so a
+        // defect that was "fixed" and came back is visible as a recurrence.
+        const folded = recordFindings(findingMemory, i, iterationFindings);
+        findingMemory = folded.memory;
+        recurringFindingCount = folded.recurring.length;
+        writeFindingMemory(workspaceDir, runId, findingMemory);
+        if (recurringFindingCount > 0) {
+          process.stderr.write(
+            `${dim(`↳ ${recurringFindingCount} finding(s) re-raised from an earlier iteration`)}\n`
+          );
+        }
         const cur: IterationObservation = {
           diffSignature: [...iterChanged].sort().join("|"),
-          failingChecks: null,
-          failureSignature: null,
-          findingSignatures: [],
+          failingChecks: checks.failingChecks,
+          failureSignature: checks.failureSignature,
+          findingSignatures: folded.recurring.map((e) => e.signature),
           cumulativeCostUsd: runCostUsd,
         };
         stalledIterations =
           iterChanged.length === 0 ? stalledIterations + 1 : 0;
+        repeatedFailureStreak = nextFailureStreak(
+          prevFailureSignature,
+          checks.failureSignature,
+          repeatedFailureStreak
+        );
+        prevFailureSignature = checks.failureSignature;
         const signals = deriveProgress(cur, prevObservation);
         prevObservation = cur;
         const decision = decide(signals, {
           stalledIterations,
-          repeatedFailureStreak: 0,
+          repeatedFailureStreak,
+          recurringFindingCount,
+          // DELIBERATELY null (P28 spec D1). Supplying checks.failingChecks here
+          // arms policy.ts's `finish-confident` branch, which the code below
+          // maps to exit reason "complete" + return outcome() — ENDING the run
+          // on the first green iteration and abandoning the remaining backlog.
+          // That branch has never executed because this field has always been
+          // null. checks.failingChecks IS used above, where it only feeds
+          // checksDelta and makes stop-low-progress LESS aggressive.
           failingChecks: null,
         });
+        iterationFindings = [];
         // Under --explain-routing, surface the progress decision every iteration
         // (including `continue`), so the operator sees why the run kept going.
         if (explainRouting && decision.action === "continue") {

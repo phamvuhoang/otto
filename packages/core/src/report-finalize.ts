@@ -20,6 +20,8 @@ export type ReviewSeveritySummary = {
   minor: number;
   nit: number;
   suppressed: number;
+  /** Findings the verifier rejected — reported next to the headline, never in it. */
+  rejected?: number;
 };
 
 export type ScopeDriftSummary = {
@@ -101,17 +103,49 @@ export function summarizeReviewSeverity(
     nit: 0,
     suppressed: 0,
   };
-  let seen = false;
-  for (const stage of stages) {
-    if (!stage.reviewSeverity) continue;
-    seen = true;
-    summary.blocker += stage.reviewSeverity.blocker;
-    summary.major += stage.reviewSeverity.major;
-    summary.minor += stage.reviewSeverity.minor;
-    summary.nit += stage.reviewSeverity.nit;
-    summary.suppressed += stage.reviewSeverity.suppressed;
+  // A panel run records severity TWICE: candidate counts at the verify substage
+  // and post-verification counts at synth. Summing them double-counted every
+  // finding and let verifier-REJECTED candidates inflate the headline (P28 D4).
+  // The synth record is the reconciled view, so it wins outright; without it
+  // (budget exhausted, no verdicts) the candidates are the best available view
+  // and reporting nothing would be worse.
+  const withSeverity = stages.filter((s) => s.reviewSeverity);
+  if (withSeverity.length === 0) return null;
+
+  // Reconcile WITHIN an iteration, then sum ACROSS iterations. A panel run
+  // records severity twice per iteration — candidate counts at verify, then
+  // post-verification counts at synth — so summing everything double-counted
+  // each finding and let verifier-REJECTED candidates inflate the headline.
+  // Collapsing globally instead would have been the opposite error: a
+  // multi-iteration run would report only its last iteration's findings and
+  // lose the run-wide total.
+  const byIteration = new Map<number, StageRecord[]>();
+  for (const s of withSeverity) {
+    const bucket = byIteration.get(s.iteration) ?? [];
+    bucket.push(s);
+    byIteration.set(s.iteration, bucket);
   }
-  return seen ? summary : null;
+  let rejected = 0;
+  let sawRejected = false;
+  for (const bucket of byIteration.values()) {
+    // Synth is the reconciled view. Without it (budget exhausted, no verdicts)
+    // the candidates are the best available view — reporting nothing is worse.
+    const authoritative =
+      bucket.find((s) => s.stage === "review-synth") ??
+      bucket[bucket.length - 1];
+    const src = authoritative.reviewSeverity!;
+    summary.blocker += src.blocker;
+    summary.major += src.major;
+    summary.minor += src.minor;
+    summary.nit += src.nit;
+    summary.suppressed += src.suppressed;
+    if (src.rejected !== undefined) {
+      rejected += src.rejected;
+      sawRejected = true;
+    }
+  }
+  if (sawRejected) summary.rejected = rejected;
+  return summary;
 }
 
 function severitySentence(summary: ReviewSeveritySummary | null): string {

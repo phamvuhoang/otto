@@ -27,8 +27,18 @@ export type PolicyContext = {
   stalledIterations: number;
   /** Consecutive iterations (incl. this one) with the same failure signature. */
   repeatedFailureStreak: number;
-  /** Absolute failing checks this iteration, or `null` when not measured. */
+  /** Absolute failing checks this iteration, or `null` when not measured.
+   *
+   *  **The loop deliberately holds this at `null`** (P28 spec D1). Supplying a
+   *  real count arms the `finish-confident` branch below, which `loop.ts` maps
+   *  to exit reason "complete" followed by `return outcome()` — it ENDS the run,
+   *  with no verify stage and no consultation of the gate that decides whether
+   *  tasks remain. Because the field has always been null, that branch has never
+   *  executed in production. See `docs/superpowers/specs/2026-07-30-p28-*.md`. */
   failingChecks: number | null;
+  /** Findings raised in this iteration that were also raised in an earlier one
+   *  (P28). Absent ⇒ 0 ⇒ every pre-P28 call site behaves exactly as before. */
+  recurringFindingCount?: number;
 };
 
 /** Same failure this many iterations running → a human should look. */
@@ -49,6 +59,17 @@ export function decide(
     return {
       action: "escalate-pause",
       reason: `same failure ${ctx.repeatedFailureStreak} iterations running — human decision needed`,
+    };
+  }
+
+  // A defect that was fixed and came back needs a human, and a green suite does
+  // NOT clear it — so this outranks `finish-confident` below. (Under D1 that
+  // branch is unreachable anyway, but the ordering is stated so it stays correct
+  // if the loop ever supplies a real `failingChecks`.)
+  if ((ctx.recurringFindingCount ?? 0) > 0) {
+    return {
+      action: "escalate-pause",
+      reason: `a fixed defect came back (${ctx.recurringFindingCount} recurring finding(s)) — human decision needed`,
     };
   }
 

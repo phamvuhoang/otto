@@ -17,6 +17,7 @@ import {
   dedupeFindings,
   findingToWire,
   parseFindings,
+  parseConfirmation,
   parseReviewVerdicts,
   severityCounts,
   suppressLowValue,
@@ -99,6 +100,16 @@ const SYNTH_STAGE = {
   template: "review-synth.md",
   permissionMode: "bypassPermissions",
 };
+/** Post-synth confirmation (P28): a bounded, read-only check that the synth
+ *  commit actually acted on each CONFIRMED finding. Cheap tier — it reads one
+ *  diff against one list and answers one question. Harness-orchestrated, so
+ *  NOT in `STAGES` and not in any chain (house pattern, same as the lenses). */
+const CONFIRM_STAGE: Stage = {
+  name: "review-confirm",
+  template: "review-confirm.md",
+  permissionMode: "bypassPermissions",
+  tier: "cheap",
+};
 
 /** Phase start line: `● review · <label>`. */
 function phaseLine(label: string): void {
@@ -134,6 +145,38 @@ function readVerdicts(panelHostDir: string): Verdicts {
 function worktreeDirty(workspaceDir: string): boolean {
   const s = git(["status", "--porcelain"], workspaceDir);
   return s != null && s !== "";
+}
+
+/**
+ * Whether panel mode must refuse to run (P28 spec D5), and why.
+ *
+ * Read-only lens enforcement resets a mutating sub-agent with `reset --hard`,
+ * which is only safe when the worktree started tracked-clean. Previously a
+ * dirty tree merely DISABLED enforcement and the panel ran anyway — the one
+ * situation where a lens writing to the tree is both hardest to detect and most
+ * damaging.
+ *
+ * Refusing is the deliberate choice over stash-and-restore: stashing under an
+ * unattended agent that runs its own git commands risks losing operator work,
+ * and a failed restore is unrecoverable. Refusing costs a run; a bad restore
+ * costs the work.
+ *
+ * Only applies to the `restore` policy. Under `fail` any mutation is already a
+ * contract error, so enforcement was never disabled. A non-repo (`null`) has
+ * nothing to protect. Pure.
+ */
+export function panelReadOnlyRefusal(
+  trackedStatus: string | null,
+  mutationPolicy: "restore" | "fail"
+): string | null {
+  if (mutationPolicy !== "restore") return null;
+  if (trackedStatus == null || trackedStatus === "") return null;
+  return (
+    "review panel refused: the worktree has uncommitted tracked changes. " +
+    "Panel lenses are contractually read-only and Otto enforces that with a " +
+    "hard reset, which would discard your changes. Commit or stash them, then " +
+    "re-run. (Set --review-panel off to review without lenses.)"
+  );
 }
 
 /** Per-sub-agent control returned by the loop: budget-stop + adaptive cooldown. */
@@ -175,6 +218,10 @@ export type RunPanelOptions = {
    * exhausted (stop the panel) and the current adaptive cooldown factor.
    */
   onStage?: (sr: StageResult) => PanelStageControl;
+  /** Called once per panel run with the merged, deduped lens findings (P28), so
+   *  the loop can fold them into the run's finding memory and detect a defect
+   *  that was fixed and came back. Absent ⇒ no behavior change. */
+  onFindings?: (findings: Finding[]) => void;
   /**
    * Called after every panel sub-agent (each lens + verify + synth) so the loop
    * can write one evidence record per substage. The lens substages are named by
@@ -192,6 +239,9 @@ export type RunPanelOptions = {
       minor: number;
       nit: number;
       suppressed: number;
+      /** Verifier-REJECTED count (P28 D4); passed only for the synth substage,
+       *  where the confirmed/rejected split is known. */
+      rejected?: number;
     }
   ) => void;
 };
@@ -471,12 +521,14 @@ export async function analyzeReview(
   // ENFORCE (reset --hard, restore policy) when the worktree starts tracked-clean
   // — otherwise a reset would discard pre-existing user changes.
   const baseHead = git(["rev-parse", "HEAD"], workspaceDir);
-  const enforceReadOnly =
-    baseHead != null && trackedStatus(workspaceDir) === "";
-  if (baseHead != null && !enforceReadOnly && mutationPolicy === "restore") {
-    process.stderr.write(
-      `${red(SYM.cross)} ${dim("worktree has uncommitted tracked changes — panel lens read-only enforcement disabled (won't risk your changes)")}\n`
-    );
+  const status = trackedStatus(workspaceDir);
+  const enforceReadOnly = baseHead != null && status === "";
+  // P28 D5: refuse rather than run with enforcement disabled. No third outcome.
+  const refusal =
+    baseHead != null ? panelReadOnlyRefusal(status, mutationPolicy) : null;
+  if (refusal) {
+    outcomeLine(refusal, false);
+    throw new Error(refusal);
   }
 
   const findingsDirRef = `./${posix.join(".otto-tmp", panelRel)}/`;
@@ -566,6 +618,9 @@ export async function analyzeReview(
       results.map((r) => ({ lens: r.lens, text: r.sr.result }))
     );
     const candidateCounts = severityCounts(findings);
+    // Observed BEFORE the zero-findings early return, so a clean iteration is
+    // recorded as "raised nothing" rather than as "not observed".
+    opts.onFindings?.(findings);
     if (findings.length === 0) {
       // Nothing to verify — a clean analysis.
       outcomeLine("no findings — skipping verify");
@@ -746,11 +801,78 @@ async function runPanelSynth(
     } else {
       outcomeLine("clean — no fix needed");
     }
-    recordStage?.(SYNTH_STAGE.name, synth, synthStartedAt, analysis.severity);
+    // P28 D4: carry the verifier's REJECTED count alongside the confirmed
+    // severity so the report can show it separately instead of folding
+    // rejected candidates into the headline.
+    recordStage?.(SYNTH_STAGE.name, synth, synthStartedAt, {
+      ...analysis.severity,
+      rejected: analysis.rejected.length,
+    });
     onStage?.(synth);
+    // P28: close the "trust the verifier, trust the synth" chain with one
+    // bounded read-only check that the commit actually acted on each CONFIRMED
+    // finding. Only worth running when something was confirmed AND committed.
+    if (committed && analysis.confirmed.length > 0) {
+      await runPostSynthConfirmation(opts, analysis, synthHostDir);
+    }
     return synth;
   } finally {
     rmSync(synthHostDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Post-synth confirmation (P28, issue #248).
+ *
+ * The panel's chain of trust ended at the synth agent's own word: the verifier
+ * ruled on what was real, synth committed a fix, and nothing checked that the
+ * commit acted on the confirmed list. This runs one cheap read-only pass that
+ * answers exactly that, and records the result as evidence.
+ *
+ * Best-effort by design — a failure here degrades to "not checked" rather than
+ * failing a run, because a bookkeeping check must never be able to sink work
+ * that already landed.
+ */
+async function runPostSynthConfirmation(
+  opts: RunPanelOptions,
+  analysis: ReviewAnalysisResult,
+  hostDir: string
+): Promise<void> {
+  const { workspaceDir, packageDir, iteration, maxRetries, recordStage } = opts;
+  try {
+    const diffPath = spillHeadDiff(workspaceDir, hostDir);
+    const startedAt = new Date().toISOString();
+    const confirm = await executeStage({
+      stage: CONFIRM_STAGE,
+      vars: {
+        FINDINGS: analysis.confirmed.map(findingToWire).join("\n"),
+        DIFF_FILE: `./${posix.relative(workspaceDir, diffPath)}`,
+        RESUME: "",
+      },
+      workspaceDir,
+      packageDir,
+      iteration,
+      maxRetries,
+      logLabel: CONFIRM_STAGE.name,
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+      ...(opts.modelRouting ? { modelRouting: opts.modelRouting } : {}),
+      ...(opts.tierLadder ? { tierLadder: opts.tierLadder } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+    const result = parseConfirmation(confirm.result);
+    if (result.unaddressed.length > 0) {
+      outcomeLine(
+        `${result.unaddressed.length} confirmed finding(s) NOT addressed by the fix`,
+        false
+      );
+    } else if (result.addressed > 0) {
+      outcomeLine(`all ${result.addressed} confirmed finding(s) addressed`);
+    }
+    recordStage?.(CONFIRM_STAGE.name, confirm, startedAt);
+    opts.onStage?.(confirm);
+  } catch {
+    // Never fail a run because the confirmation pass could not run.
+    outcomeLine("post-synth confirmation unavailable", false);
   }
 }
 

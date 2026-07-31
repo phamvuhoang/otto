@@ -503,6 +503,26 @@ The six fixtures cover the representative jobs from the roadmap: a small bug fix
 
 ---
 
+## Regression signals (P28)
+
+`progress.ts` and `policy.ts` have modelled failing checks, failure signatures and recurring findings since P2 — and `loop.ts` hardcoded all three to `null`/`[]`, so adaptive iteration control was a stall detector wearing a regression detector's clothes. P28 supplies the real signals.
+
+**Per-iteration, never cumulative.** `checkSignals` reads the P27 ledger entries for the **current iteration only**. The run-level `ChecksSummary` is terminal and cumulative by P27's design; feeding it here would make `checksDelta` report improvement that never happened, since cumulative counts never decrease.
+
+**Recurrence.** `findingSignature` is `severity|file|normalized-claim` — deliberately excluding the line number, because a fix elsewhere shifts lines and a shifted line must not mint a "new" finding. `finding-memory.ts` records which iterations raised each signature; a signature seen in **two or more distinct iterations** is a recurrence. Two lenses raising the same defect within one iteration is a dedupe concern, not a regression, so an iteration is recorded at most once per signature.
+
+A recurring finding escalates to `escalate-pause` and **outranks** `finish-confident`: a green suite does not clear a re-raised review finding.
+
+**⛔ `finish-confident` is deliberately unreachable.** `policy.ts` returns it when `ctx.failingChecks === 0`, and `loop.ts` maps that action to exit reason `"complete"` followed by `return outcome()` — it **ends the run**, with no verify stage and no consultation of the gate that decides whether tasks remain. Because the field had always been hardcoded `null`, that branch has never executed in production. Supplying a real count would make the first green iteration terminate the run and report success while abandoning the backlog — and `"complete"` is in `SUCCESS_REASONS`, so eval would score it a win.
+
+So the loop wires `IterationObservation.failingChecks` (safe — it only feeds `checksDelta`, making `stop-low-progress` _less_ aggressive) and holds `PolicyContext.failingChecks` at `null`. Two tests pin this, one of which asserts the trap itself so the reasoning is discoverable at the point someone would be tempted to "finish the wiring".
+
+**Severity reconciliation.** A panel run records `reviewSeverity` twice per iteration — candidate counts at verify, post-verification counts at synth — so summing every record double-counted findings and let verifier-REJECTED candidates inflate the headline. `summarizeReviewSeverity` now reconciles **within** an iteration (synth wins; candidates stand in when synth never ran) and sums **across** iterations, so a multi-iteration run keeps its run-wide total. REJECTED is reported alongside the headline, never inside it.
+
+**Post-synth confirmation.** A cheap read-only substage (`review-confirm`, a local `Stage` const — not in `STAGES`) checks that the synth commit actually acted on each CONFIRMED finding, closing the "trust the verifier, trust the synth" chain. Failures degrade to "not checked"; a bookkeeping check must never sink work that already landed.
+
+**Dirty-worktree refusal.** Panel lenses are enforced read-only with `reset --hard`, which is only safe on a tracked-clean tree. A dirty tree used to disable enforcement and run anyway. It now refuses, with an actionable message — chosen over stash-and-restore because stashing under an unattended agent risks losing operator work and a failed restore is unrecoverable.
+
 ## Prompt diet (P29)
 
 Per-iteration prompt cost was dominated by repeated static and unbounded content rather than task-specific context. Four changes, all measured:

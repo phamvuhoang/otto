@@ -176,6 +176,16 @@ export type StageRecord = {
     minor: number;
     nit: number;
     suppressed: number;
+    /** Findings the verifier REJECTED (P28, issue #248); reported alongside the
+     *  headline rather than inside it, so a rejected finding never inflates the
+     *  counts a maintainer reads as real. */
+    rejected?: number;
+  };
+  /** Post-synth confirmation (P28, issue #248): whether the synth commit acted
+   *  on each CONFIRMED finding. Absent = the confirmation pass did not run. */
+  reviewConfirmation?: {
+    addressed: number;
+    unaddressed: { file: string; claim: string; note?: string }[];
   };
   startedAt: string;
   finishedAt: string;

@@ -28,6 +28,8 @@ export type ScopeDriftSummary = {
   plannedFiles: string[];
   touchedFiles: string[];
   outOfScope: string[];
+  /** The plan named no paths, so drift could not be assessed (P31 D8). */
+  fileMapMissing?: boolean;
 };
 
 export type FinalizeReportContext = {
@@ -162,8 +164,21 @@ function severitySentence(summary: ReviewSeveritySummary | null): string {
   return "Automated review recorded no blocker, major, minor, or nit findings.";
 }
 
+/** Exported for testing: the scope sentence a report renders (P31 D8). */
+export function summarizeScopeSentence(
+  scopeDrift?: ScopeDriftSummary | null
+): string {
+  return scopeSentence(scopeDrift);
+}
+
 function scopeSentence(scopeDrift?: ScopeDriftSummary | null): string {
   if (!scopeDrift) return "";
+  if (scopeDrift.fileMapMissing) {
+    // Not the same as "scope held" — the plan named no paths, so there was
+    // nothing to check against. Saying scope held would be a claim we cannot
+    // support; saying everything drifted was the old, false alternative.
+    return "Plan coverage gap: the plan named no file paths, so scope drift could not be assessed.";
+  }
   if (scopeDrift.outOfScope.length === 0) {
     return "Touched files stayed inside the authored plan file map.";
   }

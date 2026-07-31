@@ -301,6 +301,9 @@ export type ScopeDriftResult = {
   plannedFiles: string[];
   touchedFiles: string[];
   outOfScope: string[];
+  /** True when the plan named no file paths, so drift could not be assessed
+   *  at all. Distinct from `outOfScope: []`, which means scope actually held. */
+  fileMapMissing?: boolean;
 };
 
 function withinScope(path: string, planned: string): boolean {
@@ -318,10 +321,15 @@ export function detectScopeDrift(
     ...new Set(touchedFiles.map((p) => p.replace(/^\.\//, ""))),
   ].sort();
   if (plannedFiles.length === 0) {
+    // A plan that names no paths cannot tell us anything about scope. Flagging
+    // every touched file as out-of-scope was a FALSE verdict, not a cautious
+    // one — it made a clean run read as a runaway (P31 D8). Report it as a
+    // coverage gap instead: no drift verdict, and the reason why.
     return {
       plannedFiles,
       touchedFiles: normalizedTouched,
-      outOfScope: normalizedTouched,
+      outOfScope: [],
+      fileMapMissing: true,
     };
   }
   return {

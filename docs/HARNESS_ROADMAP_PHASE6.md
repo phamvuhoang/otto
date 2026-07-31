@@ -3,12 +3,12 @@
 Last updated: 2026-07-18
 
 > **Status:** In progress. **P27 (harness-attested feedback loops), P29 (prompt
-> diet), P28 (regression signals) and P30 (budget enforcement) have shipped** — see issues
-> [#246](https://github.com/phamvuhoang/otto/issues/246) and
-> [#247](https://github.com/phamvuhoang/otto/issues/247).
-> P31 has a merged design spec and refreshed implementation plan
-> under `docs/superpowers/{specs,plans}/` but no implementation slice yet; this update
-> does not claim any of them shipped. **P32 (automated pull-request code
+> diet), P28 (regression signals), P30 (budget enforcement) and P31 slice 1
+> (plan soundness) have shipped** — see issues #246, #247, #248, #249 and
+> #250.
+> P31 slice 2 (interactive sharpening questions, plan-task-ID traceability,
+> gate-everywhere) is spec'd and outlined but not yet planned in detail, and is the only Phase 6 work
+> remaining. **P32 (automated pull-request code
 > review) is an URGENT PARALLEL initiative that has shipped** alongside this
 > backlog, not a renumbering or reordering of P27–P31: it addressed a separate,
 > higher-urgency need (unattended PR review) and was pulled forward and built
@@ -124,7 +124,7 @@ reduce` only strips whitespace and hardcodes `cacheHits: 0`.
 | ~~P29~~  | ~~Prompt diet: bounded injection, cache shape~~ — **SHIPPED**                  | Cut per-iteration prompt cost by wiring built levers and deduping payloads.                                                       | Medium | High       |
 | ~~P28~~  | ~~Regression signals and review integrity~~ — **SHIPPED**                      | Iteration control reacts to attested failures and recurring findings.                                                             | Medium | High       |
 | ~~P30~~  | ~~Context budget enforcement and state digest~~ — **SHIPPED**                  | Over-budget context degrades through governed levers; stale context retires.                                                      | Medium | Medium     |
-| P31      | Plan soundness and a working human loop                                        | Plans are judged on substance and the checkpoint edit path works.                                                                 | Large  | Medium     |
+| P31      | Plan soundness and a working human loop — **slice 1 SHIPPED**                  | Plans are judged on substance and the checkpoint edit path works.                                                                 | Large  | Medium     |
 | **P32**  | **Automated pull-request code review (urgent, PARALLEL to P27–P31 — shipped)** | An unattended, read-only `otto-review` bin reviews an exact PR revision and publishes an idempotent report/comment/formal review. | Large  | High       |
 
 P27 leads because it is the foundation: attested check results are the input

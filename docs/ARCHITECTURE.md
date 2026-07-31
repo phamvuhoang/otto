@@ -503,6 +503,22 @@ The six fixtures cover the representative jobs from the roadmap: a small bug fix
 
 ---
 
+## Plan soundness (P31, slice 1)
+
+The plan gate's rubrics are keyword/regex heuristics, so a plan can pass by placing the right words in the right sections. Slice 1 adds a semantic judge, fixes the human loop, and corrects a false scope verdict.
+
+**Semantic judge** (`plan-judge.ts`, opt-in via `--plan-judge` / `OTTO_PLAN_JUDGE` / `planJudge: true`). Scores three things the lexical rubric cannot: alternatives weighed with a stated tradeoff, risks named with a concrete rollback, and each requirement tracing to a task and a test. It runs **only on plans that already pass the lexical rubric**, which stays as the fast pre-filter — a plan missing whole sections re-plans on regex evidence for free, and model spend is reserved for plans that look right.
+
+**Fail-open.** `parsePlanJudgeVerdict` returns `null` unless every dimension has a verdict line; a partial score would be a silent downgrade of the gate rather than an honest abstention. The gate then degrades to today's rubric-only decision. A broken judge must never block the opt-in plan flow.
+
+The judge is an **additional** bar, never an alternative one: it can fail a plan the rubric passed, and can never rescue one the rubric failed.
+
+**Working edit path.** `loop.ts` did `decision === "approve" ? "accept" : "pause"`, making `edit` indistinguishable from `reject` — `parseCheckpointResponse`'s third branch was unreachable in practice. `resolvePlanEditLoop` now pauses for on-disk edits, re-scores, shows the new verdict, and asks again, capped at 5 rounds.
+
+Two deliberate asymmetries: an explicit **approve wins even when the re-score still fails** (the verdict was shown; the human outranks the heuristic), and an **unanswered edit round pauses rather than auto-approving** — the initial checkpoint auto-approves on silence because an AFK run may have a TTY and no human, but choosing "edit" is an explicit claim that a human _is_ present.
+
+**Zero-path scope drift.** `detectScopeDrift` used to return every touched file as `outOfScope` when the plan named no paths — a false total-drift verdict that made a clean run read as a runaway. It now returns `outOfScope: []` with `fileMapMissing: true`, and reports say "plan coverage gap: the plan named no file paths, so scope drift could not be assessed" — distinct from "scope held", which is a claim the evidence cannot support.
+
 ## Context budget enforcement (P30)
 
 `context-budget.ts` measured and recommended from P7 onward while nothing acted. `--token-mode enforce` (opt-in; `off`/`measure`/`reduce` are byte-for-byte unchanged) degrades an over-budget prompt through a governed ladder in `context-enforcement.ts`: tighter bounded learnings → authorized evidence compression → commit compaction, cheapest-first, stopping as soon as the prompt fits.

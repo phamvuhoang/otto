@@ -571,7 +571,7 @@ Flags:
   --notify            emit OS notification + terminal bell on loop completion or unrecoverable failure (default: off)
   --budget <usd>      stop the loop when cumulative stage cost reaches this USD ceiling (default: off)
   --cooldown <ms>     wait this many milliseconds between iterations; adaptive backoff doubles on throttle (default: 0)
-  --token-mode <mode> token accounting mode: off | measure | reduce (default: off)
+  --token-mode <mode> token accounting mode: off | measure | reduce | enforce (default: off)
   --agent <runtime>   agent CLI runtime: claude | codex (or OTTO_AGENT / .otto/config.json "agent"; default: claude)
   --fallback-agent <runtime>  runtime to switch to on a usage/rate limit: claude | codex (or OTTO_FALLBACK_AGENT / config "fallbackAgent"; default: none)
   --auto-switch-on-limit  switch to the fallback runtime when the active one hits a limit (or OTTO_AUTO_SWITCH_ON_LIMIT=1 / config "autoSwitchOnLimit"; default: off)
@@ -612,7 +612,7 @@ Environment variables:
   OTTO_CLAUDE_MODEL / OTTO_CODEX_MODEL  provider-specific model override applied
                     only when that runtime is active; wins over OTTO_MODEL.
   OTTO_RESULT_GRACE_MS  post-result grace timer ms (default 30000; 0 disables).
-  OTTO_TOKEN_MODE   default token accounting mode: off | measure | reduce.
+  OTTO_TOKEN_MODE   default token accounting mode: off | measure | reduce | enforce.
   OTTO_AGENT        default agent CLI runtime: claude | codex; same as --agent (default: claude).
   OTTO_FALLBACK_AGENT  runtime to switch to on a usage/rate limit: claude | codex; same as --fallback-agent (default: none).
   OTTO_AUTO_SWITCH_ON_LIMIT  switch to the fallback runtime on a limit when truthy (1/true/yes/on); same as --auto-switch-on-limit (default: off).

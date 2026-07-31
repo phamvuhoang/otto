@@ -623,7 +623,7 @@ Otto is configured by flags and environment variables. The essentials:
 | `OTTO_WORKSPACE`          | `cwd`           | Host repo the selected agent runs against; also where `.otto-tmp/` is written.          |
 | `OTTO_RUNNER`             | `sandbox`       | `sandbox` confines writes to the workspace; `host` runs the selected agent unsandboxed. |
 | `OTTO_MODEL`              | _(CLI default)_ | Pin the active runtime's model (`--model` pass-through).                                |
-| `OTTO_TOKEN_MODE`         | `off`           | `off`, `measure`, or `reduce`; overridden by `--token-mode`.                            |
+| `OTTO_TOKEN_MODE`         | `off`           | `off`, `measure`, `reduce`, or `enforce`; overridden by `--token-mode`.                 |
 | `OTTO_CONTEXT_COMPRESSOR` | `off`           | `off` or `headroom`; overridden by `--context-compressor`. Compresses `@spill` content. |
 
 ### Attested checks (opt-in)

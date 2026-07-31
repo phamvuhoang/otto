@@ -1,4 +1,5 @@
 import { formatReportRubric, scoreReportLegibility } from "./report-rubric.js";
+import type { ChecksSummary } from "./attestation.js";
 import {
   REPORT_MARKER,
   type RunManifest,
@@ -37,6 +38,43 @@ export type FinalizeReportContext = {
 };
 
 export const DEFAULT_REPORT_LEGIBILITY_THRESHOLD = 1;
+
+/**
+ * The "Attested Checks" report block (P27, issue #246).
+ *
+ * Disagreement is structural, not parsed (spec D4): a fix commit IS the agent's
+ * claim that the suites pass, so a red terminal attestation at a committed
+ * boundary is by definition a contradiction. No NLP over report prose, nothing
+ * that can be satisfied by wording.
+ *
+ * Returns `""` for a run that never attested, so appending it is a no-op on
+ * every repo that has not opted in.
+ */
+export function formatAttestedChecks(
+  summary: ChecksSummary | undefined
+): string {
+  if (!summary) return "";
+  const lines: string[] = ["", "## Attested Checks", ""];
+  if (summary.terminalFailed > 0) {
+    lines.push(
+      "**DISAGREEMENT — the agent committed a fix, but the harness observed a failing check.**",
+      ""
+    );
+  }
+  const tally =
+    `- ${summary.passed} passed, ${summary.failed} failed` +
+    (summary.skipped > 0 ? `, ${summary.skipped} not run (fail-fast)` : "");
+  lines.push(tally);
+  if (summary.terminalFailed === 0 && summary.everFailed) {
+    lines.push(
+      "- Final state green (recovered — earlier iterations were red)."
+    );
+  }
+  for (const sig of summary.failureSignatures) {
+    lines.push(`- \`${sig}\``);
+  }
+  return `${lines.join("\n")}\n`;
+}
 
 export function extractRunReport(stageResult: string): string | null {
   const start = stageResult.indexOf(REPORT_MARKER);
@@ -374,6 +412,8 @@ export function buildFallbackRunReport(ctx: FinalizeReportContext): string {
     "- Deferred: none recorded by the harness.",
     "- Recommended next action: review the evidence bundle before accepting the run.",
     "",
+    // "" on a run that never attested, so the fallback report is unchanged.
+    formatAttestedChecks(ctx.manifest.checksSummary),
   ].join("\n");
 }
 
@@ -391,5 +431,10 @@ export function finalizeReportText(
   const withEvidence = appendAutomatedEvidence(withRisk, ctx);
   const withContributions = appendAgentContributions(withEvidence, ctx);
   const withGallery = appendVerificationGallery(withContributions, ctx);
-  return appendLegibilityGate(withGallery);
+  // P27: appended after the legibility gate scores the model-authored text, so
+  // harness-attested evidence never inflates the model's own legibility score.
+  // "" on a run that never attested.
+  return `${appendLegibilityGate(withGallery)}${formatAttestedChecks(
+    ctx.manifest.checksSummary
+  )}`;
 }

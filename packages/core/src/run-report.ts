@@ -8,6 +8,8 @@ import {
 import { dirname, join } from "node:path";
 
 import type { AgentRuntimeId } from "./agent-runtime.js";
+import type { ChecksRecord } from "./checks.js";
+import type { ChecksSummary } from "./attestation.js";
 import type { ContextBreakdown } from "./context-report.js";
 import type {
   PlanReconciliation,
@@ -161,6 +163,10 @@ export type StageRecord = {
   skillsUsed?: SkillUsage[];
   /** External tools invoked while this stage ran (issue #111, INERT); absent = none. */
   toolsUsed?: ToolUsage[];
+  /** Harness-attested check results for a boundary stage (P27, issue #246);
+   *  absent = no checks configured or this stage is not an attestation
+   *  boundary. Set by the loop only — never parsed from agent JSON. */
+  checks?: ChecksRecord[];
   /** Composition of this stage's rendered prompt (issue #62 P7); absent = not measured. */
   contextBreakdown?: ContextBreakdown;
   /** Finding severity counts from the review panel (P14); absent = not a panel stage. */
@@ -255,6 +261,10 @@ export type RunManifest = {
     maxScore: number;
     unknowns: string[];
   };
+  /** Run-level attested-check evidence (P27, issue #246); absent when the run
+   *  never attested. `terminalFailed` is the verdict; the cumulative fields are
+   *  churn evidence for P28. Set by the loop only — never from agent JSON. */
+  checksSummary?: ChecksSummary;
   /** Structured verification matrix from a `--verify` run (issue #181 P24);
    *  absent outside verify mode or when the stage emitted none. */
   verification?: VerificationEntry[];

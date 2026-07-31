@@ -32,6 +32,7 @@ import {
 } from "./input-sharpness.js";
 import {
   parseVerificationMatrixWithDiagnostics,
+  attestMatrixRows,
   reconcileMatrixWithPlan,
 } from "./verification-matrix.js";
 import { validateVerificationEvidence } from "./verification-evidence.js";
@@ -52,6 +53,14 @@ import {
   createHeadroomSyncCompressor,
 } from "./headroom-adapter.js";
 import { readSafetyPolicy } from "./safety-policy.js";
+import { readChecksConfig } from "./checks.js";
+import {
+  newLedger,
+  maybeAttest,
+  resolveAttestation,
+  finalExitReason,
+  type AttestationContext,
+} from "./attestation.js";
 import {
   authorizeToolOperation,
   readToolConfig,
@@ -772,6 +781,16 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // Lightweight in-memory log mirroring recordedStageFiles; used by summarize
   // to build a RunView for formatDoneCard without a disk round-trip.
   const stageLog: { iteration: number; stage: string; isError: boolean }[] = [];
+  // P27 harness-attested checks (issue #246). Inert unless `.otto/config.json`
+  // declares `checks`: with no commands every seam short-circuits, so a repo
+  // that has not opted in records, reports, and exits exactly as before.
+  const checkCommands = readChecksConfig(workspaceDir);
+  const attestationLedger = newLedger();
+  const attestationCtx: AttestationContext = {
+    commands: checkCommands,
+    workspaceDir,
+    policy: readSafetyPolicy(workspaceDir),
+  };
   const recordStage = (
     recIteration: number,
     stageName: string,
@@ -790,6 +809,16 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       stage: stageName,
       isError: sr.isError,
     });
+    // P27: attest the repo's configured checks after a stage that moved HEAD in
+    // a review path. `panel.ts` calls this same closure for its synth substage,
+    // so the single reviewer and the panel synth are both covered here.
+    const attestedChecks = maybeAttest(
+      attestationLedger,
+      stageName,
+      sr.isError,
+      recIteration,
+      attestationCtx
+    );
     try {
       const name = writeStageRecord(
         workspaceDir,
@@ -808,6 +837,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           contextBreakdown: sr.contextBreakdown,
           ...(sr.toolsUsed ? { toolsUsed: sr.toolsUsed } : {}),
           ...(sr.skillsUsed ? { skillsUsed: sr.skillsUsed } : {}),
+          ...(attestedChecks.length > 0 ? { checks: attestedChecks } : {}),
           ...(reviewSeverity ? { reviewSeverity } : {}),
           startedAt,
           finishedAt: nowIso(),
@@ -988,6 +1018,12 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // covered without threading the manifest through each return site.
   const finalizeManifest = (reason: string, completed: number): void => {
     try {
+      // P27: fold the attestation ledger. A terminal-red run swaps a SUCCESS
+      // exit reason for CHECKS_FAILED_REASON; a non-success reason is left
+      // alone so attestation never masks why the run actually stopped.
+      const { checksSummary, exitReasonOverride } =
+        resolveAttestation(attestationLedger);
+      const finalReason = finalExitReason(reason, exitReasonOverride);
       const changedFiles = changedFilesSince(workspaceDir, runStartSha);
       const planDoc = latestTaskPlanDocument(workspaceDir);
       const inputText = inputs || "";
@@ -1051,6 +1087,16 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
               ...(Number.isFinite(startedAtMs) ? { startedAtMs } : {}),
               commitExists: (sha) => commitExists(workspaceDir, sha),
             });
+            // P27: re-execute `method:"test"` rows whose cited `check` command
+            // exactly matches a configured check, so a "pass" is something the
+            // harness watched rather than something the agent asserted. Inert
+            // without a `checks` config; exact-match-only, because matrix rows
+            // are agent-emitted strings and must never reach a shell fuzzily.
+            verification = attestMatrixRows(
+              verification,
+              checkCommands,
+              workspaceDir
+            );
             // Reconcile the matrix against the matching plan's task set (#201)
             // so an omitted plan task surfaces as an unverified gap instead of
             // silently inflating coverage.
@@ -1081,9 +1127,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         completedIterations: completed,
         costUsd: runCostUsd,
         tokenUsage: runTokenUsage,
-        exitReason: reason,
-        nextAction: nextActionFor(reason),
+        exitReason: finalReason,
+        nextAction: nextActionFor(finalReason),
         artifacts: [],
+        // P27: the report builder reads checksSummary off this manifest to
+        // render its "Attested Checks" block, so it must be attached here too,
+        // not only on the persisted manifest below.
+        ...(checksSummary ? { checksSummary } : {}),
         ...(inputSharpness
           ? {
               inputSharpness: {
@@ -1122,9 +1172,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         completedIterations: completed,
         costUsd: runCostUsd,
         tokenUsage: runTokenUsage,
-        exitReason: reason,
-        nextAction: nextActionFor(reason),
+        exitReason: finalReason,
+        nextAction: nextActionFor(finalReason),
         artifacts: collectArtifacts(),
+        ...(checksSummary ? { checksSummary } : {}),
         ...(runSkillsUsed.length > 0 ? { skillsUsed: runSkillsUsed } : {}),
         ...(compressorSafetyEvents.length > 0
           ? { safetyEvents: compressorSafetyEvents }
@@ -1165,6 +1216,14 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     // false here — the deferred-count line is written separately below to
     // preserve the greppable count format ("N deferred follow-ups …").
     const nowTs = nowIso();
+    // P27: the done-card snapshot must show the same verdict the persisted
+    // manifest does, so a terminal-red run never flashes "complete" on screen
+    // while the bundle records otherwise.
+    const {
+      checksSummary: snapChecksSummary,
+      exitReasonOverride: snapOverride,
+    } = resolveAttestation(attestationLedger);
+    const snapReason = finalExitReason(reason, snapOverride);
     const manifestSnap: RunManifest = {
       runId,
       bin,
@@ -1176,9 +1235,10 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       completedIterations: iterations,
       costUsd: runCostUsd,
       tokenUsage: runTokenUsage,
-      exitReason: reason,
-      nextAction: nextActionFor(reason),
+      exitReason: snapReason,
+      nextAction: nextActionFor(snapReason),
       artifacts: [] as RunArtifact[],
+      ...(snapChecksSummary ? { checksSummary: snapChecksSummary } : {}),
       startedAt: manifestStartedAt,
       finishedAt: nowTs,
     };

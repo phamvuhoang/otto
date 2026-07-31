@@ -146,6 +146,19 @@ export function formatRunReport(
       s.unknowns.length > 0 ? ` — assumed: ${s.unknowns.join(", ")}` : "";
     lines.push(`  sharpness:   ${s.metCount}/${s.maxScore}${gaps}`);
   }
+  if (manifest.checksSummary) {
+    const c = manifest.checksSummary;
+    lines.push(
+      `  checks:      ${c.passed} passed, ${c.failed} failed, ${c.skipped} skipped (harness-attested)`
+    );
+    if (c.terminalFailed > 0) {
+      lines.push(
+        `               FINAL STATE RED — ${c.failureSignatures[0] ?? "see stage records"}`
+      );
+    } else if (c.everFailed) {
+      lines.push("               (recovered — earlier iterations were red)");
+    }
+  }
 
   lines.push("");
   lines.push(`Stages (${stages.length}):`);
@@ -164,6 +177,13 @@ export function formatRunReport(
       lines.push(
         `      skills: ${s.skillsUsed.map((u) => `${u.name}${u.source ? ` (${u.source})` : ""}`).join(", ")}`
       );
+    }
+    if (s.checks && s.checks.length > 0) {
+      for (const c of s.checks) {
+        lines.push(
+          `      check: ${c.exitCode === 0 ? "PASS" : "FAIL"} \`${c.command}\` (exit ${c.exitCode}, ${c.durationMs}ms)`
+        );
+      }
     }
   });
 

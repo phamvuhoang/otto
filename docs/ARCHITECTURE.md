@@ -503,6 +503,34 @@ The six fixtures cover the representative jobs from the roadmap: a small bug fix
 
 ---
 
+## Harness-attested checks (P27)
+
+Every "the suites pass" in a review path used to be agent prose the harness never verified. P27 makes the harness run the repo's own check commands and record what it observed.
+
+**Two modules.** `checks.ts` holds the pure contract — `ChecksRecord`, `extractFailureSignature`, `summarizeChecks(records, configuredCount)` — plus the policy-scoped runner `runConfiguredChecks`, which walks commands in configured order and **stops at the first non-zero exit**. Unrun commands are absent from the result and surface as `skipped`, so a short-circuited ladder never reads as a passing suite. `attestation.ts` holds the stateful half: the append-only `AttestationLedger`, the boundary predicate, and `resolveAttestation`.
+
+**One wiring point.** `maybeAttest` is called from the loop's `recordStage` closure. Because `panel.ts` calls that same closure for its `review-synth` substage, the single `reviewer` and the panel synth are both attested without a second seam. `apply-review-implementer` is the third boundary. An errored stage committed nothing, so it is never attested.
+
+**Terminal state is the verdict; cumulative state is evidence.** `resolveAttestation` reads the **last** ledger entry to decide `terminalFailed`, and folds every entry for `passed`/`failed`/`failureSignatures`/`everFailed`. A failure that iteration 2 hit and iteration 5 fixed therefore does **not** sink the run — that is the review loop working — but it is retained as the recurring-failure signal P28 consumes.
+
+**Where the evidence lands:**
+
+```
+maybeAttest -> StageRecord.checks
+            -> AttestationLedger
+resolveAttestation -> RunManifest.checksSummary
+                   -> exit reason ("done with failing checks") + nextAction
+                   -> report "Attested Checks" block (DISAGREEMENT callout)
+                   -> otto-inspect run tally + per-stage check lines
+                   -> eval succeeded (attestedTerminalFailures === 0)
+```
+
+**Two rules worth knowing.** The exit-reason override replaces **only** a success reason, so a run that stopped at `stopped (budget)` keeps that more informative reason and eval's guard is what sinks it. And disagreement is _structural_, not parsed: a fix commit **is** the agent's claim of green, so a red terminal attestation at a committed boundary is a contradiction by construction — no NLP over report prose.
+
+`checks`, `checksSummary`, and `attestedCheck` are harness-only, mirroring `artifactExists`: set by the loop, never parsed from agent JSON. In `--verify` mode, `attestMatrixRows` re-executes `method:"test"` rows whose `check` command **exactly matches** a configured check; a non-match is a coverage gap, never a failure, and never reaches a shell.
+
+Absent a `checks` key in `.otto/config.json`, every seam short-circuits and runs are byte-for-byte unchanged.
+
 ## Adaptive compute router
 
 Opt-in via `--adaptive-router` (or `OTTO_ADAPTIVE_ROUTER=1`); **off by default**, so the fixed "N iterations + static review chain" behavior is unchanged unless asked for. The router allocates review/iteration compute by evidence rather than configuration. Every decision is a pure function of model-free signals (changed paths, diff stability, cost) so it is reproducible and the eval suite can A/B `adaptive` vs `baseline` deterministically. Three pure substrates:

@@ -270,6 +270,25 @@ export {
   type Supersession,
 } from "./memory.js";
 export {
+  extractFailureSignature,
+  summarizeChecks,
+  readChecksConfig,
+  runConfiguredChecks,
+  type ChecksRecord,
+  type CheckCommandRunner,
+} from "./checks.js";
+export {
+  newLedger,
+  shouldAttestBoundary,
+  maybeAttest,
+  resolveAttestation,
+  finalExitReason,
+  CHECKS_FAILED_REASON,
+  type AttestationLedger,
+  type AttestationContext,
+  type ChecksSummary,
+} from "./attestation.js";
+export {
   parseEvalConfigs,
   runEval,
   runEvalCompare,

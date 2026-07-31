@@ -503,6 +503,22 @@ The six fixtures cover the representative jobs from the roadmap: a small bug fix
 
 ---
 
+## Prompt diet (P29)
+
+Per-iteration prompt cost was dominated by repeated static and unbounded content rather than task-specific context. Four changes, all measured:
+
+**Bounded learnings.** `LEARNINGS.md` was `cat`-injected wholesale into every entry template. The harness now resolves the block itself (`resolveLearningsBlock`, `memory.ts`) and supplies it as `{{ LEARNINGS }}`, defaulted at `executeStage`'s single `renderTemplate` call site — one seam covering the loop, panel substages, and fan-out.
+
+The rule, in order: absent file ⇒ the exact old fallback text; **under** the 6000-char budget ⇒ the raw file verbatim, so small repos are byte-for-byte unchanged; **over** budget ⇒ a relevance-ranked projection of the governed `.otto/memory/` records, then as much of the raw file as still fits, deduped against what the projection already carries. Over budget with **no** governed records passes through untruncated — the harness cannot reconstruct a hand-written file, so cutting it is not an acceptable saving. `OTTO_UNBOUNDED_LEARNINGS=1` restores whole-file injection.
+
+**One shared diff spill.** Each panel lens template re-ran `git show HEAD` into its own spill dir, so an N-lens panel paid N+1 times — and because every lens referenced a _different_ path, near-identical lens prompts could never share a cached prefix. `runPanel` now spills once into `panelHostDir` and hands every lens the same `{{ DIFF_FILE }}`.
+
+**Static-first entry templates.** `afk.md`, `ghafk.md` and `ghafk-issue.md` render their playbook include _before_ every dynamic block, so the ~400-line static chain forms a stable leading prefix the runtime's prompt cache can reuse (measured via `cache_read_input_tokens`, `tokens.ts:38`). Only the trailing include moved; intra-file block order is preserved, which is what keeps each template's own "shown above" references true. Playbook prose that made positional claims (`<inputs>` "at the start of context") was rewritten to name the block instead — `linearprompt.md` deliberately still makes that claim, because `linearafk.md` is not reordered and there it remains true.
+
+**Honest `--token-mode reduce`.** It compacted whitespace and reported `cache hits 0` — a statistic it never measured. Those fields are gone, and it now also pulls the `compactCommits` lever (built in P7 slice 6, previously called by nothing), degrading older commit bodies to subjects with an explicit "N compacted" note. Stats are split by lever and sum exactly to the observed delta.
+
+Measured on a mature-repo fixture (large `LEARNINGS.md`, 12 governed records, real commit history): the implementer prompt drops **32,635 → 24,818 chars, ~24%**. A test pins the ≥20% target, the per-lens multiplication, and the byte-identical guarantee for small repos.
+
 ## Harness-attested checks (P27)
 
 Every "the suites pass" in a review path used to be agent prose the harness never verified. P27 makes the harness run the repo's own check commands and record what it observed.

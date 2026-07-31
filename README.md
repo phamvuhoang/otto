@@ -640,6 +640,14 @@ By default every "tests pass" in a review is the agent's own prose — the harne
 
 Commands run in order and stop at the first failure, so put the cheapest first. See **[docs/CONFIG.md](./docs/CONFIG.md)** for policy scoping, timeouts, and `--verify` re-execution.
 
+### Bounded learnings (automatic)
+
+Otto injects `.otto/LEARNINGS.md` into every stage prompt. Once that file grows past 6000 characters, it injects a bounded block instead: the most relevant governed `.otto/memory/` records first, then as much of the raw file as still fits.
+
+Under 6000 characters nothing changes. With no governed records the file is passed through untruncated — Otto will not silently cut a hand-written file it cannot reconstruct. `OTTO_UNBOUNDED_LEARNINGS=1` forces whole-file injection.
+
+On a mature-repo fixture this cuts the implementer prompt ~24%. See **[docs/CONFIG.md](./docs/CONFIG.md)**.
+
 ### How to set config values
 
 Every value resolves in a fixed precedence order — **CLI flag → environment variable → `.otto/config.json` → built-in default** — so a flag always wins for a single run, an env var sets a per-shell default, and the config file persists a choice for a repo. Pick the mechanism by how long the choice should stick:

@@ -1,4 +1,10 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join, posix } from "node:path";
 import { DEFAULT_AGENT, type AgentRuntimeId } from "./agent-runtime.js";
 import { git } from "./git.js";
@@ -189,6 +195,32 @@ export type RunPanelOptions = {
     }
   ) => void;
 };
+
+/** Filename of the shared per-iteration HEAD patch inside the panel host dir. */
+const HEAD_DIFF_NAME = "head.diff";
+
+/**
+ * Spill `git show HEAD` once per panel iteration (P29 Task 5).
+ *
+ * Each lens template used to carry its own `@spill?:head.diff=`git show HEAD``,
+ * so an N-lens panel ran the same command N+1 times into N+1 distinct spill
+ * dirs — and because every lens prompt then referenced a *different* path, the
+ * lens prompts could never share a cacheable prefix either.
+ *
+ * Idempotent: called again for the same host dir it returns the same path
+ * without re-running git, so every lens in an iteration reads one identical
+ * file. Falls back to the old tag's `No diff body` text rather than throwing.
+ */
+export function spillHeadDiff(
+  workspaceDir: string,
+  panelHostDir: string
+): string {
+  const target = join(panelHostDir, HEAD_DIFF_NAME);
+  if (existsSync(target)) return target;
+  const patch = git(["show", "HEAD"], workspaceDir);
+  writeFileSync(target, patch ?? "No diff body", "utf8");
+  return target;
+}
 
 /** Tracked-only worktree dirtiness ("" = clean). Untracked files are ignored. */
 function trackedStatus(workspaceDir: string): string | null {
@@ -428,6 +460,11 @@ export async function analyzeReview(
   const panelRel = `panel-${process.pid}-${iteration}-${Date.now()}`;
   const panelHostDir = join(workspaceDir, ".otto-tmp", panelRel);
   mkdirSync(panelHostDir, { recursive: true });
+  // P29: spill the HEAD patch ONCE for the whole panel and hand every lens the
+  // same workspace-relative path, instead of each lens template re-running
+  // `git show HEAD` into its own spill dir.
+  spillHeadDiff(workspaceDir, panelHostDir);
+  const headDiffRef = `./${posix.join(".otto-tmp", panelRel, HEAD_DIFF_NAME)}`;
 
   // Lenses are contractually read-only. Snapshot HEAD so we can detect a lens
   // that edits or commits despite the prompt (it runs bypassPermissions). We only
@@ -475,7 +512,12 @@ export async function analyzeReview(
       executeStage({
         ...stageBase,
         stage: { ...lensStage, tier: tierForLens(lens) },
-        vars: { LENS: lens, RESUME: resumeWithXtask, ...extraVars },
+        vars: {
+          LENS: lens,
+          RESUME: resumeWithXtask,
+          DIFF_FILE: headDiffRef,
+          ...extraVars,
+        },
         logLabel: `lens-${lens}`,
         modelRouting: opts.modelRouting,
         tierLadder: opts.tierLadder,

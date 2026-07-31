@@ -12,6 +12,7 @@ import {
 } from "./context-compressor.js";
 import { applyPromptReduction } from "./prompt-reduction.js";
 import { renderTemplate } from "./render.js";
+import { learningsForPrompt } from "./memory.js";
 import { resolveStageModel, type TierLadder } from "./model-tier.js";
 import type { RiskAssessment } from "./risk.js";
 import { DEFAULT_BACKOFF_MS, backoffFor, withRetries } from "./retry.js";
@@ -114,6 +115,36 @@ function violationToSafetyEvent(v: PolicyViolation): SafetyEvent {
   };
 }
 
+/** What the harness resolved for a stage's `{{ LEARNINGS }}` var. */
+export type PreparedLearnings = { text: string };
+
+/**
+ * Resolve the `<learnings>` block the harness injects as `{{ LEARNINGS }}`
+ * (P29 Task 2), replacing the wholesale `!?`cat ./.otto/LEARNINGS.md`` tag.
+ *
+ * Under the 6000-char budget this is the raw file verbatim, so small repos
+ * render byte-identically; over budget it becomes a relevance-ranked bounded
+ * projection of the governed `.otto/memory/` records — and never a truncation.
+ * See {@link resolveLearningsBlock} for the full rule.
+ *
+ * Compression of this block (the compressor's `memory-projection` category) is
+ * deliberately NOT wired here: spec D6 gates it on measurement, because
+ * authorizing a category obligates the P22 fact-survival gate (#200) for it and
+ * the block is already capped at 6000 chars.
+ */
+export function prepareLearnings(opts: {
+  workspaceDir: string;
+  taskKey?: string;
+  env?: NodeJS.ProcessEnv;
+}): PreparedLearnings {
+  const { text } = learningsForPrompt(
+    opts.workspaceDir,
+    opts.taskKey ? { taskKey: opts.taskKey } : {},
+    opts.env ?? process.env
+  );
+  return { text };
+}
+
 /** Render a stage's template (inside the retry, so flaky shell tags retry) and run it. */
 export async function executeStage(
   opts: ExecuteStageOptions
@@ -169,9 +200,24 @@ export async function executeStage(
               return out.text;
             }
           : undefined;
+      // P29: the harness owns the `<learnings>` block. Default `{{ LEARNINGS }}`
+      // here — the single renderTemplate call site, so this one seam covers the
+      // loop, panel substages, and fan-out. An explicit caller-supplied var
+      // still wins, which is what lets tests render templates in isolation.
+      const renderVars =
+        vars.LEARNINGS === undefined
+          ? {
+              ...vars,
+              LEARNINGS: prepareLearnings({
+                workspaceDir,
+                ...(vars.TASK_KEY ? { taskKey: vars.TASK_KEY } : {}),
+                ...(opts.childEnv ? { env: opts.childEnv } : {}),
+              }).text,
+            }
+          : vars;
       let prompt = renderTemplate(
         join(packageDir, "templates", stage.template),
-        vars,
+        renderVars,
         {
           cwd: workspaceDir,
           spillHostDir,
@@ -184,9 +230,24 @@ export async function executeStage(
       if (tokenMode === "reduce") {
         const reduced = applyPromptReduction(prompt);
         prompt = reduced.prompt;
-        const { originalChars, reducedChars, cacheHits } = reduced.stats;
+        const {
+          originalChars,
+          reducedChars,
+          whitespaceSavedChars,
+          commitsSavedChars,
+        } = reduced.stats;
+        // Report the levers that actually ran. The old line printed a "cache
+        // hits" figure this module never measured (it was hardcoded 0).
+        const levers = [
+          commitsSavedChars > 0 ? `commits -${commitsSavedChars}` : null,
+          whitespaceSavedChars > 0
+            ? `whitespace -${whitespaceSavedChars}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(", ");
         process.stderr.write(
-          `${dim(`prompt reduce ${originalChars} -> ${reducedChars} chars | cache hits ${cacheHits}`)}\n`
+          `${dim(`prompt reduce ${originalChars} -> ${reducedChars} chars${levers ? ` | ${levers}` : ""}`)}\n`
         );
       }
       // Append the bounded, attributed skill block (issue #114 P18) after

@@ -1,3 +1,5 @@
+@include:prompt.md
+
 {{ RESUME }}
 
 <commits>
@@ -8,7 +10,7 @@
 
 <learnings>
 
-!?`cat ./.otto/LEARNINGS.md|||_No learnings recorded yet._`
+{{ LEARNINGS }}
 
 </learnings>
 
@@ -17,5 +19,3 @@
 {{ INPUTS }}
 
 </inputs>
-
-@include:prompt.md

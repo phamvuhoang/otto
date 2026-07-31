@@ -124,9 +124,7 @@ export function parseMemoryRecord(raw: unknown): MemoryRecord | null {
         ? (o.status as MemoryStatus)
         : "active",
     createdAt:
-      typeof o.createdAt === "string"
-        ? o.createdAt
-        : new Date(0).toISOString(),
+      typeof o.createdAt === "string" ? o.createdAt : new Date(0).toISOString(),
     useCount:
       typeof o.useCount === "number" && Number.isFinite(o.useCount)
         ? o.useCount
@@ -218,8 +216,8 @@ export function supersede(
 
 /** Group key for conflict detection: same category + same scope set. */
 function conflictKey(record: MemoryRecord): string {
-  const scope = [...record.scope].sort().join(" ");
-  return `${record.category ?? ""}${scope}`;
+  const scope = [...record.scope].sort().join("\u0000");
+  return `${record.category ?? ""}\u0001${scope}`;
 }
 
 /**
@@ -319,13 +317,15 @@ export function auditMemory(
  * a normalized category. The first section (Conventions) is also the catch-all for
  * a record whose category matches none of them.
  */
-const LEARNINGS_SECTIONS: { heading: string; match: (norm: string) => boolean }[] =
-  [
-    { heading: "Conventions", match: (n) => n.startsWith("convention") },
-    { heading: "Gotchas", match: (n) => n.startsWith("gotcha") },
-    { heading: "Decisions", match: (n) => n.startsWith("decision") },
-    { heading: "Dead ends", match: (n) => n.startsWith("deadend") },
-  ];
+const LEARNINGS_SECTIONS: {
+  heading: string;
+  match: (norm: string) => boolean;
+}[] = [
+  { heading: "Conventions", match: (n) => n.startsWith("convention") },
+  { heading: "Gotchas", match: (n) => n.startsWith("gotcha") },
+  { heading: "Decisions", match: (n) => n.startsWith("decision") },
+  { heading: "Dead ends", match: (n) => n.startsWith("deadend") },
+];
 
 /** Reduce a category to alphanumerics so "dead-end"/"dead end" both match "deadend". */
 function normalizeCategory(category: string | undefined): string {
@@ -384,7 +384,10 @@ export type MemorySelectionContext = {
 };
 
 /** Relevance score of one record against the task scope (higher = more relevant). */
-function relevanceScore(record: MemoryRecord, taskKey: string | undefined): number {
+function relevanceScore(
+  record: MemoryRecord,
+  taskKey: string | undefined
+): number {
   let score = 0;
   if (taskKey && record.taskKey === taskKey) score += 3; // same task
   if (record.scope.length === 0) score += 1; // repo-wide, broadly applicable
@@ -533,4 +536,154 @@ export function readMemoryRecords(workspaceDir: string): MemoryRecord[] {
     if (rec) records.push(rec);
   }
   return records;
+}
+
+/**
+ * The exact text the `!?`cat ./.otto/LEARNINGS.md|||…`` try-shell tag produced
+ * when the file was absent. Preserved verbatim so a repo with no learnings
+ * renders byte-identically after the harness takes over the block (P29).
+ */
+export const LEARNINGS_FALLBACK = "_No learnings recorded yet._";
+
+/** What the harness resolved for a prompt's `<learnings>` block. */
+export type LearningsResolution = {
+  text: string;
+  /** True only when governed records replaced an over-budget raw file. */
+  bounded: boolean;
+  /** Size of the raw `LEARNINGS.md`; 0 when absent. */
+  rawChars: number;
+  /** Records the budget dropped; absent unless `bounded`. */
+  droppedCount?: number;
+};
+
+/**
+ * Decide what a prompt's `<learnings>` block should contain (P29 spec D1/D2).
+ *
+ * Three cases, in order:
+ *  1. Absent file ⇒ {@link LEARNINGS_FALLBACK}, matching the old tag exactly.
+ *  2. Under budget ⇒ the raw file verbatim (trailing newline trimmed), so
+ *     small repos are byte-identical to the pre-P29 `cat` injection.
+ *  3. Over budget ⇒ a bounded projection of the governed `.otto/memory/`
+ *     records — but ONLY if there are records to project from. With no
+ *     records the raw file passes through **untruncated**: the harness cannot
+ *     reconstruct a hand-written file, so silently cutting it is not an
+ *     acceptable saving.
+ *
+ * `unbounded` (from `OTTO_UNBOUNDED_LEARNINGS=1`) forces case 2 semantics.
+ * Pure — no I/O; {@link learningsForPrompt} is the fs wrapper.
+ */
+export function resolveLearningsBlock(
+  raw: string | null,
+  records: MemoryRecord[],
+  ctx: MemorySelectionContext & { unbounded?: boolean } = {}
+): LearningsResolution {
+  if (raw == null) {
+    return { text: LEARNINGS_FALLBACK, bounded: false, rawChars: 0 };
+  }
+  const trimmed = raw.replace(/\n+$/, "");
+  const rawChars = trimmed.length;
+  const budget = ctx.maxChars ?? DEFAULT_LEARNINGS_BUDGET_CHARS;
+  if (ctx.unbounded || rawChars <= budget || records.length === 0) {
+    return { text: trimmed, bounded: false, rawChars };
+  }
+  const bounded = boundLearnings(records, ctx);
+  if (bounded.selected.length === 0) {
+    // Nothing survived selection (e.g. every record stale/superseded) — the
+    // raw file is still better than an empty block.
+    return { text: trimmed, bounded: false, rawChars };
+  }
+  const projection = formatBoundedLearnings(bounded, ctx.now).replace(
+    /\n+$/,
+    ""
+  );
+  return {
+    text: fillBudgetWithRawTail(projection, trimmed, budget),
+    bounded: true,
+    rawChars,
+    droppedCount: bounded.dropped.length,
+  };
+}
+
+/** Below this, a leftover budget slice is too small to carry useful context. */
+const MIN_RAW_TAIL_CHARS = 200;
+
+/**
+ * Spend the whole budget rather than a sliver of it.
+ *
+ * The governed projection is usually far smaller than the budget — a repo with
+ * one record produced ~91 chars of a 6000-char allowance while a hand-written
+ * `LEARNINGS.md` was discarded wholesale. That is strictly worse than keeping
+ * the records AND as much of the raw file as still fits, so this appends the
+ * remainder.
+ *
+ * Lines already present in the projection are skipped: when `LEARNINGS.md` is
+ * genuinely the projection of the records (the documented model in
+ * `governed-memory.md`), appending it would only duplicate what the records
+ * already supplied. So a projected file adds nothing and a hand-written one
+ * adds everything — without needing to know which it is.
+ */
+function fillBudgetWithRawTail(
+  projection: string,
+  raw: string,
+  budget: number
+): string {
+  const remaining = budget - projection.length;
+  if (remaining < MIN_RAW_TAIL_CHARS) return projection;
+
+  // `projectLearnings` renders each record as `- ${content}`, so a record whose
+  // content is already a bullet becomes `- - …`. Compare on the marker-stripped
+  // form or the dedupe silently misses every line it is meant to catch.
+  const key = (line: string): string =>
+    line
+      .trim()
+      .replace(/^(?:[-*+]\s+)+/, "")
+      .trim();
+  const seen = new Set(projection.split("\n").map(key).filter(Boolean));
+  const fresh = raw
+    .split("\n")
+    .filter((l) => {
+      const t = key(l);
+      return t.length === 0 || !seen.has(t);
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (fresh.length === 0) return projection;
+
+  const NOTE = "\n\n_Raw `LEARNINGS.md` trimmed to fit the context budget._";
+  const SEP = "\n\n";
+  // SEP counts against the budget too — omitting it overshot by 2 chars.
+  const room = remaining - NOTE.length - SEP.length;
+  if (room < MIN_RAW_TAIL_CHARS) return projection;
+
+  if (fresh.length <= remaining - SEP.length) {
+    return `${projection}${SEP}${fresh}`;
+  }
+  // Prefer a line boundary so the block never ends mid-sentence.
+  const window = fresh.slice(0, room);
+  const lastBreak = window.lastIndexOf("\n");
+  const kept = lastBreak > room / 2 ? window.slice(0, lastBreak) : window;
+  return `${projection}${SEP}${kept.trimEnd()}${NOTE}`;
+}
+
+/**
+ * {@link resolveLearningsBlock} over a real workspace: reads
+ * `.otto/LEARNINGS.md` (absent ⇒ `null`) and the governed records, and maps
+ * `OTTO_UNBOUNDED_LEARNINGS=1` onto the `unbounded` escape hatch. Never throws.
+ */
+export function learningsForPrompt(
+  workspaceDir: string,
+  ctx: MemorySelectionContext = {},
+  env: NodeJS.ProcessEnv = process.env
+): LearningsResolution {
+  let raw: string | null;
+  try {
+    raw = readFileSync(join(workspaceDir, ".otto", "LEARNINGS.md"), "utf8");
+  } catch {
+    raw = null;
+  }
+  return resolveLearningsBlock(raw, readMemoryRecords(workspaceDir), {
+    ...ctx,
+    unbounded: env.OTTO_UNBOUNDED_LEARNINGS === "1",
+  });
 }

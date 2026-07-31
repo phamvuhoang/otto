@@ -1,6 +1,6 @@
 # PLAN / PRD
 
-The plan and PRD are provided in the `<inputs>` block at the start of context — conventionally the paths to a plan file and a PRD file. `Read` them to get the work.
+The plan and PRD are provided in the `<inputs>` block of this prompt — conventionally the paths to a plan file and a PRD file. `Read` them to get the work.
 
 You've also been passed the last few commits in `<commits>`. Review them to understand what work has already been done.
 

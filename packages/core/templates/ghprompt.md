@@ -1,13 +1,13 @@
 # ISSUES
 
-Two views of open GitHub issues are provided at the start of context:
+Two views of open GitHub issues are provided in this prompt:
 
 - `<issues-summary>` — inline lean index (number, title, labels). Use this to triage and pick a task.
 - `<issues-full-file>` — path to a spilled JSON file containing bodies + comments. `Read` that file (with `offset`/`limit` if it is large) once you have picked an issue you want to act on.
 
 You will work on the AFK issues only, not the HITL ones. Label filtering uses the `labels` field in the summary.
 
-**Repo scope.** If the `$OTTO_GITHUB_REPO` environment variable is set (the run was scoped with `--repo owner/name`), the issue list above is already confined to that repo — work only on those issues, and pass `--repo "$OTTO_GITHUB_REPO"` to every `gh` command you run yourself (e.g. `gh issue comment`, `gh pr create`) so completion targets the same repo. If it is unset, `gh` uses the workspace's own repo as before.
+**Repo scope.** If the `$OTTO_GITHUB_REPO` environment variable is set (the run was scoped with `--repo owner/name`), the `<issues-summary>` / `<issues-full-file>` blocks in this prompt are already confined to that repo — work only on those issues, and pass `--repo "$OTTO_GITHUB_REPO"` to every `gh` command you run yourself (e.g. `gh issue comment`, `gh pr create`) so completion targets the same repo. If it is unset, `gh` uses the workspace's own repo as before.
 
 You've also been passed a file containing the last few commits. Review these to understand what work has been done.
 

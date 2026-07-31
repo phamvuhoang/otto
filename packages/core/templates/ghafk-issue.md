@@ -1,3 +1,5 @@
+@include:ghprompt-workflow.md
+
 <commits>
 
 !?`git log -n 5 --format="%H%n%ad%n%s---" --date=short|||No commits found`
@@ -6,7 +8,7 @@
 
 <learnings>
 
-!?`cat ./.otto/LEARNINGS.md|||_No learnings recorded yet._`
+{{ LEARNINGS }}
 
 </learnings>
 
@@ -29,5 +31,3 @@ If `$OTTO_GITHUB_REPO` is set (run scoped with `--repo owner/name`), pass `--rep
 Work **only** on issue #{{ INPUTS }} (shown above). Do not list, triage, or pick from any other open issues — this run is scoped to a single issue.
 
 If issue #{{ INPUTS }} is already complete (closed, or there is no work left to do), output <promise>NO MORE TASKS</promise>.
-
-@include:ghprompt-workflow.md

@@ -218,6 +218,10 @@ export type RunPanelOptions = {
    * exhausted (stop the panel) and the current adaptive cooldown factor.
    */
   onStage?: (sr: StageResult) => PanelStageControl;
+  /** Called once per panel run with the merged, deduped lens findings (P28), so
+   *  the loop can fold them into the run's finding memory and detect a defect
+   *  that was fixed and came back. Absent ⇒ no behavior change. */
+  onFindings?: (findings: Finding[]) => void;
   /**
    * Called after every panel sub-agent (each lens + verify + synth) so the loop
    * can write one evidence record per substage. The lens substages are named by
@@ -614,6 +618,9 @@ export async function analyzeReview(
       results.map((r) => ({ lens: r.lens, text: r.sr.result }))
     );
     const candidateCounts = severityCounts(findings);
+    // Observed BEFORE the zero-findings early return, so a clean iteration is
+    // recorded as "raised nothing" rather than as "not observed".
+    opts.onFindings?.(findings);
     if (findings.length === 0) {
       // Nothing to verify — a clean analysis.
       outcomeLine("no findings — skipping verify");

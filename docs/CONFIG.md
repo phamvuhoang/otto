@@ -126,6 +126,20 @@ Otto warns at startup if the working tree has uncommitted tracked changes under 
 
 Per-task artifacts (spec, plan, follow-ups) are grouped under `.otto/tasks/<task-key>/`, named with the same task key as the branch. See **[MIGRATION.md](./MIGRATION.md)** for the old→new path mapping and how to migrate an existing repo.
 
+## Context budget enforcement (`--token-mode enforce`)
+
+**Off by default.** `off`, `measure` and `reduce` behave exactly as before.
+
+With `--token-mode enforce`, when a stage's assembled prompt exceeds its budget Otto degrades it through a ladder — tighter bounded learnings, then authorized evidence compression, then commit compaction — stopping as soon as it fits.
+
+What it will never do:
+
+- **Cut your task inputs or the playbook.** Only recognized filler blocks are rewritten.
+- **Ship a mangled prompt.** Each rewrite is verified; a rewrite that would disturb the inputs or drop a block is discarded and the original is sent.
+- **Truncate to fit.** A prompt no lever could shrink is sent intact and reported as still over budget.
+
+Every action appears in the context report with its measured saving, separated from advisory-only cases where a lever was not pulled. Enforcement also carries a bounded per-run state digest in place of re-derived prior-iteration context.
+
 ## Bounded learnings injection
 
 Otto injects `.otto/LEARNINGS.md` into every stage prompt. On a repo whose file has grown past **6000 characters**, it now injects a bounded block instead of the whole file:

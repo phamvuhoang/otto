@@ -503,6 +503,25 @@ The six fixtures cover the representative jobs from the roadmap: a small bug fix
 
 ---
 
+## Context budget enforcement (P30)
+
+`context-budget.ts` measured and recommended from P7 onward while nothing acted. `--token-mode enforce` (opt-in; `off`/`measure`/`reduce` are byte-for-byte unchanged) degrades an over-budget prompt through a governed ladder in `context-enforcement.ts`: tighter bounded learnings → authorized evidence compression → commit compaction, cheapest-first, stopping as soon as the prompt fits.
+
+Two properties carry the safety:
+
+- **Task inputs and playbook text are never cut.** The ladder rewrites the contents of recognized filler blocks and nothing else.
+- **It verifies its own rewrite and fails closed.** This is textual surgery on a rendered prompt, so after each lever it re-runs `analyzeContext` and confirms the `inputs`/`playbook` char counts are unchanged and every recognized block tag survived. On violation the rewrite is discarded and the **original** ships, recorded as `skipped: "invariant-violation"`. An over-budget prompt is a cost problem; a silently mangled one is a correctness problem.
+
+**There is no truncation rung.** Still over budget after every lever is recorded as still-over and the prompt is sent intact.
+
+It runs after model routing (so the budget is sized against the model actually used) and after every other prompt mutation, so it operates on the real final text. Applied levers land on the stage record as `contextEnforcement` evidence, and the report separates **Enforced** (a measured saving) from **Advisory** (a lever that was not pulled) — folding them together would let a report claim savings it never made.
+
+**`REDUCIBLE_LEVERS` includes `evidence`.** It previously omitted the one category the compressor is authorized to act on, and since `assessContextBudget` scans a chars-descending list, a prompt bloated by a 40 KB issue body was advised to compact a 2 KB `<commits>` block. That was a live mis-recommendation in `--context-report` independent of enforcement.
+
+**State digest.** Under `enforce`, prior-iteration state is carried by a compact harness-written digest (iterations completed, current focus, last attested check state, open finding count) rather than re-derived blobs — bounded at 1200 chars, dropping whole lines so it never ends mid-fact. Harness-written from stage records only, never agent prose: an agent-authored digest would be the unverified self-report Phase 6 exists to eliminate, and a channel to smuggle instructions into the next prompt.
+
+**Resume-note bounding** is section-priority, not head-preserving: `loop.ts` composes the plan-gate note with the actionable "rewrite these files" instruction **last**, so truncating from the head would cut exactly the sentence that says what to do.
+
 ## Regression signals (P28)
 
 `progress.ts` and `policy.ts` have modelled failing checks, failure signatures and recurring findings since P2 — and `loop.ts` hardcoded all three to `null`/`[]`, so adaptive iteration control was a stall detector wearing a regression detector's clothes. P28 supplies the real signals.

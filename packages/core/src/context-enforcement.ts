@@ -296,3 +296,53 @@ export function enforceContextBudget(
 
 /** Re-exported so callers can size a budget without importing context-report. */
 export { estimateTokens };
+
+/** The un-pulled recommendation from `assessContextBudget`, when over budget. */
+export type EnforcementAdvisory = {
+  overByTokens: number;
+  category: string;
+  lever: string;
+};
+
+/**
+ * Render the context report's enforcement section (P30 Task 6).
+ *
+ * **Enforced** and **Advisory** are deliberately separate. An enforced action
+ * has a measured saving behind it; an advisory is a lever that was NOT pulled.
+ * Folding them together would let the report claim savings it never made — and
+ * a skipped lever (unavailable, no-effect, or an invariant violation) is
+ * advisory too, however close it came to firing.
+ */
+export function formatEnforcementReport(
+  events: ContextEnforcementEvent[],
+  advisory: EnforcementAdvisory | null
+): string {
+  const applied = events.filter((e) => e.skipped === undefined);
+  const skipped = events.filter((e) => e.skipped !== undefined);
+  if (applied.length === 0 && skipped.length === 0 && !advisory) return "";
+
+  const out: string[] = [];
+  if (applied.length > 0) {
+    const s = summarizeEnforcement(events);
+    out.push(
+      `Enforced (${s.applications} action(s), ~${s.tokensSaved} tokens saved)`
+    );
+    for (const e of applied) {
+      out.push(
+        `  ${e.stage}: ${e.lever} — ${e.beforeTokens} → ${e.afterTokens} tokens (saved ${e.beforeTokens - e.afterTokens})`
+      );
+    }
+  }
+  if (skipped.length > 0 || advisory) {
+    out.push("Advisory (over budget, lever not applied)");
+    for (const e of skipped) {
+      out.push(`  ${e.stage}: ${e.lever} skipped — ${e.skipped}`);
+    }
+    if (advisory) {
+      out.push(
+        `  over by ~${advisory.overByTokens} tokens — would compact ${advisory.category} via ${advisory.lever}`
+      );
+    }
+  }
+  return out.join("\n");
+}

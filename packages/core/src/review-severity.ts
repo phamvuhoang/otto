@@ -496,3 +496,45 @@ export function dedupeFindings(findings: Finding[]): Finding[] {
 export function findingSignature(f: Finding): string {
   return `${f.severity}|${f.file}|${normClaim(f.claim)}`;
 }
+
+/**
+ * Outcome of the post-synth confirmation pass (P28, issue #248): did the synth
+ * commit actually address each finding the verifier CONFIRMED?
+ */
+export type ConfirmationResult = {
+  addressed: number;
+  unaddressed: { file: string; claim: string; note?: string }[];
+};
+
+const CONFIRM_ROW = /^\s*(ADDRESSED|UNADDRESSED)\s*\|(.*)$/i;
+
+/**
+ * Parse the confirmation substage's wire format:
+ *
+ *   ADDRESSED   | file:line | claim
+ *   UNADDRESSED | file:line | claim | what is still missing
+ *
+ * Tolerant by design — prose around the rows is expected, and a malformed row
+ * is skipped rather than throwing. Closing the "trust the verifier, trust the
+ * synth" chain must not itself become a way to fail a run. Pure.
+ */
+export function parseConfirmation(text: string): ConfirmationResult {
+  let addressed = 0;
+  const unaddressed: ConfirmationResult["unaddressed"] = [];
+  for (const line of text.split("\n")) {
+    const m = CONFIRM_ROW.exec(line);
+    if (!m) continue;
+    const parts = m[2]
+      .split("|")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+    const [file, claim, note] = parts;
+    if (!file || !claim) continue; // malformed row
+    if (m[1].toUpperCase() === "ADDRESSED") {
+      addressed += 1;
+    } else {
+      unaddressed.push({ file, claim, ...(note ? { note } : {}) });
+    }
+  }
+  return { addressed, unaddressed };
+}

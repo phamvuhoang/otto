@@ -17,6 +17,7 @@ import {
   dedupeFindings,
   findingToWire,
   parseFindings,
+  parseConfirmation,
   parseReviewVerdicts,
   severityCounts,
   suppressLowValue,
@@ -98,6 +99,16 @@ const SYNTH_STAGE = {
   name: "review-synth",
   template: "review-synth.md",
   permissionMode: "bypassPermissions",
+};
+/** Post-synth confirmation (P28): a bounded, read-only check that the synth
+ *  commit actually acted on each CONFIRMED finding. Cheap tier — it reads one
+ *  diff against one list and answers one question. Harness-orchestrated, so
+ *  NOT in `STAGES` and not in any chain (house pattern, same as the lenses). */
+const CONFIRM_STAGE: Stage = {
+  name: "review-confirm",
+  template: "review-confirm.md",
+  permissionMode: "bypassPermissions",
+  tier: "cheap",
 };
 
 /** Phase start line: `● review · <label>`. */
@@ -757,9 +768,70 @@ async function runPanelSynth(
       rejected: analysis.rejected.length,
     });
     onStage?.(synth);
+    // P28: close the "trust the verifier, trust the synth" chain with one
+    // bounded read-only check that the commit actually acted on each CONFIRMED
+    // finding. Only worth running when something was confirmed AND committed.
+    if (committed && analysis.confirmed.length > 0) {
+      await runPostSynthConfirmation(opts, analysis, synthHostDir);
+    }
     return synth;
   } finally {
     rmSync(synthHostDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Post-synth confirmation (P28, issue #248).
+ *
+ * The panel's chain of trust ended at the synth agent's own word: the verifier
+ * ruled on what was real, synth committed a fix, and nothing checked that the
+ * commit acted on the confirmed list. This runs one cheap read-only pass that
+ * answers exactly that, and records the result as evidence.
+ *
+ * Best-effort by design — a failure here degrades to "not checked" rather than
+ * failing a run, because a bookkeeping check must never be able to sink work
+ * that already landed.
+ */
+async function runPostSynthConfirmation(
+  opts: RunPanelOptions,
+  analysis: ReviewAnalysisResult,
+  hostDir: string
+): Promise<void> {
+  const { workspaceDir, packageDir, iteration, maxRetries, recordStage } = opts;
+  try {
+    const diffPath = spillHeadDiff(workspaceDir, hostDir);
+    const startedAt = new Date().toISOString();
+    const confirm = await executeStage({
+      stage: CONFIRM_STAGE,
+      vars: {
+        FINDINGS: analysis.confirmed.map(findingToWire).join("\n"),
+        DIFF_FILE: `./${posix.relative(workspaceDir, diffPath)}`,
+        RESUME: "",
+      },
+      workspaceDir,
+      packageDir,
+      iteration,
+      maxRetries,
+      logLabel: CONFIRM_STAGE.name,
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+      ...(opts.modelRouting ? { modelRouting: opts.modelRouting } : {}),
+      ...(opts.tierLadder ? { tierLadder: opts.tierLadder } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+    const result = parseConfirmation(confirm.result);
+    if (result.unaddressed.length > 0) {
+      outcomeLine(
+        `${result.unaddressed.length} confirmed finding(s) NOT addressed by the fix`,
+        false
+      );
+    } else if (result.addressed > 0) {
+      outcomeLine(`all ${result.addressed} confirmed finding(s) addressed`);
+    }
+    recordStage?.(CONFIRM_STAGE.name, confirm, startedAt);
+    opts.onStage?.(confirm);
+  } catch {
+    // Never fail a run because the confirmation pass could not run.
+    outcomeLine("post-synth confirmation unavailable", false);
   }
 }
 

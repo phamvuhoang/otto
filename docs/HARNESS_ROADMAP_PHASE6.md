@@ -2,10 +2,12 @@
 
 Last updated: 2026-07-18
 
-> **Status:** In progress. **P27 (harness-attested feedback loops) has
-> shipped** — see [issue #246](https://github.com/phamvuhoang/otto/issues/246).
-> P28–P31 have merged design specs and refreshed implementation plans under
-> `docs/superpowers/{specs,plans}/` but no implementation slice yet; this update
+> **Status:** In progress. **P27 (harness-attested feedback loops) and P29
+> (prompt diet) have shipped** — see issues
+> [#246](https://github.com/phamvuhoang/otto/issues/246) and
+> [#247](https://github.com/phamvuhoang/otto/issues/247).
+> P28, P30 and P31 have merged design specs and refreshed implementation plans
+> under `docs/superpowers/{specs,plans}/` but no implementation slice yet; this update
 > does not claim any of them shipped. **P32 (automated pull-request code
 > review) is an URGENT PARALLEL initiative that has shipped** alongside this
 > backlog, not a renumbering or reordering of P27–P31: it addressed a separate,
@@ -119,7 +121,7 @@ reduce` only strips whitespace and hardcodes `cacheHits: 0`.
 | Priority | Initiative                                                                     | Outcome                                                                                                                           | Size   | Confidence |
 | -------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------- |
 | ~~P27~~  | ~~Harness-attested feedback loops~~ — **SHIPPED**                              | Test/typecheck/build outcomes are executed and recorded by the harness.                                                           | Medium | High       |
-| P29      | Prompt diet: bounded injection, cache shape                                    | Cut per-iteration prompt cost by wiring built levers and deduping payloads.                                                       | Medium | High       |
+| ~~P29~~  | ~~Prompt diet: bounded injection, cache shape~~ — **SHIPPED**                  | Cut per-iteration prompt cost by wiring built levers and deduping payloads.                                                       | Medium | High       |
 | P28      | Regression signals and review integrity                                        | Iteration control reacts to attested failures and recurring findings.                                                             | Medium | High       |
 | P30      | Context budget enforcement and state digest                                    | Over-budget context degrades through governed levers; stale context retires.                                                      | Medium | Medium     |
 | P31      | Plan soundness and a working human loop                                        | Plans are judged on substance and the checkpoint edit path works.                                                                 | Large  | Medium     |

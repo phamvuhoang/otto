@@ -126,6 +126,18 @@ Otto warns at startup if the working tree has uncommitted tracked changes under 
 
 Per-task artifacts (spec, plan, follow-ups) are grouped under `.otto/tasks/<task-key>/`, named with the same task key as the branch. See **[MIGRATION.md](./MIGRATION.md)** for the old→new path mapping and how to migrate an existing repo.
 
+## Bounded learnings injection
+
+Otto injects `.otto/LEARNINGS.md` into every stage prompt. On a repo whose file has grown past **6000 characters**, it now injects a bounded block instead of the whole file:
+
+- **Under 6000 chars** — the file verbatim. Nothing changes.
+- **Over, with `.otto/memory/` records** — the most relevant governed records first, then as much of the raw file as still fits, with a note saying it was trimmed. Lines the record projection already carries are not repeated.
+- **Over, with no records** — the whole file, untruncated. Otto will not silently cut a hand-written file it cannot reconstruct.
+
+Set `OTTO_UNBOUNDED_LEARNINGS=1` to force whole-file injection in every case.
+
+Relevance is scored against the run's task key, so a record scoped to the current task outranks a repo-wide one. Use `otto-memory audit` to see the full governed set.
+
 ## Harness-attested checks
 
 **Off by default.** Add a `checks` array to `.otto/config.json` to have Otto run your repo's verify commands **itself** after every review-path fix commit, instead of trusting the agent's prose that the suites passed:

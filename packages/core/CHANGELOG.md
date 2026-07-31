@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/phamvuhoang/otto/compare/otto-core-v1.1.0...otto-core-v1.2.0) (2026-07-31)
+
+
+### Features
+
+* **p31:** plan soundness — semantic judge, working edit path, scope-drift fix ([#268](https://github.com/phamvuhoang/otto/issues/268)) ([db85ca6](https://github.com/phamvuhoang/otto/commit/db85ca641e7e447799a6c59ece03e527ba618e16))
+
 ## [1.1.0](https://github.com/phamvuhoang/otto/compare/otto-core-v1.0.0...otto-core-v1.1.0) (2026-07-31)
 
 

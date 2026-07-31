@@ -102,3 +102,94 @@ export async function resolvePlanCheckpoint(
     clearTimeout(timer);
   }
 }
+
+/** What the loop does with the plan after the checkpoint resolves. */
+export type PlanCheckpointOutcome = "accept" | "pause";
+
+/** Host surface for the edit loop; extends the checkpoint's injectable reads. */
+export type PlanEditLoopDeps = PlanCheckpointDeps & {
+  /**
+   * Auto-approve window for the INITIAL checkpoint only. The edit round uses
+   * {@link editTimeoutMs}: once a human has taken control by choosing "edit",
+   * silence must not be read as consent.
+   */
+  editTimeoutMs?: number;
+};
+
+/** Re-score the on-disk plan after the operator edited it. */
+export type PlanEditLoopHooks = {
+  rescore: () => Promise<{ passed: boolean; prompt: string }>;
+  /** Cap on edit rounds so a loop cannot spin forever. Default 5. */
+  maxRounds?: number;
+};
+
+const DEFAULT_EDIT_ROUNDS = 5;
+
+/**
+ * The working edit path (P31, issue #250).
+ *
+ * `loop.ts` previously did `decision === "approve" ? "accept" : "pause"`, so
+ * `edit` and `reject` were indistinguishable: an operator who asked to edit got
+ * the same dead end as one who rejected, and `parseCheckpointResponse`'s third
+ * branch was unreachable in practice.
+ *
+ * Now "edit" pauses for on-disk edits to spec/plan, re-scores, shows the new
+ * verdict, and asks again — a real edit-and-resubmit loop.
+ *
+ * Two deliberate asymmetries:
+ *
+ *  - **Human authority wins.** An explicit approve is accepted even if the
+ *    re-score still fails. The verdict was shown; the operator outranks the
+ *    heuristic.
+ *  - **An edit-round timeout PAUSES rather than auto-approving.** The initial
+ *    checkpoint auto-approves on silence because an AFK run may have a TTY and
+ *    no human. Choosing "edit" is an explicit claim that a human is present, so
+ *    silence afterwards means they walked away, not that they consented.
+ */
+export async function resolvePlanEditLoop(
+  prompt: string,
+  deps: PlanEditLoopDeps,
+  hooks: PlanEditLoopHooks
+): Promise<PlanCheckpointOutcome> {
+  const maxRounds = hooks.maxRounds ?? DEFAULT_EDIT_ROUNDS;
+  let current = prompt;
+  for (let round = 0; round <= maxRounds; round++) {
+    const decision = await resolvePlanCheckpoint(current, deps);
+    if (decision === "approve") return "accept";
+    if (decision === "reject") return "pause";
+    // "edit": wait for on-disk edits, re-score, and ask again.
+    if (round === maxRounds) {
+      deps.out(
+        `Reached the ${maxRounds}-edit limit without an approval — pausing for review.`
+      );
+      return "pause";
+    }
+    deps.out(
+      "Edit `spec.md` / `plan.md` on disk, then press Enter to re-score them."
+    );
+    try {
+      await readWithTimeout(deps, deps.editTimeoutMs ?? 0);
+    } catch {
+      deps.out("No response — pausing for review (edit was requested).");
+      return "pause";
+    }
+    const rescored = await hooks.rescore();
+    current = rescored.prompt;
+  }
+  return "pause";
+}
+
+/** Read one line, honoring an optional abort window. Rejects on timeout. */
+async function readWithTimeout(
+  deps: PlanCheckpointDeps,
+  timeoutMs: number
+): Promise<string> {
+  if (timeoutMs <= 0) return deps.readLine();
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    return await deps.readLine(ac.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}

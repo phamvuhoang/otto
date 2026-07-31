@@ -537,6 +537,7 @@ export {
   formatCheckpointPrompt,
   parseCheckpointResponse,
   resolvePlanCheckpoint,
+  resolvePlanEditLoop,
   type CheckpointDecision,
   type PlanCheckpointDeps,
 } from "./plan-checkpoint.js";

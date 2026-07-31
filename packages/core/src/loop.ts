@@ -153,6 +153,8 @@ import { latestTaskPlanDocument } from "./plan-artifacts.js";
 import {
   formatCheckpointPrompt,
   resolvePlanCheckpoint,
+  resolvePlanEditLoop,
+  type PlanCheckpointDeps,
 } from "./plan-checkpoint.js";
 import {
   addTokenUsage,
@@ -184,6 +186,9 @@ const RATE_LIMIT_BUFFER_MS = 30_000;
 // Interactive plan checkpoint grace period: an AFK run can hold a TTY but have no
 // human, so auto-approve (record the assumption) rather than block forever.
 const PLAN_CHECKPOINT_TIMEOUT_MS = 2 * 60_000;
+/** Generous window for on-disk plan edits (P31): the operator is editing files,
+ *  not answering a prompt, so 30m vs the checkpoint's 2m. */
+const PLAN_EDIT_TIMEOUT_MS = 30 * 60 * 1000;
 const RATE_LIMIT_FALLBACK_MS = 15 * 60_000;
 const DEFAULT_MAX_WAIT_MS = 6 * 3600_000;
 
@@ -1352,29 +1357,32 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       updatedAt: nowIso(),
     });
 
+  // Shared host surface for the checkpoint AND the P31 edit loop, so both read
+  // the same stdin the same way rather than each building their own.
+  const checkpointDeps: PlanCheckpointDeps = {
+    interactive:
+      Boolean(process.stdin.isTTY) &&
+      Boolean(process.stdout.isTTY) &&
+      !externalSignal,
+    timeoutMs: PLAN_CHECKPOINT_TIMEOUT_MS,
+    out: (msg) => process.stderr.write(`${msg}\n`),
+    readLine: async (signal) => {
+      const { createInterface } = await import("node:readline/promises");
+      const rl = createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+      try {
+        return signal
+          ? await rl.question("", { signal })
+          : await rl.question("");
+      } finally {
+        rl.close();
+      }
+    },
+  };
   const resolveCheckpointDecision = async (prompt: string) =>
-    resolvePlanCheckpoint(prompt, {
-      interactive:
-        Boolean(process.stdin.isTTY) &&
-        Boolean(process.stdout.isTTY) &&
-        !externalSignal,
-      timeoutMs: PLAN_CHECKPOINT_TIMEOUT_MS,
-      out: (msg) => process.stderr.write(`${msg}\n`),
-      readLine: async (signal) => {
-        const { createInterface } = await import("node:readline/promises");
-        const rl = createInterface({
-          input: process.stdin,
-          output: process.stdout,
-        });
-        try {
-          return signal
-            ? await rl.question("", { signal })
-            : await rl.question("");
-        } finally {
-          rl.close();
-        }
-      },
-    });
+    resolvePlanCheckpoint(prompt, checkpointDeps);
 
   const handlePlanCompletion = async (): Promise<
     "accept" | "replan" | "pause"
@@ -1416,8 +1424,44 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       formatPlanGate(gate),
     ].join("\n");
     keyboardControls?.cleanup();
-    const decision = await resolveCheckpointDecision(prompt);
-    return decision === "approve" ? "accept" : "pause";
+    // P31: a real edit-and-resubmit loop. This used to be
+    // `decision === "approve" ? "accept" : "pause"`, which made "edit"
+    // indistinguishable from "reject" — an operator who asked to edit got the
+    // same dead end as one who rejected, and parseCheckpointResponse's third
+    // branch was unreachable in practice.
+    return resolvePlanEditLoop(
+      prompt,
+      {
+        ...checkpointDeps,
+        // Once the operator chooses "edit" they have explicitly taken control,
+        // so an unanswered edit round PAUSES rather than auto-approving the way
+        // the initial checkpoint does for an AFK run with a TTY.
+        editTimeoutMs: PLAN_EDIT_TIMEOUT_MS,
+      },
+      {
+        // Re-read and re-score the plan the operator just edited on disk, and
+        // show the new verdict before asking again.
+        rescore: async () => {
+          const fresh = latestTaskPlanDocument(workspaceDir);
+          if (!fresh) return { passed: false, prompt };
+          const s2 = scorePlanQuality(fresh.doc);
+          const d2 = scorePlanDepth(fresh.doc);
+          const g2 = assessPlanGate(s2, { depth: d2 });
+          return {
+            passed: g2.passed,
+            prompt: [
+              formatCheckpointPrompt({
+                taskKey: fresh.taskKey,
+                planPath: fresh.planPath,
+                score: s2,
+              }),
+              formatPlanDepthRubric(d2),
+              formatPlanGate(g2),
+            ].join("\n"),
+          };
+        },
+      }
+    );
   };
 
   if (resuming && prior!.status === "waiting-rate-limit") {

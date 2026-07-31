@@ -52,6 +52,12 @@ import {
   createHeadroomSyncCompressor,
 } from "./headroom-adapter.js";
 import { readSafetyPolicy } from "./safety-policy.js";
+import { readChecksConfig } from "./checks.js";
+import {
+  newLedger,
+  maybeAttest,
+  type AttestationContext,
+} from "./attestation.js";
 import {
   authorizeToolOperation,
   readToolConfig,
@@ -772,6 +778,16 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   // Lightweight in-memory log mirroring recordedStageFiles; used by summarize
   // to build a RunView for formatDoneCard without a disk round-trip.
   const stageLog: { iteration: number; stage: string; isError: boolean }[] = [];
+  // P27 harness-attested checks (issue #246). Inert unless `.otto/config.json`
+  // declares `checks`: with no commands every seam short-circuits, so a repo
+  // that has not opted in records, reports, and exits exactly as before.
+  const checkCommands = readChecksConfig(workspaceDir);
+  const attestationLedger = newLedger();
+  const attestationCtx: AttestationContext = {
+    commands: checkCommands,
+    workspaceDir,
+    policy: readSafetyPolicy(workspaceDir),
+  };
   const recordStage = (
     recIteration: number,
     stageName: string,
@@ -790,6 +806,16 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       stage: stageName,
       isError: sr.isError,
     });
+    // P27: attest the repo's configured checks after a stage that moved HEAD in
+    // a review path. `panel.ts` calls this same closure for its synth substage,
+    // so the single reviewer and the panel synth are both covered here.
+    const attestedChecks = maybeAttest(
+      attestationLedger,
+      stageName,
+      sr.isError,
+      recIteration,
+      attestationCtx
+    );
     try {
       const name = writeStageRecord(
         workspaceDir,
@@ -808,6 +834,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
           contextBreakdown: sr.contextBreakdown,
           ...(sr.toolsUsed ? { toolsUsed: sr.toolsUsed } : {}),
           ...(sr.skillsUsed ? { skillsUsed: sr.skillsUsed } : {}),
+          ...(attestedChecks.length > 0 ? { checks: attestedChecks } : {}),
           ...(reviewSeverity ? { reviewSeverity } : {}),
           startedAt,
           finishedAt: nowIso(),
